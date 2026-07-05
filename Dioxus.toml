@@ -1,0 +1,6 @@
+[application]
+
+[web.app]
+# HTML title tag content
+title = "dioxus-dnd | Pick it up. Put it anywhere."
+base_path = "dioxus-dnd"
