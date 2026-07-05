@@ -14,7 +14,7 @@
 //! leading grip (style it via `[data-sort-handle]`) so the rows themselves
 //! still scroll.
 //!
-//! ```rust,ignore
+//! ```text
 //! let mut items = use_signal(|| vec!["a".to_string(), "b".into(), "c".into()]);
 //! rsx! {
 //!     SortableList {

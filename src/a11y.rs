@@ -9,7 +9,7 @@
 //!
 //! Render exactly one `LiveRegion` per provider, anywhere in the subtree:
 //!
-//! ```rust,ignore
+//! ```text
 //! DndProvider::<Card> {
 //!     LiveRegion::<Card> {}
 //!     // ... draggables and zones ...
@@ -59,7 +59,7 @@ pub fn LiveRegion<T: Clone + PartialEq + 'static>(
 /// [`crate::sortable::SortEvent`] your drag path already handles, so one
 /// `on_sort` serves both inputs.
 ///
-/// ```rust,ignore
+/// ```text
 /// SortableList {
 ///     len: items.read().len(),
 ///     render: move |ix: usize| rsx! {

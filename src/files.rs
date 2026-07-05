@@ -5,7 +5,7 @@
 //! gives you the real filesystem path; on web you read contents with
 //! `read_bytes()` / `read_string()` / `byte_stream()`.
 //!
-//! ```rust,ignore
+//! ```text
 //! rsx! {
 //!     FileDropZone {
 //!         filter: FileFilter::new().extensions(["png", "jpg"]).max_size(5_000_000),

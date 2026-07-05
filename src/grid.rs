@@ -6,7 +6,7 @@
 //! Reuses the sortable vocabulary: drops emit [`SortEvent`]s you apply with
 //! [`crate::sortable::apply_sort`] or [`crate::sortable::apply_swap`].
 //!
-//! ```rust,ignore
+//! ```text
 //! let mut tiles = use_signal(|| (0..12).collect::<Vec<u32>>());
 //! rsx! {
 //!     SortableGrid {

@@ -13,7 +13,7 @@
 //!   dragging an *unselected* item carries just that item.
 //! - [`SelectionCount`] — a badge for your `DragOverlay` ghost ("3 items").
 //!
-//! ```rust,ignore
+//! ```text
 //! let selection = use_selection::<FileId>();
 //! rsx! {
 //!     DndProvider::<Vec<FileId>> {

@@ -10,7 +10,7 @@
 //!
 //! You drive it with an `epoch` counter: bump it whenever order changes.
 //!
-//! ```rust,ignore
+//! ```text
 //! let mut items = use_signal(|| vec![/* … */]);
 //! let mut epoch = use_signal(|| 0usize);
 //! rsx! {

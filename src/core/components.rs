@@ -1,6 +1,6 @@
 //! Ready-made components over the shared drag context.
 //!
-//! ```rust,ignore
+//! ```text
 //! rsx! {
 //!     DndProvider::<Card> {
 //!         Draggable::<Card> { payload: card.clone(), "Drag me" }

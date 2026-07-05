@@ -1,9 +1,13 @@
 # Changelog
 
-## 0.6.0
+## 1.0.0
 
-Universal touch. Every interaction pattern now works with fingers and pens in every browser, not just the ones whose native HTML5 drag happens to support touch.
+Stable release. Carries the full feature set, the model helper APIs,
+the docs.rs example cleanup, and the public repository metadata.
 
+
+
+- Universal touch. Every interaction pattern now works with fingers and pens in every browser, not just the ones whose native HTML5 drag happens to support touch.
 - `BoardItem` and `SelectableDraggable` wrap `PointerDraggable`, so board cards and multi-select boxes respond to touch, pen, mouse and keyboard out of the box.
 - `SortableList` and `SortableGrid` run a pointer-event gesture path alongside the native one, driven by the same gesture state machine as `PointerDraggable` and hit-tested against per-row rects measured at drag start (stable pre-displacement slots, so the preview never oscillates).
 - New `SortableList` prop `touch_handle`: confines touch drags to a leading grip (`[data-sort-handle]`) so rows inside scrollable lists keep finger-scrolling. Default remains whole-row, which sets `touch-action: none` on rows.
@@ -11,13 +15,6 @@ Universal touch. Every interaction pattern now works with fingers and pens in ev
 - New model helpers `core::apply_clone_or_move` and `core::apply_list_clone_or_move`: apply move-vs-copy drops to `HashMap<ZoneId, Vec<T>>` zone models or two plain `Vec<T>` lists, with key-based source removal and a clone hook for assigning fresh ids on copy.
 - `TreeNodeTarget` registers itself in the zone registry: tree rows are now reachable by touch hit-testing and keyboard navigation. Keyboard drops land with `Into` intent. New `label` prop feeds screen-reader announcements. Touch hovers show the same live `data-intent` bands as mouse hovers.
 - Pointer paths listen to `lostpointercapture` as a cancel signal, so a drag aborts cleanly if the browser revokes capture mid-gesture.
-
-No breaking changes: all new props default to prior behavior, and native HTML5 drag paths are untouched.
-
-## 0.5.1
-
-Fixes from runtime testing of the showcase:
-
 - **Fixed `sortable::displacement` leaving a phantom gap**: the source row
   now translates toward its landing slot while neighbors make room —
   previously the shifted neighbors overlapped the source (which still
@@ -28,12 +25,6 @@ Fixes from runtime testing of the showcase:
   restructures, received links and loaded boxes stay visible), the
   FLIP-plus-displacement double animation is gone, and the layout gains a
   white workbench surface so the taupe reads as the floor around it.
-
-## 0.5.0
-
-The rigor release — the last two roadmap items from the ecosystem
-comparison:
-
 - **Formal gesture state machine** (`core::machine`): the pointer drag
   lifecycle (Idle → Pressed → Dragging, threshold promotion, tap vs drop,
   foreign-pointer rejection, cancellation) is now a pure, exhaustively
@@ -47,13 +38,6 @@ comparison:
   flat apps. Announcements gain nesting context ("Over Column 2, inside
   Board A."). Registry API: `ZoneRecord::parent`, `parent_of`,
   `children_of`, `step_sibling`, `first_child`.
-
-
-## 0.4.0
-
-The "feel" release, informed by a source read of the other Dioxus dnd
-crates (dioxus-dnd-kit, taino-dnd, dioxus-nox-dnd):
-
 - **Live drop preview** in `SortableList`: rows translate out of the way so
   a gap opens where the drop would land, with midpoint hysteresis to keep
   the gap from oscillating. On by default; `live_preview: false` restores
@@ -68,11 +52,6 @@ crates (dioxus-dnd-kit, taino-dnd, dioxus-nox-dnd):
 - **`a11y::ReorderButtons`**: headless move-up/move-down buttons emitting
   the same `SortEvent` as dragging — reordering with no drag gesture at
   all, the most robust accessibility fallback.
-
-
-## 0.3.0
-
-New drop patterns:
 - `dragout` — `ExternalDragSource` / `OutboundContent`: drag text, links and
   HTML *out* of your app into other tabs and applications.
 - `grid` — `SortableGrid`: 2D tile reorder (insert-and-reflow) or swap
@@ -82,8 +61,6 @@ New drop patterns:
   `Vec<K>` payload.
 - `animate` *(experimental)* — `FlipItem`: FLIP glide transitions on
   reorder, driven by an epoch counter.
-
-Core improvements:
 - Modifier-key drop effects: Ctrl/Cmd forces Copy, Alt forces Link
   (file-manager convention), reflected in `dropEffect` feedback and
   `DropOutcome::effect`. Pure helper: `effective_effect`.
@@ -94,9 +71,6 @@ Core improvements:
   (and boards inside boards) each own their gestures.
 - `DropZone` labels re-sync when the prop changes across renders.
 - `sortable`: `ReorderMode` (`Insert`/`Swap`) and `apply_swap`.
-
-## 0.2.0
-
 - Ported to Dioxus `0.8.0-alpha.0` (also compiles on 0.7.9).
 - State moved from `Signal<DragState<T>>` to `Store<DragState<T>>` for
   per-field reactivity: reading `dnd.over()` in render no longer reruns on
@@ -110,10 +84,7 @@ Core improvements:
   mouse, pointer-event hit-testing for touch).
 - `autoscroll::AutoScroll`: edge-scrolling containers during drags, pure
   `MountedData` (no JS eval).
-
-## 0.1.0
-
-- Initial release against Dioxus 0.7: `core` (`DndProvider`, `Draggable`,
+- `Core` (`DndProvider`, `Draggable`,
   `DropZone`, `DragOverlay`, store-context payload transport), `files`,
   `sortable`, `board`, `tree`, `canvas`, `external` modules; optional
   `serde` feature for typed `DataTransfer` interop.

@@ -6,7 +6,6 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![Dioxus 0.8](https://img.shields.io/badge/dioxus-0.8-0E6B63)](https://dioxuslabs.com)
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
-[![CI](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml/badge.svg)](https://github.com/kindintelligence/dioxus-dnd/actions)
 
 Modular, accessible drag-and-drop for Dioxus. One small core, one module per
 drop pattern: use only what you need. Keyboard accessible by default, with
@@ -16,7 +15,7 @@ touch support, live drop previews, and auto-scroll built in.
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 0.5 | **0.8** (verified against `0.8.0-alpha.0`; also compiles unchanged on `0.7.9`) | 1.85+ |
+| 1.0 | **0.8** (verified against `0.8.0-alpha.0`; also compiles unchanged on `0.7.9`) | 1.85+ |
 
 The crate depends on `dioxus` with `default-features = false, features =
 ["minimal"]`, so it adds no renderer, no JavaScript, and no extra
@@ -64,7 +63,7 @@ exhaustively tested state machine (`core::machine`), also public.
 
 ## Quick start
 
-```rust,ignore
+```text
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::*;
 
@@ -112,7 +111,7 @@ operable:
 Render one `LiveRegion::<T>` per provider to voice announcements to screen
 readers, and give `Draggable` and `DropZone` a `label`:
 
-```rust,ignore
+```text
 DndProvider::<Card> {
     LiveRegion::<Card> {}
     Draggable::<Card> { payload: card, label: "Ship it", /* ... */ }
@@ -151,7 +150,7 @@ callbacks, so your code cannot tell which one fired.
   Rows and tiles respond to touch with the same live displacement preview
   as mouse drags.
 
-```rust,ignore
+```text
 PointerDraggable::<Card> { payload: card, label: "Ship it", "Ship it" }
 ```
 
@@ -162,7 +161,7 @@ moves on it. For a `SortableList` inside a scrollable container, set
 `[data-sort-handle]`) claims the finger and the rows themselves keep
 scrolling:
 
-```rust,ignore
+```text
 SortableList { len, render, on_sort, touch_handle: true }
 ```
 
@@ -172,7 +171,7 @@ works the same for pens.
 
 ## Sortable lists with live preview
 
-```rust,ignore
+```text
 let mut items = use_signal(|| vec!["alpha".to_string(), "beta".into(), "gamma".into()]);
 rsx! {
     SortableList {
@@ -196,7 +195,7 @@ Wrap any scrollable container in `AutoScroll` and drags hovering within
 event (default 24), ramped by proximity. Works for native mouse drags and
 `PointerDraggable` touch drags. Pure `MountedData`, no JavaScript eval.
 
-```rust,ignore
+```text
 AutoScroll { style: "max-height: 300px; overflow-y: auto;",
     for row in rows { /* ... */ }
 }
@@ -216,7 +215,7 @@ For simple zone models, `apply_clone_or_move` applies that convention to a
 `HashMap<ZoneId, Vec<T>>`. Give it an identity function so moves can remove
 the source item, and a clone hook for assigning a fresh id on copy:
 
-```rust,ignore
+```text
 DropZone::<Card> {
     on_drop: move |outcome: DropOutcome<Card>| {
         apply_clone_or_move(
@@ -237,7 +236,7 @@ DropZone::<Card> {
 For two plain lists, use `apply_list_clone_or_move` and pass the source list
 directly:
 
-```rust,ignore
+```text
 DropZone::<Card> {
     id: DONE,
     on_drop: move |outcome: DropOutcome<Card>| {
@@ -262,7 +261,7 @@ DropZone::<Card> {
 
 ## Multi-select
 
-```rust,ignore
+```text
 let selection = use_selection::<FileId>();
 rsx! {
     DndProvider::<Vec<FileId>> {
@@ -279,7 +278,7 @@ itself.
 
 ## File drops
 
-```rust,ignore
+```text
 FileDropZone {
     filter: FileFilter::new()
         .extensions(["png", "jpg"])
@@ -299,7 +298,7 @@ FileDropZone {
 
 ## Dragging out
 
-```rust,ignore
+```text
 ExternalDragSource {
     content: OutboundContent::url("https://dioxuslabs.com", Some("Dioxus")),
     "Drag this link to another tab"

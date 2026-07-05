@@ -6,7 +6,7 @@
 //! remembers where the item came from. Wrap your app (or board) in
 //! `DndProvider::<BoardPayload<Card>>`.
 //!
-//! ```rust,ignore
+//! ```text
 //! DndProvider::<BoardPayload<Card>> {
 //!     for (col_id, cards) in columns {
 //!         BoardColumn::<Card> {

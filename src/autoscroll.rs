@@ -7,7 +7,7 @@
 //! pointer sits within `threshold` px of an edge, the container is scrolled
 //! by up to `speed` px per event, scaled by proximity.
 //!
-//! ```rust,ignore
+//! ```text
 //! AutoScroll {
 //!     style: "height: 300px; overflow-y: auto;",
 //!     for item in long_list { Row { item } }

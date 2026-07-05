@@ -3,7 +3,7 @@
 //! the URL bar, text editors, or any application that accepts the standard
 //! `DataTransfer` formats.
 //!
-//! ```rust,ignore
+//! ```text
 //! ExternalDragSource {
 //!     content: OutboundContent::url("https://dioxuslabs.com", Some("Dioxus")),
 //!     a { href: "https://dioxuslabs.com", "Dioxus" }
