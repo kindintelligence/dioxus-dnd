@@ -1,0 +1,168 @@
+//! Auto-scroll: when a drag hovers near the edge of a scrollable container,
+//! scroll it — the missing piece for long lists and tall boards.
+//!
+//! Implemented entirely through Dioxus's `MountedData` (no JS eval):
+//! `dragover` (native drags) and `pointermove` with contact (touch drags via
+//! [`crate::pointer::PointerDraggable`]) feed pointer positions; when the
+//! pointer sits within `threshold` px of an edge, the container is scrolled
+//! by up to `speed` px per event, scaled by proximity.
+//!
+//! ```rust,ignore
+//! AutoScroll {
+//!     style: "height: 300px; overflow-y: auto;",
+//!     for item in long_list { Row { item } }
+//! }
+//! ```
+
+use std::rc::Rc;
+
+use dioxus::html::geometry::PixelsVector2D;
+use dioxus::html::{MountedData, ScrollBehavior};
+use dioxus::prelude::*;
+
+use crate::core::{Point, Rect};
+
+/// Which axes to auto-scroll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollAxis {
+    /// Vertical only (the common case for lists).
+    #[default]
+    Y,
+    /// Horizontal only.
+    X,
+    /// Both.
+    Both,
+}
+
+/// Per-axis scroll delta for a pointer at `pos` inside `rect`.
+/// Returns `(dx, dy)`, each in `-speed..=speed`, scaled by how deep into the
+/// edge band the pointer is. Pure, for testability.
+pub fn edge_delta(
+    pos: Point,
+    rect: Rect,
+    threshold: f64,
+    speed: f64,
+    axis: ScrollAxis,
+) -> (f64, f64) {
+    let ramp = |dist_into_band: f64| (dist_into_band / threshold.max(1.0)).clamp(0.0, 1.0) * speed;
+    let mut dx = 0.0;
+    let mut dy = 0.0;
+    if matches!(axis, ScrollAxis::X | ScrollAxis::Both) {
+        let from_left = pos.x - rect.x;
+        let from_right = rect.x + rect.width - pos.x;
+        if from_left < threshold {
+            dx = -ramp(threshold - from_left);
+        } else if from_right < threshold {
+            dx = ramp(threshold - from_right);
+        }
+    }
+    if matches!(axis, ScrollAxis::Y | ScrollAxis::Both) {
+        let from_top = pos.y - rect.y;
+        let from_bottom = rect.y + rect.height - pos.y;
+        if from_top < threshold {
+            dy = -ramp(threshold - from_top);
+        } else if from_bottom < threshold {
+            dy = ramp(threshold - from_bottom);
+        }
+    }
+    (dx, dy)
+}
+
+/// A scrollable container that scrolls itself while a drag hovers near its
+/// edges. Give it the `overflow` CSS yourself (via `style`/`class`).
+#[component]
+pub fn AutoScroll(
+    /// Edge band size in px.
+    #[props(default = 48.0)]
+    threshold: f64,
+    /// Max scroll px per event.
+    #[props(default = 24.0)]
+    speed: f64,
+    /// Axes to scroll.
+    #[props(default)]
+    axis: ScrollAxis,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    let mut mounted = use_signal(|| None::<Rc<MountedData>>);
+    // In-flight guard so a burst of dragover events doesn't queue a pile of
+    // overlapping async scrolls.
+    let busy = use_signal(|| false);
+
+    let scroll_for = move |point: Point| {
+        let Some(m) = mounted.peek().clone() else {
+            return;
+        };
+        if *busy.peek() {
+            return;
+        }
+        let mut busy = busy;
+        busy.set(true);
+        spawn(async move {
+            if let Ok(r) = m.get_client_rect().await {
+                let rect = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
+                let (dx, dy) = edge_delta(point, rect, threshold, speed, axis);
+                if dx != 0.0 || dy != 0.0 {
+                    if let Ok(offset) = m.get_scroll_offset().await {
+                        let _ = m
+                            .scroll(
+                                PixelsVector2D::new(offset.x + dx, offset.y + dy),
+                                ScrollBehavior::Instant,
+                            )
+                            .await;
+                    }
+                }
+            }
+            busy.set(false);
+        });
+    };
+
+    rsx! {
+        div {
+            onmounted: move |evt: Event<MountedData>| {
+                mounted.set(Some(evt.data()));
+            },
+            // Native HTML5 drags (mouse): dragover fires continuously while
+            // hovering. Note: no prevent_default here — drop permission stays
+            // the business of the zones inside.
+            ondragover: move |evt: DragEvent| {
+                let c = evt.client_coordinates();
+                scroll_for(Point::new(c.x, c.y));
+            },
+            // Pointer-driven drags (touch/pen via PointerDraggable): moves
+            // with contact pressure count as dragging.
+            onpointermove: move |evt: PointerEvent| {
+                if evt.pointer_type() != "mouse" && evt.pressure() > 0.0 {
+                    let c = evt.client_coordinates();
+                    scroll_for(Point::new(c.x, c.y));
+                }
+            },
+            ..attributes,
+            {children}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deltas_ramp_toward_edges() {
+        let rect = Rect::new(0.0, 0.0, 200.0, 400.0);
+        // dead center: no scroll
+        assert_eq!(
+            edge_delta(Point::new(100.0, 200.0), rect, 48.0, 24.0, ScrollAxis::Both),
+            (0.0, 0.0)
+        );
+        // near top: negative dy, magnitude below max
+        let (_, dy) = edge_delta(Point::new(100.0, 10.0), rect, 48.0, 24.0, ScrollAxis::Y);
+        assert!(dy < 0.0 && dy >= -24.0);
+        // at the very bottom edge: full speed down
+        let (_, dy) = edge_delta(Point::new(100.0, 400.0), rect, 48.0, 24.0, ScrollAxis::Y);
+        assert_eq!(dy, 24.0);
+        // axis filtering: Y-only ignores horizontal proximity
+        let (dx, _) = edge_delta(Point::new(1.0, 200.0), rect, 48.0, 24.0, ScrollAxis::Y);
+        assert_eq!(dx, 0.0);
+    }
+}

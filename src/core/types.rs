@@ -1,0 +1,215 @@
+//! Shared identity, geometry and result types used by every drop module.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Identifies a drop zone (a list, a column, a canvas, a tree node…).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ZoneId(pub u64);
+
+impl ZoneId {
+    /// Generate a process-unique zone id. Handy when you don't care about
+    /// stable ids across renders — call it inside `use_hook` so it sticks.
+    pub fn auto() -> Self {
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl From<u64> for ZoneId {
+    fn from(v: u64) -> Self {
+        Self(v)
+    }
+}
+
+/// Identifies a draggable item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DragId(pub u64);
+
+impl DragId {
+    /// Generate a process-unique drag id.
+    pub fn auto() -> Self {
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl From<u64> for DragId {
+    fn from(v: u64) -> Self {
+        Self(v)
+    }
+}
+
+/// A 2D point in CSS pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Point {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+}
+
+impl std::ops::Sub for Point {
+    type Output = Point;
+    fn sub(self, rhs: Point) -> Point {
+        Point::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl std::ops::Add for Point {
+    type Output = Point;
+    fn add(self, rhs: Point) -> Point {
+        Point::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+/// An axis-aligned rectangle in client (viewport) coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Rect {
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Is the point inside (inclusive of edges)?
+    pub fn contains(&self, p: Point) -> bool {
+        p.x >= self.x && p.x <= self.x + self.width && p.y >= self.y && p.y <= self.y + self.height
+    }
+
+    /// Center point.
+    pub fn center(&self) -> Point {
+        Point::new(self.x + self.width / 2.0, self.y + self.height / 2.0)
+    }
+
+    /// Top-left corner.
+    pub fn origin(&self) -> Point {
+        Point::new(self.x, self.y)
+    }
+}
+
+/// How the current drag is being driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DragMode {
+    /// Native HTML5 drag (mouse) or pointer-event drag (touch).
+    #[default]
+    Pointer,
+    /// Keyboard-driven drag (Space/Enter to pick up, arrows to navigate).
+    Keyboard,
+}
+
+/// The visual/semantic effect of a drop, mirroring the HTML5
+/// `dropEffect`/`effectAllowed` vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DropEffect {
+    #[default]
+    Move,
+    Copy,
+    Link,
+    None,
+}
+
+impl DropEffect {
+    /// The string the native `DataTransfer` API expects.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DropEffect::Move => "move",
+            DropEffect::Copy => "copy",
+            DropEffect::Link => "link",
+            DropEffect::None => "none",
+        }
+    }
+}
+
+/// Resolve the drop effect a drag should use given the currently held
+/// modifier keys — the file-manager convention: **Ctrl/Cmd forces Copy**,
+/// **Alt forces Link**, otherwise the drag's base effect applies. A base of
+/// `None` (drops disabled) is never overridden.
+pub fn effective_effect(base: DropEffect, modifiers: dioxus::prelude::Modifiers) -> DropEffect {
+    use dioxus::prelude::Modifiers;
+    if base == DropEffect::None {
+        return base;
+    }
+    if modifiers.contains(Modifiers::CONTROL) || modifiers.contains(Modifiers::META) {
+        DropEffect::Copy
+    } else if modifiers.contains(Modifiers::ALT) {
+        DropEffect::Link
+    } else {
+        base
+    }
+}
+
+/// Everything a consumer needs to know about a completed drop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropOutcome<T> {
+    /// The payload that was being dragged.
+    pub payload: T,
+    /// The zone the drag originated from, if the `Draggable` declared one.
+    pub from: Option<ZoneId>,
+    /// The zone that received the drop.
+    pub to: ZoneId,
+    /// The effect the drag was started with.
+    pub effect: DropEffect,
+    /// Pointer position in client (viewport) coordinates at drop time.
+    pub client: Point,
+    /// Pointer position relative to the drop zone's element.
+    pub element: Point,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dioxus::prelude::Modifiers;
+
+    #[test]
+    fn modifier_effects_follow_convention() {
+        assert_eq!(
+            effective_effect(DropEffect::Move, Modifiers::empty()),
+            DropEffect::Move
+        );
+        assert_eq!(
+            effective_effect(DropEffect::Move, Modifiers::CONTROL),
+            DropEffect::Copy
+        );
+        assert_eq!(
+            effective_effect(DropEffect::Move, Modifiers::META),
+            DropEffect::Copy
+        );
+        assert_eq!(
+            effective_effect(DropEffect::Move, Modifiers::ALT),
+            DropEffect::Link
+        );
+        // Ctrl wins over Alt when both held
+        assert_eq!(
+            effective_effect(DropEffect::Move, Modifiers::CONTROL | Modifiers::ALT),
+            DropEffect::Copy
+        );
+        // disabled zones stay disabled
+        assert_eq!(
+            effective_effect(DropEffect::None, Modifiers::CONTROL),
+            DropEffect::None
+        );
+    }
+
+    #[test]
+    fn rect_contains_and_center() {
+        let r = Rect::new(10.0, 10.0, 100.0, 50.0);
+        assert!(r.contains(Point::new(10.0, 10.0)));
+        assert!(r.contains(Point::new(110.0, 60.0)));
+        assert!(!r.contains(Point::new(111.0, 30.0)));
+        assert_eq!(r.center(), Point::new(60.0, 35.0));
+    }
+}
