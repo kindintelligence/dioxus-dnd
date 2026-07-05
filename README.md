@@ -1,6 +1,6 @@
 # dioxus-dnd
 
-[![Crates.io](https://img.shields.io/crates/v/dioxus-dnd.svg)](https://crates.io/crates/dioxus-dnd)
+[![Crates.io](https://img.shields.io/crates/v/dioxus-dnd.svg)]([https://crates.io/crates/dioxus-dnd](https://docs.rs/dioxus-dnd/1.0.0/dioxus_dnd/))
 [![Documentation](https://docs.rs/dioxus-dnd/badge.svg)](https://docs.rs/dioxus-dnd)
 [![Downloads](https://img.shields.io/crates/d/dioxus-dnd.svg)](https://crates.io/crates/dioxus-dnd)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
