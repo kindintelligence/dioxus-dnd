@@ -1,7 +1,7 @@
 //! Accessibility helpers.
 //!
 //! The keyboard interaction itself is built into the core
-//! [`crate::core::Draggable`] — every draggable is focusable and operable
+//! [`crate::core::Draggable`] - every draggable is focusable and operable
 //! with Space/Enter (pick up / drop), arrow keys (choose a drop target from
 //! the registered zones) and Escape (cancel). What this module adds is the
 //! **voice**: a visually-hidden `aria-live` region that reads the context's
@@ -50,7 +50,7 @@ pub fn LiveRegion<T: Clone + PartialEq + 'static>(
     }
 }
 
-/// Headless move-up / move-down buttons — the most robust accessibility
+/// Headless move-up / move-down buttons - the most robust accessibility
 /// fallback of all: reordering with plain button presses, no drag gesture
 /// (pointer *or* keyboard-drag) required.
 ///

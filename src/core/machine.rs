@@ -1,7 +1,7 @@
 //! A formal state machine for pointer-driven drag gestures.
 //!
-//! The lifecycle every synthesized drag goes through — press, threshold
-//! promotion, tracking, release or abort — is modeled here as a pure
+//! The lifecycle every synthesized drag goes through - press, threshold
+//! promotion, tracking, release or abort - is modeled here as a pure
 //! transition function over explicit states and events, so every edge
 //! (stray pointer ids, release before the threshold, cancellation mid-drag)
 //! is an exhaustive match arm with a test, not an ad-hoc `if`.
@@ -30,7 +30,7 @@ pub enum GesturePhase {
     /// No interaction in progress.
     Idle,
     /// Pointer is down on a draggable but hasn't traveled past the
-    /// threshold — could still resolve as a tap.
+    /// threshold - could still resolve as a tap.
     Pressed {
         /// Where the press started (client coordinates).
         origin: Point,
@@ -62,7 +62,7 @@ pub enum GestureEvent {
 /// What the caller should do after a transition.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GestureEffect {
-    /// Nothing — including events from foreign pointer ids, which the
+    /// Nothing - including events from foreign pointer ids, which the
     /// machine deliberately ignores.
     None,
     /// The threshold was crossed: begin the drag. `origin` is where the
@@ -147,7 +147,7 @@ pub fn transition(
         (P::Idle, GestureEvent::Cancel) => (P::Idle, Fx::None),
 
         // --- everything else is deliberately inert -------------------------
-        // Foreign pointer ids, moves/ups while idle: ignored, not errors —
+        // Foreign pointer ids, moves/ups while idle: ignored, not errors -
         // browsers deliver stray events and a UI library shrugs them off.
         (p, _) => (p, Fx::None),
     }

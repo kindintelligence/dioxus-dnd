@@ -123,7 +123,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// accept `payload`. `step` is `+1` or `-1`.
     ///
     /// Order is **spatial** (top-to-bottom, then left-to-right) for zones
-    /// with measured rects — call [`Self::refresh_rects`] first, as the
+    /// with measured rects - call [`Self::refresh_rects`] first, as the
     /// built-in keyboard interaction does on pickup. Unmeasured zones keep
     /// registration order, after the measured ones.
     pub fn step_zone(&self, current: Option<ZoneId>, payload: &T, step: isize) -> Option<ZoneId> {
@@ -153,7 +153,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         zones
     }
 
-    /// Next/previous zone (cyclic) among the *siblings* of `current` —
+    /// Next/previous zone (cyclic) among the *siblings* of `current` -
     /// zones sharing its parent. With no `current`, cycles the root level.
     pub fn step_sibling(
         &self,
@@ -173,7 +173,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 
     /// Topmost zone containing `point` (client coordinates), using cached
-    /// rects — call [`Self::refresh_rects`] when a drag starts. Later-mounted
+    /// rects - call [`Self::refresh_rects`] when a drag starts. Later-mounted
     /// zones win, approximating DOM paint order.
     pub fn hit_test(&self, point: Point) -> Option<ZoneId> {
         self.zones
@@ -185,7 +185,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 
     /// Like [`Self::hit_test`], but when no zone contains the point, falls
-    /// back to the acceptable zone whose center is nearest — within
+    /// back to the acceptable zone whose center is nearest - within
     /// `max_distance` CSS px. Friendlier for imprecise (touch) drops that
     /// land in the gutter between zones.
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
@@ -206,7 +206,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 
     /// Re-measure every mounted zone's client rect and **wait** for the
-    /// measurements to land — unlike [`Self::refresh_rects`], which fires
+    /// measurements to land - unlike [`Self::refresh_rects`], which fires
     /// and forgets. Use before a hit-test that must see fresh geometry
     /// (e.g. retrying a missed touch drop after a layout change).
     pub async fn measure_all(&self) {

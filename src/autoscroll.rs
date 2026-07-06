@@ -1,9 +1,9 @@
 //! Auto-scroll: when a drag hovers near the edge of a scrollable container,
-//! scroll it — the missing piece for long lists and tall boards.
+//! scroll it - the missing piece for long lists and tall boards.
 //!
 //! Implemented entirely through Dioxus's `MountedData` (no JS eval):
-//! `dragover` (native drags) and `pointermove` with contact (touch drags via
-//! [`crate::pointer::PointerDraggable`]) feed pointer positions; when the
+//! `dragover` (native drags) and `pointermove` with contact (pointer drags
+//! via [`crate::pointer::PointerDraggable`]) feed pointer positions; when the
 //! pointer sits within `threshold` px of an edge, the container is scrolled
 //! by up to `speed` px per event, scaled by proximity.
 //!
@@ -123,7 +123,7 @@ pub fn AutoScroll(
                 mounted.set(Some(evt.data()));
             },
             // Native HTML5 drags (mouse): dragover fires continuously while
-            // hovering. Note: no prevent_default here — drop permission stays
+            // hovering. Note: no prevent_default here - drop permission stays
             // the business of the zones inside.
             ondragover: move |evt: DragEvent| {
                 let c = evt.client_coordinates();
