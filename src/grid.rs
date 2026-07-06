@@ -1,4 +1,4 @@
-//! 2D grids — dashboards, tile galleries, icon views. A grid is a flat
+//! 2D grids - dashboards, tile galleries, icon views. A grid is a flat
 //! `Vec` displayed in `cols` columns; dragging a tile onto another either
 //! **inserts** (everything reflows, like a photo gallery) or **swaps**
 //! (tiles trade places, like a dashboard) depending on [`ReorderMode`].
@@ -22,12 +22,14 @@
 //! Grid coordinate helpers ([`cell_of`], [`index_of`]) are provided for
 //! custom layouts and keyboard grid navigation.
 //!
-//! Touch and pen drags work instantly in every browser via the same
-//! pointer-event gesture machine as [`crate::pointer::PointerDraggable`];
-//! tiles carry `touch-action: none` (grids rarely need to scroll by
-//! dragging across their own tiles). The hovered tile is simply the one
-//! under the finger — no hysteresis needed, since tiles don't shift while
-//! you hover in swap/insert grids.
+//! Mouse, touch and pen use pointer events by default via the same
+//! gesture machine as [`crate::pointer::PointerDraggable`], so the browser
+//! does not create a native drag image. Set `input: DragInputMode::Native`
+//! or `Hybrid` if you explicitly want HTML5 drag behavior. Tiles carry
+//! `touch-action: none` (grids rarely need to scroll by dragging across
+//! their own tiles). The hovered tile is simply the one under the pointer -
+//! no hysteresis needed, since tiles don't shift while you hover in
+//! swap/insert grids.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -35,7 +37,10 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
-use crate::core::{transition, GestureEffect, GestureEvent, GesturePhase, Rect};
+use crate::core::components::merge_style;
+use crate::core::{
+    platform, transition, DragInputMode, GestureEffect, GestureEvent, GesturePhase, Rect,
+};
 use crate::pointer::pointer_client;
 use crate::sortable::{ReorderMode, SortEvent};
 
@@ -58,11 +63,17 @@ pub fn index_of(row: usize, col: usize, cols: usize, len: usize) -> Option<usize
 
 /// A grid of tiles reordered (or swapped) by dragging.
 ///
-/// Renders a `display: grid` wrapper with `cols` equal columns — pass your
-/// own `class`/`style` for gaps and sizing (your `grid-template-columns`
-/// wins if you set one, since spread attributes land after the default).
+/// Renders a `display: grid` wrapper with `cols` equal columns - pass your
+/// own `class`/`style` for gaps and sizing. A forwarded `style` is merged
+/// *after* the default, so per-property overrides win (e.g.
+/// `style: "grid-template-columns: 2fr 1fr 1fr;"` for custom tracks) while
+/// `display: grid` stays; spacing needs no override at all (`class:
+/// "gap-2"`).
 /// The hovered tile gets `data-drop-target="true"`, the dragged one
-/// `data-dragging="true"`.
+/// `data-dragging="true"` - both attributes are *absent* otherwise, so
+/// presence-based selectors (CSS `[data-dragging]`, Tailwind
+/// `data-dragging:opacity-50`) work directly. Use `item_class` to put
+/// classes on the tile wrappers.
 #[component]
 pub fn SortableGrid(
     /// Number of tiles.
@@ -76,6 +87,15 @@ pub fn SortableGrid(
     /// Insert-and-reflow (gallery) or swap (dashboard). Default: insert.
     #[props(default)]
     mode: ReorderMode,
+    /// Input/browser drag path. Defaults to pointer events for all pointer
+    /// types, which avoids the native browser drag image. Use `Native` or
+    /// `Hybrid` to opt back into HTML5 drag.
+    #[props(default)]
+    input: DragInputMode,
+    /// Classes for each tile's wrapper div - the element that carries
+    /// `data-dragging` / `data-drop-target`.
+    #[props(default)]
+    item_class: Option<String>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
 ) -> Element {
     // `mode` only affects what the caller does with the SortEvent, but we
@@ -87,8 +107,14 @@ pub fn SortableGrid(
     };
     let mut drag_from = use_signal(|| None::<usize>);
     let mut over = use_signal(|| None::<usize>);
+    let mut press_from = use_signal(|| None::<usize>);
+    let mut attributes = attributes;
+    let style = merge_style(
+        &mut attributes,
+        &format!("display: grid; grid-template-columns: repeat({cols}, 1fr);"),
+    );
 
-    // Touch/pen path: per-tile rects measured at drag start, hovered tile =
+    // Pointer path: per-tile rects measured at drag start, hovered tile =
     // the one containing the pointer.
     let rects = use_signal(HashMap::<usize, Rect>::new);
     let mounteds = use_signal(HashMap::<usize, Rc<MountedData>>::new);
@@ -98,10 +124,20 @@ pub fn SortableGrid(
         gesture.set(next);
         fx
     };
-    let mut feed = move |ix: usize, event: GestureEvent| match step(event) {
-        GestureEffect::Begin { .. } => {
+    let mut feed = move |event: GestureEvent, fallback_ix: Option<usize>| match step(event) {
+        GestureEffect::Begin { at, .. } => {
+            let Some(ix) = *press_from.peek() else {
+                return;
+            };
             drag_from.set(Some(ix));
-            over.set(None);
+            let next = rects
+                .peek()
+                .iter()
+                .find(|(_, r)| r.contains(at))
+                .map(|(&i, _)| i)
+                .or(fallback_ix)
+                .filter(|&i| i != ix);
+            over.set(next);
             for (i, m) in mounteds.peek().clone() {
                 let mut rects = rects;
                 spawn(async move {
@@ -120,6 +156,7 @@ pub fn SortableGrid(
                 .iter()
                 .find(|(_, r)| r.contains(at))
                 .map(|(&i, _)| i)
+                .or(fallback_ix)
                 .filter(|&i| Some(i) != *drag_from.peek())
                 .or(*over.peek());
             if next != *over.peek() {
@@ -132,28 +169,63 @@ pub fn SortableGrid(
                     on_sort.call(SortEvent { from, to });
                 }
             }
+            press_from.set(None);
             drag_from.set(None);
             over.set(None);
         }
         GestureEffect::Abort => {
+            press_from.set(None);
             drag_from.set(None);
             over.set(None);
         }
-        GestureEffect::Tap | GestureEffect::None => {}
+        GestureEffect::Tap => {
+            press_from.set(None);
+        }
+        GestureEffect::None => {}
     };
+    let primary_pointer =
+        move |evt: &PointerEvent| evt.is_primary() && input.uses_pointer(&evt.pointer_type());
 
     rsx! {
         div {
-            style: "display: grid; grid-template-columns: repeat({cols}, 1fr);",
+            style: style,
             "data-mode": mode_str,
+            onpointermove: move |evt: PointerEvent| {
+                if !input.uses_pointer(&evt.pointer_type()) {
+                    return;
+                }
+                let at = pointer_client(&evt);
+                // Capture-free recovery (mirrors SortableList): a mouse that
+                // returns over the grid with no button held was released off
+                // it, so no `pointerup` reached us - finalize the drop instead
+                // of tracking a phantom drag that can never end. No-op with the
+                // `web` feature (capture delivers the real pointerup).
+                if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
+                    feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() }, None);
+                    return;
+                }
+                feed(GestureEvent::Move { at, pointer_id: evt.pointer_id() }, None);
+            },
+            onpointerup: move |evt: PointerEvent| {
+                if !input.uses_pointer(&evt.pointer_type()) {
+                    return;
+                }
+                feed(
+                    GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
+                    None,
+                );
+            },
+            onpointercancel: move |_| feed(GestureEvent::Cancel, None),
+            onlostpointercapture: move |_| feed(GestureEvent::Cancel, None),
             ..attributes,
             for ix in 0..len {
                 div {
                     key: "{ix}",
-                    draggable: true,
+                    draggable: input.uses_native(),
+                    class: item_class.clone(),
                     style: "touch-action: none;",
-                    "data-dragging": drag_from() == Some(ix),
-                    "data-drop-target": over() == Some(ix) && drag_from() != Some(ix),
+                    "data-dragging": if drag_from() == Some(ix) { "true" },
+                    "data-drop-target": if over() == Some(ix) && drag_from() != Some(ix) { "true" },
                     onmounted: move |evt: Event<MountedData>| {
                         let m: Rc<MountedData> = evt.data();
                         let mut mounteds = mounteds;
@@ -169,20 +241,33 @@ pub fn SortableGrid(
                         });
                     },
                     onpointerdown: move |evt: PointerEvent| {
-                        if evt.pointer_type() == "mouse" || !evt.is_primary() { return; }
-                        feed(ix, GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
+                        if !primary_pointer(&evt) { return; }
+                        evt.stop_propagation();
+                        press_from.set(Some(ix));
+                        // Capture on the stable tile so a mouse drag survives
+                        // the cursor leaving it (no-op without the `web`
+                        // feature).
+                        if let Some(n) = mounteds.peek().get(&ix).cloned() {
+                            platform::capture_pointer(&n, evt.pointer_id());
+                        }
+                        feed(
+                            GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
+                            None,
+                        );
                     },
                     onpointermove: move |evt: PointerEvent| {
-                        feed(ix, GestureEvent::Move { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
+                        feed(
+                            GestureEvent::Move { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
+                            Some(ix),
+                        );
                     },
-                    onpointerup: move |evt: PointerEvent| {
-                        feed(ix, GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
-                    },
-                    onpointercancel: move |_| feed(ix, GestureEvent::Cancel),
-                    onlostpointercapture: move |_| feed(ix, GestureEvent::Cancel),
                     ondragstart: move |evt: DragEvent| {
+                        if !input.uses_native() {
+                            return;
+                        }
                         evt.stop_propagation();
                         let _ = evt.data_transfer().set_data("text/plain", "dioxus-dnd-grid");
+                        press_from.set(None);
                         drag_from.set(Some(ix));
                     },
                     ondragover: move |evt: DragEvent| {
@@ -201,10 +286,12 @@ pub fn SortableGrid(
                                 on_sort.call(SortEvent { from, to: ix });
                             }
                         }
+                        press_from.set(None);
                         drag_from.set(None);
                         over.set(None);
                     },
                     ondragend: move |_| {
+                        press_from.set(None);
                         drag_from.set(None);
                         over.set(None);
                     },

@@ -1,18 +1,21 @@
-//! Reordering items within a single list.
 //!
 //! Self-contained: `SortableList` manages its own drag state (indices only),
-//! so it needs no `DndProvider`. You keep ownership of the data — the
+//! so it needs no `DndProvider`. You keep ownership of the data - the
 //! component just tells you *"move index 3 to index 0"* and you apply it
 //! (usually with [`apply_sort`]).
 //!
-//! Touch and pen work instantly in every browser: alongside the native
-//! HTML5 drag path (mouse), each row runs the same pointer-event gesture
-//! machine as [`crate::pointer::PointerDraggable`]. By default the whole
-//! row is the touch target, which sets `touch-action: none` on it — fine
-//! for short lists, but it stops finger-scrolling through the rows. Inside
-//! a scrollable list, set `touch_handle: true` to confine touch drags to a
-//! leading grip (style it via `[data-sort-handle]`) so the rows themselves
-//! still scroll.
+//! Mouse, touch and pen use pointer events by default, so the browser does
+//! not create or style a native drag image. Set `input:
+//! DragInputMode::Native` or `Hybrid` only when you explicitly want HTML5
+//! drag behavior. By default the whole row is the touch target, which sets
+//! `touch-action: none` on it - fine for short lists, but it stops
+//! finger-scrolling through the rows. Inside a scrollable list, set
+//! `touch_handle: true` to confine pointer drags to a leading grip (style
+//! it via `[data-sort-handle]`) so the rows themselves still scroll.
+//!
+//! Headless: the component ships behavior plus a couple of `data-*` styling
+//! hooks; you compose the looks. Rows slide to preview the drop by default -
+//! opt into a floating, caller-composed ghost with `overlay`.
 //!
 //! ```text
 //! let mut items = use_signal(|| vec!["a".to_string(), "b".into(), "c".into()]);
@@ -31,7 +34,10 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
-use crate::core::{transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
+use crate::core::components::overlay_style;
+use crate::core::{
+    platform, transition, DragInputMode, GestureEffect, GestureEvent, GesturePhase, Point, Rect,
+};
 use crate::pointer::pointer_client;
 
 /// "Move the item at `from` so it ends up at index `to`."
@@ -59,12 +65,12 @@ pub fn apply_swap<T>(list: &mut [T], ev: SortEvent) {
 }
 
 /// The live-preview offset (CSS px along the list axis) for the row at `ix`
-/// while row `from` is dragged over row `over` — the mid-drag preview
+/// while row `from` is dragged over row `over` - the mid-drag preview
 /// dnd-kit and react-beautiful-dnd made the baseline expectation.
 ///
 /// Two moves happen at once: rows between the two indices shift by `step`
 /// (the dragged row's size) to close the source slot, and the **source row
-/// itself translates to the target slot** — without that second part the
+/// itself translates to the target slot** - without that second part the
 /// shifted neighbors would overlap the source, which still occupies its
 /// slot during a native drag. Assumes uniform row sizes for the source's
 /// travel distance. Pure, for testability.
@@ -77,6 +83,42 @@ pub fn displacement(ix: usize, from: usize, over: usize, step: f64) -> f64 {
         step
     } else {
         0.0
+    }
+}
+
+/// Distance between consecutive row origins, including CSS margin/gap.
+fn slot_pitch(rects: &HashMap<usize, Rect>, ix: usize, axis: Axis) -> Option<f64> {
+    let pos = |r: &Rect| match axis {
+        Axis::Vertical => r.y,
+        Axis::Horizontal => r.x,
+    };
+    let cur = rects.get(&ix)?;
+    if let Some(next) = rects.get(&(ix + 1)) {
+        return Some(pos(next) - pos(cur));
+    }
+    if let Some(prev) = ix.checked_sub(1).and_then(|p| rects.get(&p)) {
+        return Some(pos(cur) - pos(prev));
+    }
+    Some(match axis {
+        Axis::Vertical => cur.height,
+        Axis::Horizontal => cur.width,
+    })
+}
+
+fn refresh_rects(
+    mounteds: Signal<HashMap<usize, Rc<MountedData>>>,
+    rects: Signal<HashMap<usize, Rect>>,
+) {
+    for (i, m) in mounteds.peek().clone() {
+        let mut rects = rects;
+        spawn(async move {
+            if let Ok(r) = m.get_client_rect().await {
+                rects.write().insert(
+                    i,
+                    Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
+                );
+            }
+        });
     }
 }
 
@@ -116,7 +158,7 @@ pub fn pointer_target(
     }
 }
 
-/// Layout direction of the list — decides whether the midpoint test uses
+/// Layout direction of the list - decides whether the midpoint test uses
 /// the Y axis (vertical lists) or the X axis (horizontal ones).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Axis {
@@ -136,11 +178,17 @@ pub fn apply_sort<T>(list: &mut Vec<T>, ev: SortEvent) {
 
 /// A list whose items can be dragged to reorder.
 ///
-/// The component is data-agnostic: give it a `len` and a `render` callback
-/// keyed by index. It renders one wrapper `div[draggable]` per item and emits
-/// a [`SortEvent`] when the user drops. The item currently hovered as a drop
-/// target gets `data-drop-target="true"` on its wrapper for styling, and the
-/// dragged item gets `data-dragging="true"`.
+/// Data-agnostic: give it a `len` and a `render` callback keyed by index. It
+/// renders one wrapper per item and emits a [`SortEvent`] on drop. The hovered
+/// drop target gets `data-drop-target` on its wrapper and the dragged item gets
+/// `data-dragging`; both are absent while inactive.
+///
+/// Headless by default - the component ships behavior, you compose the looks.
+/// With `overlay` set, the picked-up row is hidden in place and *your* overlay
+/// element floats at the pointer (the dnd-kit feel); keep it lightweight, it is
+/// your content, not a clone of the row. Without it, the row stays visible and
+/// slides. Native `draggable` is off by default; set `input` to
+/// [`DragInputMode::Native`] or [`DragInputMode::Hybrid`] for browser drag.
 #[component]
 pub fn SortableList(
     /// Number of items.
@@ -156,20 +204,46 @@ pub fn SortableList(
     /// in between. Set `false` for the plain highlight-only behavior.
     #[props(default = true)]
     live_preview: bool,
+    /// Duration (ms) of the row-slide transition during live preview.
+    #[props(default = 160)]
+    transition_ms: u32,
+    /// Opt-in floating ghost: renders `overlay(index)` pinned to the pointer
+    /// while dragging, and hides the picked-up row in place so its slot reads
+    /// as the drop gap. Absent → the row itself slides. Keep the ghost
+    /// lightweight; it is your content, not a clone of the row.
+    #[props(default)]
+    overlay: Option<Callback<usize, Element>>,
+    /// Input/browser drag path. Defaults to pointer events for all pointer
+    /// types, avoiding the browser's native drag image.
+    #[props(default)]
+    input: DragInputMode,
     /// Confine touch/pen drags to a leading grip element instead of the
     /// whole row. The grip carries `touch-action: none` so the rest of the
-    /// row keeps scrolling by finger — use this inside scrollable lists.
+    /// row keeps scrolling by finger - use this inside scrollable lists.
     /// Style it via `[data-sort-handle]`.
     #[props(default = false)]
     touch_handle: bool,
+    /// Content for the `touch_handle` grip, keyed by index. Defaults to a
+    /// braille-dots glyph when unset.
+    #[props(default)]
+    handle: Option<Callback<usize, Element>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
 ) -> Element {
     let mut drag_from = use_signal(|| None::<usize>);
     let mut over = use_signal(|| None::<usize>);
+    let mut press_from = use_signal(|| None::<usize>);
+    let mut press_at = use_signal(|| None::<Point>);
+    let mut pointer_at = use_signal(|| None::<Point>);
     // Per-row client rects (measured on mount, re-measured at pointer-drag
-    // start) drive both the displacement step and touch hit-testing.
+    // start) drive both the displacement step and hit-testing.
     let rects = use_signal(HashMap::<usize, Rect>::new);
     let mounteds = use_signal(HashMap::<usize, Rc<MountedData>>::new);
+    let mut rects_for_len = rects;
+    let mut mounteds_for_len = mounteds;
+    use_effect(use_reactive!(|len| {
+        rects_for_len.write().retain(|ix, _| *ix < len);
+        mounteds_for_len.write().retain(|ix, _| *ix < len);
+    }));
     let size_of = move |ix: usize| {
         rects
             .peek()
@@ -181,84 +255,175 @@ pub fn SortableList(
             .unwrap_or(40.0)
     };
 
-    // Touch/pen drags run the same formal gesture machine as
-    // `PointerDraggable`; mouse input keeps the native HTML5 path below.
+    // Pointer drags run the same formal gesture machine as `PointerDraggable`;
+    // native HTML5 drag is an opt-in path below. `over` (the drop target) is
+    // resolved synchronously on every tracked move - no derived effect - so the
+    // gap never lags the pointer, and the native path stays fully separate.
     let mut gesture = use_signal(|| GesturePhase::Idle);
     let mut step = move |event: GestureEvent| -> GestureEffect {
         let (next, fx) = transition(*gesture.peek(), event, 8.0);
         gesture.set(next);
         fx
     };
-    // Feed one pointer event for row `ix` and act on the machine's effect.
-    let mut feed = move |ix: usize, event: GestureEvent| {
+    // Feed one pointer event and act on the machine's effect. The source row is
+    // latched on pointerdown because mouse move/up events bubble through the
+    // list container rather than staying on the pressed row.
+    let mut feed = move |event: GestureEvent| {
         match step(event) {
-            GestureEffect::Begin { .. } => {
+            GestureEffect::Begin { at, .. } => {
+                let Some(ix) = *press_from.peek() else {
+                    return;
+                };
                 drag_from.set(Some(ix));
-                over.set(None);
-                // Client rects go stale when the list scrolls or layout
-                // shifts; re-measure every row at drag start so hit-testing
-                // runs against the current (pre-displacement) slots.
-                for (i, m) in mounteds.peek().clone() {
-                    let mut rects = rects;
-                    spawn(async move {
-                        if let Ok(r) = m.get_client_rect().await {
-                            rects.write().insert(
-                                i,
-                                Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
-                            );
-                        }
-                    });
-                }
+                pointer_at.set(Some(at));
+                over.set(pointer_target(&rects.peek(), ix, None, at, axis));
+                // Client rects go stale when the list scrolls or layout shifts;
+                // re-measure every row at drag start so hit-testing runs against
+                // the current (pre-displacement) slots.
+                refresh_rects(mounteds, rects);
             }
             GestureEffect::Track { at } => {
-                if let Some(from) = *drag_from.peek() {
-                    let next = pointer_target(&rects.peek(), from, *over.peek(), at, axis);
-                    if next != *over.peek() {
-                        over.set(next);
-                    }
+                let Some(from) = *drag_from.peek() else {
+                    return;
+                };
+                pointer_at.set(Some(at));
+                let next = pointer_target(&rects.peek(), from, *over.peek(), at, axis);
+                if next != *over.peek() {
+                    over.set(next);
                 }
             }
-            GestureEffect::Drop { .. } => {
-                if let (Some(from), Some(to)) = (*drag_from.peek(), *over.peek()) {
+            GestureEffect::Drop { at } => {
+                let from_opt = *drag_from.peek();
+                let to = from_opt
+                    .and_then(|from| pointer_target(&rects.peek(), from, *over.peek(), at, axis));
+                // Clear ALL drag state BEFORE notifying: `on_sort` mutates the
+                // caller's list, which re-renders this component; observing a
+                // still-active drag would re-apply the preview to the already-
+                // reordered rows.
+                press_from.set(None);
+                press_at.set(None);
+                drag_from.set(None);
+                over.set(None);
+                pointer_at.set(None);
+                if let (Some(from), Some(to)) = (from_opt, to) {
                     if from != to {
                         on_sort.call(SortEvent { from, to });
                     }
                 }
-                drag_from.set(None);
-                over.set(None);
             }
             GestureEffect::Abort => {
+                press_from.set(None);
+                press_at.set(None);
                 drag_from.set(None);
                 over.set(None);
+                pointer_at.set(None);
             }
-            GestureEffect::Tap | GestureEffect::None => {}
+            GestureEffect::Tap => {
+                press_from.set(None);
+                press_at.set(None);
+                pointer_at.set(None);
+            }
+            GestureEffect::None => {}
         }
     };
-    let touch_pointer = |evt: &PointerEvent| evt.pointer_type() != "mouse" && evt.is_primary();
+
+    let primary_pointer =
+        move |evt: &PointerEvent| evt.is_primary() && input.uses_pointer(&evt.pointer_type());
+    let mut cancel_drag = move || {
+        feed(GestureEvent::Cancel);
+        press_from.set(None);
+        press_at.set(None);
+        drag_from.set(None);
+        over.set(None);
+        pointer_at.set(None);
+    };
+
+    // Opt-in floating ghost (caller-composed). Only computed when we have a
+    // measured source rect and both pointer positions, so the in-flow original
+    // is hidden *only* when a replacement is guaranteed to render - no rect, no
+    // ghost, no disappearing row (it just slides). Carries the callback so the
+    // render below needs nothing else.
+    let overlay_ghost: Option<(Callback<usize, Element>, usize, Point, Rect)> =
+        overlay.zip(drag_from()).and_then(|(cb, from)| {
+            let r = rects.peek().get(&from).copied()?;
+            let p0 = press_at()?;
+            let p1 = pointer_at()?;
+            Some((
+                cb,
+                from,
+                Point::new(r.x + (p1.x - p0.x), r.y + (p1.y - p0.y)),
+                r,
+            ))
+        });
+    let ghost_from = overlay_ghost.map(|(_, f, _, _)| f);
 
     rsx! {
         div {
+            onpointermove: move |evt: PointerEvent| {
+                if !input.uses_pointer(&evt.pointer_type()) {
+                    return;
+                }
+                let at = pointer_client(&evt);
+                // Recovery for a mouse released while the cursor sat outside the
+                // list. With the `web` feature, `platform::capture_pointer`
+                // routes the release back here; without it (feature off, or a
+                // non-web renderer) no `pointerup` arrives, so when the pointer
+                // returns over the list with no button held we finish the drop
+                // rather than track a phantom drag. Touch/pen hold a button
+                // throughout contact, so this only trips for a released mouse.
+                if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
+                    feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() });
+                    return;
+                }
+                feed(GestureEvent::Move { at, pointer_id: evt.pointer_id() });
+            },
+            onpointerup: move |evt: PointerEvent| {
+                if !input.uses_pointer(&evt.pointer_type()) {
+                    return;
+                }
+                feed(GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
+            },
+            // Genuine interruptions (touch cancelled, browser stole capture)
+            // abort the drag. Merely leaving the list does NOT: without pointer
+            // capture, cancelling on `pointerleave` would kill every drag that
+            // strays a pixel past an edge.
+            onpointercancel: move |_| cancel_drag(),
+            onlostpointercapture: move |_| cancel_drag(),
             ..attributes,
             for ix in 0..len {
                 div {
                     key: "{ix}",
-                    draggable: true,
-                    "data-dragging": drag_from() == Some(ix),
-                    "data-drop-target": over() == Some(ix) && drag_from() != Some(ix),
+                    draggable: input.uses_native(),
+                    "data-dragging": if drag_from() == Some(ix) { "true" },
+                    "data-drop-target": if over() == Some(ix) && drag_from() != Some(ix) { "true" },
                     style: {
-                        let base = match (live_preview, drag_from(), over()) {
-                            (true, Some(from), Some(o)) => {
-                                let d = displacement(ix, from, o, size_of(from));
+                        // Live preview: rows slide so every slot stays filled by
+                        // exactly one box. When `overlay` is set, the picked-up
+                        // row is drawn by the floating ghost, so its in-flow
+                        // original is hidden (opacity 0) while still translating
+                        // to the target slot - that invisible slot is the gap the
+                        // neighbours part around. Without `overlay` the row stays
+                        // visible and slides.
+                        let base = match (live_preview, drag_from()) {
+                            (true, Some(from)) => {
+                                let step = slot_pitch(&rects.peek(), from, axis)
+                                    .unwrap_or_else(|| size_of(from));
+                                let o = over().unwrap_or(from);
+                                let d = displacement(ix, from, o, step);
                                 let (x, y) = match axis {
                                     Axis::Vertical => (0.0, d),
                                     Axis::Horizontal => (d, 0.0),
                                 };
-                                format!("transform: translate({x}px, {y}px); transition: transform 160ms ease;")
+                                let hidden = if ghost_from == Some(ix) {
+                                    " opacity: 0;"
+                                } else {
+                                    ""
+                                };
+                                format!("transform: translate({x}px, {y}px); transition: transform {transition_ms}ms ease;{hidden}")
                             }
-                            (true, Some(_), None) => {
-                                "transform: none; transition: transform 160ms ease;".to_string()
-                            }
-                            _ => String::new(),
+                            _ => format!(
+                                "transform: translate(0px, 0px); transition: transform {transition_ms}ms; opacity: 1;"
+                            ),
                         };
                         if touch_handle {
                             format!("display: flex; align-items: stretch; width: 100%; {base}")
@@ -266,30 +431,26 @@ pub fn SortableList(
                             format!("touch-action: none; {base}")
                         }
                     },
-                    // Touch/pen path (whole-row mode). With `touch_handle`
-                    // these are inert and the grip below owns the gesture.
+                    // Pointer path (whole-row mode). With `touch_handle` these
+                    // are inert and the grip below owns the gesture.
                     onpointerdown: move |evt: PointerEvent| {
-                        if touch_handle || !touch_pointer(&evt) { return; }
-                        feed(ix, GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
-                    },
-                    onpointermove: move |evt: PointerEvent| {
-                        if touch_handle { return; }
-                        feed(ix, GestureEvent::Move { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
-                    },
-                    onpointerup: move |evt: PointerEvent| {
-                        if touch_handle { return; }
-                        feed(ix, GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
-                    },
-                    onpointercancel: move |_| {
-                        if touch_handle { return; }
-                        feed(ix, GestureEvent::Cancel);
-                    },
-                    onlostpointercapture: move |_| {
-                        // Fires benignly after every pointerup (the machine is
-                        // Idle then and ignores it) and protectively when the
-                        // browser rips capture away mid-drag.
-                        if touch_handle { return; }
-                        feed(ix, GestureEvent::Cancel);
+                        if touch_handle || !primary_pointer(&evt) {
+                            return;
+                        }
+                        evt.prevent_default();
+                        evt.stop_propagation();
+                        refresh_rects(mounteds, rects);
+                        press_from.set(Some(ix));
+                        press_at.set(Some(pointer_client(&evt)));
+                        // Capture on the stable row wrapper so a mouse drag
+                        // survives the cursor leaving the list (real capture with
+                        // the `web` feature; a no-op otherwise, backed by the
+                        // button-release recovery above). Move/up still bubble to
+                        // the container handlers.
+                        if let Some(n) = mounteds.peek().get(&ix).cloned() {
+                            platform::capture_pointer(&n, evt.pointer_id());
+                        }
+                        feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
                     },
                     onmounted: move |evt: Event<MountedData>| {
                         let m: Rc<MountedData> = evt.data();
@@ -306,12 +467,21 @@ pub fn SortableList(
                         });
                     },
                     ondragstart: move |evt: DragEvent| {
-                        // Nested sortables: the innermost list owns the drag.
-                        // The outer list's `drag_from` stays `None`, so its
+                        if !input.uses_native() {
+                            return;
+                        }
+                        // Nested sortables: the innermost list owns the drag. The
+                        // outer list's `drag_from` stays `None`, so its
                         // dragover/drop guards no-op for this gesture.
                         evt.stop_propagation();
                         let _ = evt.data_transfer().set_data("text/plain", "dioxus-dnd-sort");
+                        let c = evt.client_coordinates();
+                        press_from.set(None);
+                        press_at.set(Some(Point::new(c.x, c.y)));
                         drag_from.set(Some(ix));
+                        over.set(None);
+                        pointer_at.set(None);
+                        refresh_rects(mounteds, rects);
                     },
                     ondragover: move |evt: DragEvent| {
                         let Some(from) = drag_from() else { return };
@@ -319,17 +489,20 @@ pub fn SortableList(
                         if from == ix || over() == Some(ix) {
                             return;
                         }
-                        // Midpoint hysteresis: only adopt this row as the
-                        // target once the pointer crosses its center in the
-                        // travel direction — prevents the gap from
-                        // oscillating as displaced rows slide under the
-                        // cursor.
-                        let pos = match axis {
-                            Axis::Vertical => evt.element_coordinates().y,
-                            Axis::Horizontal => evt.element_coordinates().x,
+                        // Midpoint hysteresis: adopt this row only once the
+                        // pointer crosses its center in the travel direction. The
+                        // native path is self-contained - it does its own
+                        // hit-testing and never writes `pointer_at` (which drives
+                        // only the pointer path), so the two never interfere.
+                        let c = evt.client_coordinates();
+                        let Some(rect) = rects.peek().get(&ix).copied() else {
+                            return;
                         };
-                        let mid = size_of(ix) * 0.5;
-                        let crossed = if from < ix { pos > mid } else { pos < mid };
+                        let (pos, size) = match axis {
+                            Axis::Vertical => (c.y - rect.y, rect.height),
+                            Axis::Horizontal => (c.x - rect.x, rect.width),
+                        };
+                        let crossed = if from < ix { pos > size * 0.5 } else { pos < size * 0.5 };
                         if crossed {
                             over.set(Some(ix));
                         }
@@ -337,36 +510,53 @@ pub fn SortableList(
                     ondrop: move |evt: DragEvent| {
                         evt.prevent_default();
                         evt.stop_propagation();
-                        if let Some(from) = drag_from() {
+                        let from_opt = drag_from();
+                        // Reset before notifying (see the pointer Drop arm).
+                        press_from.set(None);
+                        press_at.set(None);
+                        drag_from.set(None);
+                        over.set(None);
+                        pointer_at.set(None);
+                        if let Some(from) = from_opt {
                             if from != ix {
                                 on_sort.call(SortEvent { from, to: ix });
                             }
                         }
-                        drag_from.set(None);
-                        over.set(None);
                     },
                     ondragend: move |_| {
+                        press_from.set(None);
+                        press_at.set(None);
                         drag_from.set(None);
                         over.set(None);
+                        pointer_at.set(None);
                     },
                     if touch_handle {
                         span {
                             "data-sort-handle": true,
                             aria_hidden: true,
-                            style: "touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; flex: 0 0 1.35rem; display: grid; place-items: center;",
+                            style: "touch-action: none; user-select: none; -webkit-user-select: none; display: grid; place-items: center;",
                             onpointerdown: move |evt: PointerEvent| {
-                                if !touch_pointer(&evt) { return; }
-                                feed(ix, GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
+                                if !primary_pointer(&evt) {
+                                    return;
+                                }
+                                evt.prevent_default();
+                                evt.stop_propagation();
+                                refresh_rects(mounteds, rects);
+                                press_from.set(Some(ix));
+                                press_at.set(Some(pointer_client(&evt)));
+                                // Capture on the row wrapper (not the grip): it is
+                                // stable across live-preview re-renders, and
+                                // captured events still bubble to the container.
+                                if let Some(n) = mounteds.peek().get(&ix).cloned() {
+                                    platform::capture_pointer(&n, evt.pointer_id());
+                                }
+                                feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
                             },
-                            onpointermove: move |evt: PointerEvent| {
-                                feed(ix, GestureEvent::Move { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
-                            },
-                            onpointerup: move |evt: PointerEvent| {
-                                feed(ix, GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
-                            },
-                            onpointercancel: move |_| feed(ix, GestureEvent::Cancel),
-                            onlostpointercapture: move |_| feed(ix, GestureEvent::Cancel),
-                            "⠿"
+                            if let Some(h) = handle {
+                                {h.call(ix)}
+                            } else {
+                                "⠿"
+                            }
                         }
                         div {
                             "data-sort-content": true,
@@ -376,6 +566,17 @@ pub fn SortableList(
                     } else {
                         {render.call(ix)}
                     }
+                }
+            }
+            if let Some((cb, from, pos, rect)) = overlay_ghost {
+                div {
+                    style: format!(
+                        "{} width: {}px; height: {}px;",
+                        overlay_style(pos),
+                        rect.width,
+                        rect.height
+                    ),
+                    {cb.call(from)}
                 }
             }
         }
@@ -464,6 +665,32 @@ mod swap_tests {
         assert_eq!(v, vec![4, 2, 3, 1]);
         apply_swap(&mut v, SortEvent { from: 9, to: 0 });
         assert_eq!(v, vec![4, 2, 3, 1]);
+    }
+}
+
+#[cfg(test)]
+mod slot_pitch_tests {
+    use super::*;
+
+    #[test]
+    fn pitch_includes_spacing_between_rows() {
+        let rows: HashMap<usize, Rect> = (0..3)
+            .map(|i| (i, Rect::new(0.0, i as f64 * 46.0, 200.0, 42.0)))
+            .collect();
+
+        assert_eq!(slot_pitch(&rows, 0, Axis::Vertical), Some(46.0));
+        assert_eq!(slot_pitch(&rows, 1, Axis::Vertical), Some(46.0));
+        assert_eq!(slot_pitch(&rows, 2, Axis::Vertical), Some(46.0));
+    }
+
+    #[test]
+    fn pitch_falls_back_to_size_for_single_row() {
+        let rows: HashMap<usize, Rect> = [(0, Rect::new(0.0, 0.0, 200.0, 42.0))]
+            .into_iter()
+            .collect();
+
+        assert_eq!(slot_pitch(&rows, 0, Axis::Vertical), Some(42.0));
+        assert_eq!(slot_pitch(&rows, 9, Axis::Vertical), None);
     }
 }
 
