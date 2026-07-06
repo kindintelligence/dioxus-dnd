@@ -112,6 +112,9 @@ elements. Existing `[data-…="true"]` selectors keep working.
 - `CanvasDropZone` now syncs label changes into the zone registry, matching
   `DropZone`, and the README documents canvas pointer/position semantics
   plus the existing modifier chain for richer constraints.
+- New `examples/canvas.rs`: a focused node-editor style demo using
+  `CanvasDropZone`, `PointerDraggable` and `core::modifiers` for snap grid
+  and item-aware bounds while keeping the canvas API headless.
 
 ## 1.0.0
 
