@@ -216,17 +216,16 @@ with `dnd.announce(...)`.
 
 ## Touch
 
-Every pattern in this crate works with touch and pen instantly, in every
-browser. You do not need to do anything to get it.
+Every in-app drag pattern in this crate defaults to pointer events for mouse,
+touch and pen. You do not need to do anything to get consistent styled drags
+inside the app.
 
 Native HTML5 drag from a touch long-press exists in some browsers (Safari
 on iOS/iPadOS 15+; Android support is inconsistent), so relying on it means
 your app works on some phones after a hold and not at all on others. This
-crate instead runs a pointer-event gesture path alongside the native one.
-`PointerDraggable` defaults to the compatibility split: native mouse,
-pointer touch/pen. Set `input: DragInputMode::Pointer` when you want mouse
-to use the synthetic path too. Both paths feed the same state and drop
-callbacks, so your code cannot tell which one fired.
+crate uses the pointer-event path for ordinary app UI. Set
+`input: DragInputMode::Native` or `Hybrid` only when you need the browser's
+HTML5 drag behavior.
 
 - `PointerDraggable` is the configurable pointer-capable drag source for
   `DropZone` targets. `BoardItem`, `SelectableDraggable` and
@@ -238,11 +237,14 @@ callbacks, so your code cannot tell which one fired.
   They default to pointer events for mouse, touch and pen, which avoids the
   browser's native drag image during reorders. Use
   `input: DragInputMode::Native` or `Hybrid` to opt back into HTML5 drag.
+- Native components stay native: `FileDropZone`, `ExternalDropZone`,
+  `ExternalDragSource`, `external::typed` and plain `Draggable` use
+  `DataTransfer` for file drops, external drops, drag-out and cross-window
+  interop.
 
 ```text
 PointerDraggable::<Card> {
     payload: card,
-    input: DragInputMode::Pointer,
     label: "Ship it",
     "Ship it"
 }
@@ -487,8 +489,8 @@ using the recorded grab offset.
     straying off the drag surface no longer cancels the drag, and a mouse
     released outside is reconciled when the cursor returns (via the
     held-button state). Best-effort; a release that never returns won't
-    commit. Use `DragInputMode::Hybrid`/`Native` if you'd rather mouse take
-    the browser-managed native HTML5 path instead.
+    commit. Use `DragInputMode::Hybrid`/`Native` when mouse should take the
+    browser-managed native HTML5 path instead.
 
   Touch and pen are unaffected either way - the browser implicitly captures
   them.

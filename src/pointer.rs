@@ -8,12 +8,11 @@
 //! in every browser, and uses your `DragOverlay` as the ghost. Where native
 //! long-press exists, it keeps working as a fallback on plain `Draggable`s.
 //!
-//! [`PointerDraggable`] *composes* the core [`Draggable`]. By default it keeps
-//! the compatibility split: mouse users get the native HTML5 drag path, while
-//! touch/pen input is handled with `pointerdown` → `pointermove` → `pointerup`,
+//! [`PointerDraggable`] *composes* the core [`Draggable`]. By default mouse,
+//! touch and pen all use `pointerdown` → `pointermove` → `pointerup`,
 //! hit-testing the registered drop zones' cached client rects to decide where
-//! the drop lands. Set [`DragInputMode::Pointer`] to use the synthetic path
-//! for mouse too, avoiding the browser's native drag image entirely.
+//! the drop lands. Set [`DragInputMode::Native`] or [`DragInputMode::Hybrid`]
+//! when you need the browser's HTML5 drag path.
 //!
 //! Two things to know:
 //! - The wrapper sets `touch-action: none` so the browser doesn't hijack the
@@ -39,11 +38,10 @@ pub(crate) fn pointer_client(evt: &PointerEvent) -> Point {
 
 /// A draggable that works for mouse *and* touch/pen.
 ///
-/// By default mouse drags go through the native HTML5 path (inner core
-/// `Draggable`), while touch and pen drags are synthesized from pointer
-/// events. Set `input` to [`DragInputMode::Pointer`] when you want every
-/// pointer type, including mouse, to use the synthetic path and your
-/// `DragOverlay` instead of the browser's drag image.
+/// By default mouse, touch and pen drags are synthesized from pointer events,
+/// using your `DragOverlay` instead of the browser's drag image. Set `input`
+/// to [`DragInputMode::Native`] or [`DragInputMode::Hybrid`] when you need the
+/// browser's HTML5 drag path.
 ///
 /// Like [`Draggable`], the wrapper (where your forwarded `class` lands)
 /// carries `data-dragging="true"` while this payload is in flight and
@@ -70,9 +68,9 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
     /// Movement (px) before a touch counts as a drag rather than a tap.
     #[props(default = 8.0)]
     threshold: f64,
-    /// Which input/browser drag path this source should use. Defaults to the
-    /// compatibility behavior: native mouse, pointer touch/pen.
-    #[props(default = DragInputMode::Hybrid)]
+    /// Which input/browser drag path this source should use. Defaults to
+    /// pointer events for mouse, touch and pen.
+    #[props(default)]
     input: DragInputMode,
     /// Fired when a drag begins (either path).
     #[props(default)]

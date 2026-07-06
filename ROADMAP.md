@@ -2,18 +2,16 @@
 
 This is the working path after 1.0.
 
-The library stays headless. The next work is about making the default path
-match what people expect in a modern web app: styled, accessible, pointer
-driven drag inside the app, with native browser drag preserved for the places
-only the browser can reach.
+The library stays headless. The default path now matches what people expect in
+a modern web app: styled, accessible, pointer driven drag inside the app, with
+native browser drag preserved for the places only the browser can reach.
 
 ## Input model
 
-Pointer should be the default for in-app drag.
+Pointer is the default for in-app drag.
 
-- `PointerDraggable`, `BoardItem` and `SelectableDraggable` should default to
-  `DragInputMode::Pointer`.
-- `SortableList` and `SortableGrid` already do this.
+- `PointerDraggable`, `BoardItem`, `SelectableDraggable`, `SortableList` and
+  `SortableGrid` default to `DragInputMode::Pointer`.
 - `Draggable` should stay native by default. It is the low-level HTML drag
   source and the compatibility escape hatch.
 - `DragInputMode::Native` and `DragInputMode::Hybrid` should stay public and

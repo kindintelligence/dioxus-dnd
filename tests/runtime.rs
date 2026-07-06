@@ -614,6 +614,10 @@ fn pointer_draggable_input_mode_controls_native_attr() {
         use_dnd_provider::<String>();
         rsx! {
             PointerDraggable::<String> {
+                payload: "default".to_string(),
+                "default"
+            }
+            PointerDraggable::<String> {
                 payload: "pointer".to_string(),
                 input: DragInputMode::Pointer,
                 "pointer"
@@ -623,18 +627,85 @@ fn pointer_draggable_input_mode_controls_native_attr() {
                 input: DragInputMode::Native,
                 "native"
             }
+            PointerDraggable::<String> {
+                payload: "hybrid".to_string(),
+                input: DragInputMode::Hybrid,
+                "hybrid"
+            }
+        }
+    }
+    let html = run(app);
+    assert_eq!(
+        html.matches("draggable=false").count(),
+        2,
+        "default and pointer mode should disable native drag: {html}"
+    );
+    assert_eq!(
+        html.matches("draggable=true").count(),
+        2,
+        "native and hybrid mode should enable native drag: {html}"
+    );
+}
+
+#[test]
+fn pointer_wrappers_default_to_pointer_drag() {
+    fn app() -> Element {
+        use_dnd_provider::<BoardPayload<String>>();
+        rsx! {
+            BoardItem::<String> {
+                item: "board-default".to_string(),
+                column: ZoneId(1),
+                index: 0,
+                "board-default"
+            }
+            BoardItem::<String> {
+                item: "board-native".to_string(),
+                column: ZoneId(1),
+                index: 1,
+                input: DragInputMode::Native,
+                "board-native"
+            }
         }
     }
     let html = run(app);
     assert_eq!(
         html.matches("draggable=false").count(),
         1,
-        "pointer mode should disable native drag: {html}"
+        "BoardItem default should disable native drag: {html}"
     );
     assert_eq!(
         html.matches("draggable=true").count(),
         1,
-        "native mode should enable native drag: {html}"
+        "BoardItem native opt-in should enable native drag: {html}"
+    );
+
+    fn selectable_app() -> Element {
+        let selection = use_selection::<u32>();
+        use_dnd_provider::<Vec<u32>>();
+        rsx! {
+            SelectableDraggable::<u32> {
+                item: 1,
+                selection,
+                "select-default"
+            }
+            SelectableDraggable::<u32> {
+                item: 2,
+                selection,
+                input: DragInputMode::Hybrid,
+                "select-hybrid"
+            }
+        }
+    }
+    let html = run(selectable_app);
+    assert_eq!(
+        html.matches("draggable=false").count(),
+        1,
+        "SelectableDraggable default should disable native drag: {html}"
+    );
+    assert_eq!(
+        html.matches("draggable=true").count(),
+        1,
+        "SelectableDraggable hybrid opt-in should enable native drag: {html}"
     );
 }
 

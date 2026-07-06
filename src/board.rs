@@ -82,11 +82,10 @@ pub fn BoardItem<T: Clone + PartialEq + 'static>(
     column: ContainerId,
     /// Index within the column.
     index: usize,
-    /// Which input/browser drag path cards use. Defaults to the compatibility
-    /// split (native mouse, pointer touch/pen). Set [`DragInputMode::Pointer`]
-    /// to drive mouse through the synthetic path too - pairs with the `web`
-    /// feature for pointer capture and a styled `DragOverlay`.
-    #[props(default = DragInputMode::Hybrid)]
+    /// Which input/browser drag path cards use. Defaults to pointer events for
+    /// mouse, touch and pen. Set [`DragInputMode::Native`] or
+    /// [`DragInputMode::Hybrid`] to opt into HTML5 drag.
+    #[props(default)]
     input: DragInputMode,
     /// Label for screen-reader announcements.
     #[props(default)]

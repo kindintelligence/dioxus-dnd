@@ -101,6 +101,11 @@ elements. Existing `[data-…="true"]` selectors keep working.
 - `CanvasDropZone` now reads `snap`/`bounds` through signals, so runtime
   changes to them apply to pointer and keyboard drops, not just native
   mouse drops.
+- `PointerDraggable`, `BoardItem` and `SelectableDraggable` now default to
+  pointer events for mouse, touch and pen. Native drag is still available
+  through `DragInputMode::Native` or `Hybrid`, and the native boundary
+  components (`FileDropZone`, `ExternalDropZone`, `ExternalDragSource`,
+  `external::typed`, plain `Draggable`) are unchanged.
 
 ## 1.0.0
 
