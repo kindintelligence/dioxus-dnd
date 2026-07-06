@@ -201,6 +201,11 @@ pub fn SortableGrid(
                 // of tracking a phantom drag that can never end. No-op with the
                 // `web` feature (capture delivers the real pointerup).
                 if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
+                    if let Some(from) = *drag_from.peek() {
+                        if let Some(n) = mounteds.peek().get(&from).cloned() {
+                            platform::release_pointer(&n, evt.pointer_id());
+                        }
+                    }
                     feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() }, None);
                     return;
                 }
@@ -210,12 +215,24 @@ pub fn SortableGrid(
                 if !input.uses_pointer(&evt.pointer_type()) {
                     return;
                 }
+                if let Some(from) = *drag_from.peek() {
+                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                        platform::release_pointer(&n, evt.pointer_id());
+                    }
+                }
                 feed(
                     GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                     None,
                 );
             },
-            onpointercancel: move |_| feed(GestureEvent::Cancel, None),
+            onpointercancel: move |evt: PointerEvent| {
+                if let Some(from) = *drag_from.peek() {
+                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                        platform::release_pointer(&n, evt.pointer_id());
+                    }
+                }
+                feed(GestureEvent::Cancel, None);
+            },
             onlostpointercapture: move |_| feed(GestureEvent::Cancel, None),
             ..attributes,
             for ix in 0..len {

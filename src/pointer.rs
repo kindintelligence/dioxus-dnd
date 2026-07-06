@@ -210,6 +210,9 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                 let event = if matches!(*phase.peek(), GesturePhase::Dragging { .. })
                     && evt.held_buttons().is_empty()
                 {
+                    if let Some(n) = node.peek().clone() {
+                        platform::release_pointer(&n, evt.pointer_id());
+                    }
                     GestureEvent::Up { at, pointer_id: evt.pointer_id() }
                 } else {
                     GestureEvent::Move { at, pointer_id: evt.pointer_id() }
@@ -247,6 +250,9 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                 }
             },
             onpointerup: move |evt: PointerEvent| {
+                if let Some(n) = node.peek().clone() {
+                    platform::release_pointer(&n, evt.pointer_id());
+                }
                 let GestureEffect::Drop { at: point } = step(
                     GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                     threshold,
@@ -255,7 +261,10 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                 };
                 finish_drop(point);
             },
-            onpointercancel: move |_| {
+            onpointercancel: move |evt: PointerEvent| {
+                if let Some(n) = node.peek().clone() {
+                    platform::release_pointer(&n, evt.pointer_id());
+                }
                 if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
                     dnd.cancel();
                     if let Some(h) = &on_drag_end {

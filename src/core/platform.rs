@@ -35,3 +35,20 @@ pub(crate) fn capture_pointer(node: &MountedData, pointer_id: i32) {
         let _ = (node, pointer_id);
     }
 }
+
+/// Release pointer capture for `pointer_id` from `node`.
+///
+/// Browsers release capture automatically on pointerup/pointercancel, but an
+/// explicit release makes the normal cleanup path obvious and keeps future
+/// platform shims symmetric with [`capture_pointer`]. No-op without `web`.
+pub(crate) fn release_pointer(node: &MountedData, pointer_id: i32) {
+    #[cfg(feature = "web")]
+    if let Some(el) = node.downcast::<web_sys::Element>() {
+        // Fails if capture is already gone or this element never had it.
+        let _ = el.release_pointer_capture(pointer_id);
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        let _ = (node, pointer_id);
+    }
+}

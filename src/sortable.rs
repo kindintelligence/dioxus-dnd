@@ -372,6 +372,11 @@ pub fn SortableList(
                 // rather than track a phantom drag. Touch/pen hold a button
                 // throughout contact, so this only trips for a released mouse.
                 if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
+                    if let Some(from) = *drag_from.peek() {
+                        if let Some(n) = mounteds.peek().get(&from).cloned() {
+                            platform::release_pointer(&n, evt.pointer_id());
+                        }
+                    }
                     feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() });
                     return;
                 }
@@ -381,13 +386,25 @@ pub fn SortableList(
                 if !input.uses_pointer(&evt.pointer_type()) {
                     return;
                 }
+                if let Some(from) = *drag_from.peek() {
+                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                        platform::release_pointer(&n, evt.pointer_id());
+                    }
+                }
                 feed(GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
             },
             // Genuine interruptions (touch cancelled, browser stole capture)
             // abort the drag. Merely leaving the list does NOT: without pointer
             // capture, cancelling on `pointerleave` would kill every drag that
             // strays a pixel past an edge.
-            onpointercancel: move |_| cancel_drag(),
+            onpointercancel: move |evt: PointerEvent| {
+                if let Some(from) = *drag_from.peek() {
+                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                        platform::release_pointer(&n, evt.pointer_id());
+                    }
+                }
+                cancel_drag();
+            },
             onlostpointercapture: move |_| cancel_drag(),
             ..attributes,
             for ix in 0..len {

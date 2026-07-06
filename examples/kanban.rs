@@ -5,7 +5,7 @@
 //!
 //! Run with the Dioxus CLI:
 //! ```sh
-//! dx serve --example kanban --platform web
+//! dx serve --example kanban --platform web --features web
 //! ```
 
 use std::collections::HashMap;

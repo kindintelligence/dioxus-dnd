@@ -178,7 +178,7 @@ ones survive. So grid spacing is just `class: "gap-2"`, and custom column
 tracks are `style: "grid-template-columns: 2fr 1fr 1fr;"`.
 
 See `examples/tailwind.rs` for all of this in one place (`dx serve
---example tailwind --platform web`).
+--example tailwind --platform web --features web`).
 
 Not using Tailwind? The same contract serves plain CSS: `[data-over]`,
 `[data-intent="into"]`, `[data-sort-handle]`, and so on.
@@ -423,14 +423,31 @@ prints every `DropOutcome` the library delivers. It is designed to deploy
 as-is as the project website:
 
 ```sh
-dx serve --example showcase --platform web
+dx serve --example showcase --platform web --features web
 ```
 
 There is also a focused board example:
 
 ```sh
-dx serve --example kanban --platform web
+dx serve --example kanban --platform web --features web
 ```
+
+## Browser regression checks
+
+The Rust tests cover pure state, SSR output and geometry helpers. Pointer
+capture is browser behavior, so the web path also has Playwright
+regressions. The Playwright config follows Dioxus' web testing setup: it
+starts `dx serve` as the test web server and reuses an existing local server
+outside CI.
+
+```sh
+npm install
+npm run test:web
+```
+
+The spec checks that the sortable overlay matches the source row and
+cleans up after drop, and that pointer-driven canvas drops move the node
+using the recorded grab offset.
 
 ## Feature flags
 
