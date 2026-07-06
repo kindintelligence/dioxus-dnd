@@ -4,7 +4,7 @@
 //!
 //! Run with:
 //! ```sh
-//! dx serve --example showcase --platform web
+//! dx serve --example showcase --platform web --features web
 //! ```
 //!
 //! When deploying as the website, set the page `<title>` and meta
