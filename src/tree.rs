@@ -1,4 +1,4 @@
-//! Hierarchical drops — file explorers, nested menus, outliners.
+//! Hierarchical drops - file explorers, nested menus, outliners.
 //!
 //! The classic tree problem: a drop on a node can mean three different things.
 //! [`DropIntent`] captures that trichotomy, [`intent_from_offset`] derives it
@@ -12,8 +12,8 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    element_point, use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone,
-    Rect, ZoneRecord,
+    client_point, element_point, use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome,
+    ParentZone, Rect, ZoneRecord,
 };
 
 /// Identifies a tree node.
@@ -89,8 +89,11 @@ pub fn would_create_cycle(
 /// The payload type `T` travels through the shared `DndContext<T>` (use the
 /// core `Draggable` or `PointerDraggable` on your rows to start drags).
 /// While hovered, the wrapper carries `data-intent="before" | "after" |
-/// "into"` for styling insertion indicators — for native mouse drags,
-/// touch/pen drags, and keyboard drags alike.
+/// "into"` for styling insertion indicators - for native mouse drags,
+/// touch/pen drags, and keyboard drags alike. The attribute is absent when
+/// not hovered, so both value selectors (Tailwind
+/// `data-[intent=into]:bg-blue-50`) and presence selectors
+/// (`data-intent:outline`) work.
 ///
 /// Every target also registers itself in the shared zone registry, which is
 /// what makes it reachable by touch hit-testing and keyboard navigation.
@@ -171,11 +174,23 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
         }
         None
     };
-    let intent_str = move || match display_intent() {
-        Some(DropIntent::Before) => "before",
-        Some(DropIntent::After) => "after",
-        Some(DropIntent::Into) => "into",
-        None => "",
+    let intent_str = move || -> Option<&'static str> {
+        match display_intent() {
+            Some(DropIntent::Before) => Some("before"),
+            Some(DropIntent::After) => Some("after"),
+            Some(DropIntent::Into) => Some("into"),
+            None => None,
+        }
+    };
+    // Drag events report element offsets relative to whatever *child* is
+    // under the cursor, not this row - band math needs row-relative Y, so
+    // derive it from client coordinates and the measured rect when we have
+    // one.
+    let row_offset_y = move |evt: &DragEvent| -> f64 {
+        match *rect.peek() {
+            Some(r) => client_point(evt).y - r.y,
+            None => element_point(evt).y,
+        }
     };
 
     rsx! {
@@ -201,7 +216,7 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
                 if !dnd.dragging() {
                     return;
                 }
-                let it = intent_from_offset(element_point(&evt).y, row_height);
+                let it = intent_from_offset(row_offset_y(&evt), row_height);
                 let ok = match (&accepts, dnd.payload()) {
                     (Some(cb), Some(p)) => cb.call((p, it)),
                     (None, Some(_)) => true,
@@ -222,7 +237,7 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             ondrop: move |evt: DragEvent| {
                 evt.prevent_default();
                 evt.stop_propagation();
-                let it = intent_from_offset(element_point(&evt).y, row_height);
+                let it = intent_from_offset(row_offset_y(&evt), row_height);
                 intent.set(None);
                 let ok = match (&accepts, dnd.payload()) {
                     (Some(cb), Some(p)) => cb.call((p, it)),

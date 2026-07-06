@@ -117,6 +117,7 @@ mod tests {
             effect,
             client: Point::default(),
             element: Point::default(),
+            grab: Point::default(),
         }
     }
 
