@@ -470,7 +470,9 @@ dependencies = [
  "dioxus-config-macros",
  "dioxus-core",
  "dioxus-core-macro",
+ "dioxus-document",
  "dioxus-fullstack",
+ "dioxus-history",
  "dioxus-hooks",
  "dioxus-html",
  "dioxus-signals",
@@ -606,6 +608,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "web-sys",
 ]
 
 [[package]]
@@ -891,6 +894,9 @@ dependencies = [
  "lazy-js-bundle",
  "rustc-hash 2.1.3",
  "send_wrapper",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
  "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2211,6 +2217,17 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

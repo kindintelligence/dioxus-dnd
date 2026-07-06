@@ -1,17 +1,17 @@
 //! Multi-select drag: select several items, drag them as one payload.
 //!
 //! The design leans on the core being generic: the payload type flowing
-//! through the provider is simply `Vec<K>` — so wrap your app in
+//! through the provider is simply `Vec<K>` - so wrap your app in
 //! `DndProvider::<Vec<K>>` and your `DropZone`s receive the whole selection
 //! in one `DropOutcome<Vec<K>>`.
 //!
 //! What this module adds is the interaction layer:
-//! - [`use_selection`] — selection state with the usual click semantics
+//! - [`use_selection`] - selection state with the usual click semantics
 //!   (click selects one, Ctrl/Cmd+click toggles).
-//! - [`SelectableDraggable`] — a `Draggable` that resolves its payload from
+//! - [`SelectableDraggable`] - a `Draggable` that resolves its payload from
 //!   the selection: dragging a *selected* item carries the whole selection;
 //!   dragging an *unselected* item carries just that item.
-//! - [`SelectionCount`] — a badge for your `DragOverlay` ghost ("3 items").
+//! - [`SelectionCount`] - a badge for your `DragOverlay` ghost ("3 items").
 //!
 //! ```text
 //! let selection = use_selection::<FileId>();
@@ -36,7 +36,7 @@
 
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, DropEffect, ZoneId};
+use crate::core::{use_dnd, DragInputMode, DropEffect, ZoneId};
 use crate::pointer::PointerDraggable;
 
 /// Selection state for keys of type `K`. Cheap to copy.
@@ -126,7 +126,9 @@ pub fn use_selection<K: Clone + PartialEq + 'static>() -> Selection<K> {
 /// - Dragging a selected item picks up **the whole selection**; dragging an
 ///   unselected one picks up just that item (and selects it).
 /// - Works with mouse, touch, pen and keyboard (wraps `PointerDraggable`).
-/// - The wrapper exposes `data-selected="true"` for styling.
+/// - The wrapper exposes `data-selected="true"` for styling (absent when
+///   unselected, so presence-based selectors like Tailwind
+///   `data-selected:ring-2` work directly).
 ///
 /// Requires a `DndProvider::<Vec<K>>` ancestor.
 #[component]
@@ -141,6 +143,12 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     /// Drop effect. Defaults to `Move`.
     #[props(default)]
     effect: DropEffect,
+    /// Which input/browser drag path items use. Defaults to the compatibility
+    /// split (native mouse, pointer touch/pen). Set [`DragInputMode::Pointer`]
+    /// to drive mouse through the synthetic path too - pairs with the `web`
+    /// feature for pointer capture and a styled `DragOverlay`.
+    #[props(default = DragInputMode::Hybrid)]
+    input: DragInputMode,
     /// Label for screen-reader announcements.
     #[props(default)]
     label: Option<String>,
@@ -161,7 +169,7 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
 
     rsx! {
         div {
-            "data-selected": selected,
+            "data-selected": if selected { "true" },
             onclick: move |evt: MouseEvent| {
                 selection.click(click_key.clone(), evt.modifiers());
             },
@@ -170,6 +178,7 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
                 payload,
                 zone,
                 effect,
+                input,
                 label,
                 {children}
             }

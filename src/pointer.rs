@@ -8,12 +8,12 @@
 //! in every browser, and uses your `DragOverlay` as the ghost. Where native
 //! long-press exists, it keeps working as a fallback on plain `Draggable`s.
 //!
-//! [`PointerDraggable`] *composes* the core [`Draggable`]: mouse users get
-//! the native HTML5 drag path, while touch/pen input is handled with
-//! `pointerdown` → `pointermove` → `pointerup`, hit-testing the registered
-//! drop zones' cached client rects to decide where the drop lands. Touch
-//! pointers have implicit pointer capture, so the originating element keeps
-//! receiving moves for the whole gesture.
+//! [`PointerDraggable`] *composes* the core [`Draggable`]. By default it keeps
+//! the compatibility split: mouse users get the native HTML5 drag path, while
+//! touch/pen input is handled with `pointerdown` → `pointermove` → `pointerup`,
+//! hit-testing the registered drop zones' cached client rects to decide where
+//! the drop lands. Set [`DragInputMode::Pointer`] to use the synthetic path
+//! for mouse too, avoiding the browser's native drag image entirely.
 //!
 //! Two things to know:
 //! - The wrapper sets `touch-action: none` so the browser doesn't hijack the
@@ -21,11 +21,14 @@
 //!   a drag handle: put `PointerDraggable` on the handle only.
 //! - A small movement threshold (default 8 px) distinguishes drags from taps.
 
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 
+use crate::core::components::merge_style;
 use crate::core::{
-    transition, use_dnd, use_zone_registry, DragMode, Draggable, DropEffect, DropOutcome,
-    GestureEffect, GestureEvent, GesturePhase, Point, ZoneId,
+    platform, transition, use_dnd, use_zone_registry, DragInputMode, DragMode, Draggable,
+    DropEffect, DropOutcome, GestureEffect, GestureEvent, GesturePhase, Point, ZoneId,
 };
 
 /// Pointer position from a pointer event, in client coordinates.
@@ -36,11 +39,17 @@ pub(crate) fn pointer_client(evt: &PointerEvent) -> Point {
 
 /// A draggable that works for mouse *and* touch/pen.
 ///
-/// Mouse drags go through the native HTML5 path (inner core `Draggable`);
-/// touch and pen drags are synthesized from pointer events. Both feed the
-/// same context, so your `DropZone`s don't care which path delivered the
-/// payload — touch drops arrive through the zone registry with correct
-/// client/element coordinates.
+/// By default mouse drags go through the native HTML5 path (inner core
+/// `Draggable`), while touch and pen drags are synthesized from pointer
+/// events. Set `input` to [`DragInputMode::Pointer`] when you want every
+/// pointer type, including mouse, to use the synthetic path and your
+/// `DragOverlay` instead of the browser's drag image.
+///
+/// Like [`Draggable`], the wrapper (where your forwarded `class` lands)
+/// carries `data-dragging="true"` while this payload is in flight and
+/// `data-disabled="true"` when disabled - absent otherwise, so
+/// presence-based selectors (Tailwind `data-dragging:opacity-50`) work
+/// directly.
 #[component]
 pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
     /// The value delivered on drop.
@@ -61,6 +70,10 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
     /// Movement (px) before a touch counts as a drag rather than a tap.
     #[props(default = 8.0)]
     threshold: f64,
+    /// Which input/browser drag path this source should use. Defaults to the
+    /// compatibility behavior: native mouse, pointer touch/pen.
+    #[props(default = DragInputMode::Hybrid)]
+    input: DragInputMode,
     /// Fired when a drag begins (either path).
     #[props(default)]
     on_drag_start: Option<EventHandler<()>>,
@@ -80,8 +93,22 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
         phase.set(next);
         fx
     };
+    // The wrapper's DOM handle, captured on mount, so a pointer drag can grab
+    // pointer capture (see `core::platform`) and keep receiving move/up even
+    // after the cursor leaves this element. Inert without the `web` feature.
+    let mut node = use_signal(|| None::<Rc<MountedData>>);
+    // Where inside the element the pointer pressed, recorded on pointerdown so
+    // the drag carries a real grab offset (like the native path's
+    // `element_point`) - drives `DragOverlay` placement and exact
+    // `CanvasDropZone` drops, instead of the bare threshold travel.
+    let mut press_offset = use_signal(Point::default);
 
     let touch_payload = payload.clone();
+    let attr_payload = payload.clone();
+    // A caller-supplied `style` must not replace `touch-action: none` (the
+    // drag would silently turn into a scroll) - merge instead.
+    let mut attributes = attributes;
+    let style = merge_style(&mut attributes, "touch-action: none;");
 
     // Deliver to a specific zone. Returns true if the drop landed.
     let mut deliver_to = move |target: ZoneId, point: Point, effect: DropEffect| -> bool {
@@ -97,6 +124,8 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
         let origin = (*record.rect.peek())
             .map(|r| r.origin())
             .unwrap_or_default();
+        // Read the grab offset before `take` resets the drag state.
+        let grab = dnd.grab();
         if let Some((p, from)) = dnd.take() {
             record.on_drop.call(DropOutcome {
                 payload: p,
@@ -105,37 +134,93 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                 effect,
                 client: point,
                 element: point - origin,
+                grab,
             });
             return true;
         }
         false
     };
 
+    // Resolve and deliver a drop at `point`. Shared by the normal pointer-up
+    // and by the capture-free recovery in `onpointermove`.
+    let mut finish_drop = move |point: Point| {
+        // Fast path: cached rects contain the point.
+        if let Some(target) = registry.hit_test(point) {
+            let dropped = deliver_to(target, point, effect);
+            if !dropped {
+                dnd.cancel();
+            }
+            if let Some(h) = &on_drag_end {
+                h.call(dropped);
+            }
+            return;
+        }
+        // Miss: rects may be stale (scroll/resize mid-drag). Re-measure, then
+        // retry with a closest-center fallback for gutter drops.
+        spawn(async move {
+            registry.measure_all().await;
+            let target = dnd
+                .payload()
+                .and_then(|p| registry.hit_test_closest(point, &p, 48.0));
+            let dropped = match target {
+                Some(t) => deliver_to(t, point, effect),
+                None => false,
+            };
+            if !dropped {
+                dnd.cancel();
+            }
+            if let Some(h) = &on_drag_end {
+                h.call(dropped);
+            }
+        });
+    };
+
     rsx! {
         div {
-            style: "touch-action: none;",
+            style: style,
+            "data-dragging": if dnd.dragging() && dnd.payload().as_ref() == Some(&attr_payload) { "true" },
+            "data-disabled": if disabled { "true" },
+            onmounted: move |evt: Event<MountedData>| node.set(Some(evt.data())),
             onpointerdown: move |evt: PointerEvent| {
-                if disabled || !evt.is_primary() || evt.pointer_type() == "mouse" {
-                    // Mouse uses the native HTML5 path of the inner Draggable.
+                let pointer_type = evt.pointer_type();
+                if disabled || !evt.is_primary() || !input.uses_pointer(&pointer_type) {
                     return;
                 }
+                // Grab pointer capture up front so move/up keep arriving if the
+                // cursor leaves this element mid-drag (no-op without `web`). A
+                // press that resolves as a tap releases it on pointerup.
+                if let Some(n) = node.peek().clone() {
+                    platform::capture_pointer(&n, evt.pointer_id());
+                }
+                let o = evt.element_coordinates();
+                press_offset.set(Point::new(o.x, o.y));
                 let _ = step(
                     GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                     threshold,
                 );
             },
             onpointermove: move |evt: PointerEvent| {
-                let event = GestureEvent::Move {
-                    at: pointer_client(&evt),
-                    pointer_id: evt.pointer_id(),
+                let at = pointer_client(&evt);
+                // Capture-free recovery: Dioxus 0.8 exposes no pointer-capture
+                // API without web-sys, so a mouse released while off this
+                // element never delivers a `pointerup` here. If it returns over
+                // the element mid-drag with no button held, finish the drop
+                // rather than tracking a phantom drag. Touch/pen hold a button
+                // through contact, so this only trips for a released mouse.
+                let event = if matches!(*phase.peek(), GesturePhase::Dragging { .. })
+                    && evt.held_buttons().is_empty()
+                {
+                    GestureEvent::Up { at, pointer_id: evt.pointer_id() }
+                } else {
+                    GestureEvent::Move { at, pointer_id: evt.pointer_id() }
                 };
                 match step(event, threshold) {
-                    GestureEffect::Begin { origin, at } => {
+                    GestureEffect::Begin { at, .. } => {
                         dnd.start(
                             touch_payload.clone(),
                             zone,
                             at,
-                            at - origin, // grab offset: travel from the press point
+                            *press_offset.peek(), // grab: offset within the element at press
                             effect,
                             DragMode::Pointer,
                         );
@@ -157,49 +242,31 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                             }
                         }
                     }
+                    GestureEffect::Drop { at: point } => finish_drop(point),
                     _ => {}
                 }
             },
             onpointerup: move |evt: PointerEvent| {
-                let event = GestureEvent::Up {
-                    at: pointer_client(&evt),
-                    pointer_id: evt.pointer_id(),
-                };
-                let GestureEffect::Drop { at: point } = step(event, threshold) else {
+                let GestureEffect::Drop { at: point } = step(
+                    GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
+                    threshold,
+                ) else {
                     return; // tap, or a foreign pointer's release
                 };
-                // Fast path: cached rects contain the point.
-                if let Some(target) = registry.hit_test(point) {
-                    let dropped = deliver_to(target, point, effect);
-                    if !dropped {
-                        dnd.cancel();
-                    }
-                    if let Some(h) = &on_drag_end {
-                        h.call(dropped);
-                    }
-                    return;
-                }
-                // Miss: rects may be stale (scroll/resize mid-drag). Re-measure,
-                // then retry with a closest-center fallback for gutter drops.
-                let on_drag_end = on_drag_end;
-                spawn(async move {
-                    registry.measure_all().await;
-                    let target = dnd
-                        .payload()
-                        .and_then(|p| registry.hit_test_closest(point, &p, 48.0));
-                    let dropped = match target {
-                        Some(t) => deliver_to(t, point, effect),
-                        None => false,
-                    };
-                    if !dropped {
-                        dnd.cancel();
-                    }
-                    if let Some(h) = &on_drag_end {
-                        h.call(dropped);
-                    }
-                });
+                finish_drop(point);
             },
             onpointercancel: move |_| {
+                if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
+                    dnd.cancel();
+                    if let Some(h) = &on_drag_end {
+                        h.call(false);
+                    }
+                }
+            },
+            // If the browser yanks pointer capture mid-drag (only reachable with
+            // the `web` feature, which sets it), abort cleanly. After a normal
+            // pointerup the machine is already Idle, so this no-ops.
+            onlostpointercapture: move |_| {
                 if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
                     dnd.cancel();
                     if let Some(h) = &on_drag_end {
@@ -213,6 +280,7 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                 zone,
                 effect,
                 disabled,
+                native: input.uses_native(),
                 label,
                 on_drag_start,
                 on_drag_end,

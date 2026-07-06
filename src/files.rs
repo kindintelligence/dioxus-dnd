@@ -1,4 +1,4 @@
-//! OS file drops — the one drop type where the payload arrives *in the native
+//! OS file drops - the one drop type where the payload arrives *in the native
 //! event* (`evt.files()`) rather than through the shared context.
 //!
 //! Works on web and desktop. On desktop, [`dioxus::html::FileData::path`]
@@ -153,8 +153,13 @@ impl FileFilter {
 
 /// A zone that accepts files dragged in from the operating system.
 ///
-/// Independent of `DndContext` — file drops don't come from inside your app,
+/// Independent of `DndContext` - file drops don't come from inside your app,
 /// so no provider is required.
+///
+/// While a drag hovers the zone the div carries `data-over="true"` (absent
+/// otherwise), so the classic "highlight the dropzone" style needs no
+/// `on_hover` wiring: Tailwind `data-over:border-blue-500`, CSS
+/// `[data-over]`.
 #[component]
 pub fn FileDropZone(
     /// Acceptance rules; everything is accepted when omitted.
@@ -175,6 +180,7 @@ pub fn FileDropZone(
 
     rsx! {
         div {
+            "data-over": if depth() > 0 { "true" },
             ondragover: move |evt: DragEvent| {
                 // Required: without preventDefault the browser never delivers
                 // the drop (it would open the file instead).

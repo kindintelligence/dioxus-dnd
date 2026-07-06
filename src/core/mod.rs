@@ -6,6 +6,7 @@ pub mod hooks;
 pub mod machine;
 pub mod model;
 pub mod modifiers;
+pub(crate) mod platform;
 pub mod registry;
 pub mod state;
 pub mod types;
@@ -19,4 +20,6 @@ pub use model::{apply_clone_or_move, apply_list_clone_or_move};
 pub use modifiers::{apply_modifiers, DragModifier, ModifierCtx};
 pub use registry::{ZoneRecord, ZoneRegistry};
 pub use state::{DndContext, DragState};
-pub use types::{effective_effect, DragId, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId};
+pub use types::{
+    effective_effect, DragId, DragInputMode, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId,
+};

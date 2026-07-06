@@ -10,7 +10,7 @@ pub struct ZoneId(pub u64);
 
 impl ZoneId {
     /// Generate a process-unique zone id. Handy when you don't care about
-    /// stable ids across renders — call it inside `use_hook` so it sticks.
+    /// stable ids across renders - call it inside `use_hook` so it sticks.
     pub fn auto() -> Self {
         Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
     }
@@ -101,12 +101,47 @@ impl Rect {
     }
 }
 
+/// Which browser/input path a drag source should use.
+///
+/// Native HTML5 drag gives you `DataTransfer` and browser-level behavior
+/// such as dragging into another tab or application. Pointer-driven drag is
+/// synthetic: it uses pointer events and the crate's own state/registry, so
+/// the browser does not create or style a native drag image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DragInputMode {
+    /// Use pointer events for mouse, touch and pen.
+    #[default]
+    Pointer,
+    /// Use native HTML5 drag only.
+    Native,
+    /// Current compatibility behavior: native mouse, pointer touch/pen.
+    Hybrid,
+}
+
+impl DragInputMode {
+    /// Should this pointer event drive the synthetic pointer path?
+    pub fn uses_pointer(self, pointer_type: &str) -> bool {
+        match self {
+            DragInputMode::Pointer => true,
+            DragInputMode::Native => false,
+            DragInputMode::Hybrid => pointer_type != "mouse",
+        }
+    }
+
+    /// Should the rendered element opt into native HTML5 drag events?
+    pub fn uses_native(self) -> bool {
+        matches!(self, DragInputMode::Native | DragInputMode::Hybrid)
+    }
+}
+
 /// How the current drag is being driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DragMode {
-    /// Native HTML5 drag (mouse) or pointer-event drag (touch).
+    /// Pointer-event driven drag.
     #[default]
     Pointer,
+    /// Native HTML5 drag.
+    Native,
     /// Keyboard-driven drag (Space/Enter to pick up, arrows to navigate).
     Keyboard,
 }
@@ -135,7 +170,7 @@ impl DropEffect {
 }
 
 /// Resolve the drop effect a drag should use given the currently held
-/// modifier keys — the file-manager convention: **Ctrl/Cmd forces Copy**,
+/// modifier keys - the file-manager convention: **Ctrl/Cmd forces Copy**,
 /// **Alt forces Link**, otherwise the drag's base effect applies. A base of
 /// `None` (drops disabled) is never overridden.
 pub fn effective_effect(base: DropEffect, modifiers: dioxus::prelude::Modifiers) -> DropEffect {
@@ -167,6 +202,11 @@ pub struct DropOutcome<T> {
     pub client: Point,
     /// Pointer position relative to the drop zone's element.
     pub element: Point,
+    /// Where inside the dragged element the pointer grabbed it, at pickup.
+    /// `element - grab` is where the element's top-left should land - what
+    /// [`crate::canvas::CanvasDropZone`] uses for exact free-position drops.
+    /// Zero for keyboard drops (no pointer offset).
+    pub grab: Point,
 }
 
 #[cfg(test)]
@@ -202,6 +242,21 @@ mod tests {
             effective_effect(DropEffect::None, Modifiers::CONTROL),
             DropEffect::None
         );
+    }
+
+    #[test]
+    fn input_modes_select_pointer_and_native_paths() {
+        assert!(DragInputMode::Pointer.uses_pointer("mouse"));
+        assert!(DragInputMode::Pointer.uses_pointer("touch"));
+        assert!(!DragInputMode::Pointer.uses_native());
+
+        assert!(!DragInputMode::Native.uses_pointer("mouse"));
+        assert!(!DragInputMode::Native.uses_pointer("touch"));
+        assert!(DragInputMode::Native.uses_native());
+
+        assert!(!DragInputMode::Hybrid.uses_pointer("mouse"));
+        assert!(DragInputMode::Hybrid.uses_pointer("touch"));
+        assert!(DragInputMode::Hybrid.uses_native());
     }
 
     #[test]
