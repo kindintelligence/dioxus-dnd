@@ -23,7 +23,7 @@ use super::hooks::{
 use super::registry::ZoneRecord;
 
 /// Context marker a `DropZone` provides so zones nested inside it can
-/// discover their parent — powering hierarchical keyboard traversal with no
+/// discover their parent - powering hierarchical keyboard traversal with no
 /// configuration.
 #[derive(Clone, Copy, PartialEq)]
 pub struct ParentZone(pub ZoneId);
@@ -37,6 +37,23 @@ enum NavKey {
     Ascend,
 }
 use super::types::{effective_effect, DragMode, DropEffect, DropOutcome, Point, ZoneId};
+
+/// Pull a user-provided `style` out of forwarded attributes and append it to
+/// a functional inline style. Spread attributes land after static ones and
+/// replace them wholesale, so without this a caller passing any `style`
+/// would silently delete functional CSS (`touch-action`, overlay
+/// positioning). The user's declarations come last, so they still win on a
+/// per-property basis.
+pub(crate) fn merge_style(attributes: &mut Vec<Attribute>, functional: &str) -> String {
+    let user = attributes
+        .iter()
+        .position(|a| a.name == "style")
+        .map(|i| attributes.remove(i));
+    match user.map(|a| a.value) {
+        Some(dioxus::core::AttributeValue::Text(s)) => format!("{functional} {s}"),
+        _ => functional.to_string(),
+    }
+}
 
 /// Provides a `DndContext<T>` to its children.
 #[component]
@@ -53,10 +70,15 @@ pub fn DndProvider<T: Clone + PartialEq + 'static>(
     }
 }
 
-/// Wraps its children in a `div[draggable]` and pushes `payload` into the
-/// shared context on drag start.
+/// Wraps its children in a focusable drag source and pushes `payload` into
+/// the shared context on drag start.
 ///
 /// Any extra attributes (`class`, `style`, `id`…) are forwarded to the div.
+///
+/// While this element's payload is in flight the div carries
+/// `data-dragging="true"`, and `data-disabled="true"` when `disabled` -
+/// both are *absent* otherwise, so presence-based selectors (CSS
+/// `[data-dragging]`, Tailwind `data-dragging:opacity-50`) work directly.
 #[component]
 pub fn Draggable<T: Clone + PartialEq + 'static>(
     /// The value delivered to whichever `DropZone` receives this drag.
@@ -70,6 +92,11 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     /// Disable dragging without unmounting.
     #[props(default)]
     disabled: bool,
+    /// Opt into native HTML5 drag events. Set this to `false` when another
+    /// wrapper drives pointer events but still wants this component's
+    /// keyboard interaction.
+    #[props(default = true)]
+    native: bool,
     /// Human label used in screen-reader announcements ("Picked up {label}").
     #[props(default)]
     label: Option<String>,
@@ -88,12 +115,18 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     // Separate clones for the two closures that need the payload.
     let kb_payload = payload.clone();
     let kb_label = label.clone();
+    // Comparing against the context payload (rather than a local flag) means
+    // the attribute is also correct when an outer wrapper - e.g.
+    // `PointerDraggable`'s pointer path - started the drag.
+    let attr_payload = payload.clone();
 
     rsx! {
         div {
-            draggable: !disabled,
+            draggable: native && !disabled,
+            "data-dragging": if dnd.dragging() && dnd.payload().as_ref() == Some(&attr_payload) { "true" },
+            "data-disabled": if disabled { "true" },
             ondragstart: move |evt: DragEvent| {
-                if disabled {
+                if disabled || !native {
                     return;
                 }
                 // Nested draggables: the innermost one owns the drag.
@@ -108,7 +141,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     client_point(&evt),
                     element_point(&evt),
                     effect,
-                    DragMode::Pointer,
+                    DragMode::Native,
                 );
                 if let Some(h) = &on_drag_start {
                     h.call(());
@@ -121,7 +154,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             },
             ondragend: move |_| {
                 // If a DropZone consumed the payload, the state is already
-                // idle — that's how we know the drop landed.
+                // idle - that's how we know the drop landed.
                 let dropped = !dnd.dragging();
                 dnd.cancel();
                 if let Some(h) = &on_drag_end {
@@ -240,6 +273,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                                 effect,
                                 client: center,
                                 element: Point::default(),
+                                grab: Point::default(),
                             });
                             let name = record
                                 .label
@@ -273,6 +307,14 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
 /// Handles the HTML5 boilerplate for you: `preventDefault` on dragover,
 /// enter/leave depth counting (so child elements don't cause hover flicker),
 /// and acceptance filtering.
+///
+/// Styling hooks: while an acceptable drag is in flight anywhere, the div
+/// carries `data-active="true"` (reveal your drop targets); while that drag
+/// hovers *this* zone it also carries `data-over="true"` (highlight it).
+/// Both are absent otherwise, so presence-based selectors (CSS
+/// `[data-over]`, Tailwind `data-over:ring-2`) work directly. Driven by the
+/// shared context, so they light up for pointer, touch and keyboard drags
+/// alike.
 #[component]
 pub fn DropZone<T: Clone + PartialEq + 'static>(
     /// Stable identity for this zone. Auto-generated if omitted.
@@ -339,6 +381,8 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
 
     rsx! {
         div {
+            "data-active": if dnd.dragging() && acceptable() { "true" },
+            "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
             onmounted: move |evt: Event<MountedData>| {
                 let mut mounted = mounted;
                 mounted.set(Some(evt.data()));
@@ -385,6 +429,7 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                 let client = client_point(&evt);
                 let element = element_point(&evt);
                 let effect = effective_effect(dnd.effect(), evt.modifiers());
+                let grab = dnd.grab();
                 if let Some((payload, from)) = dnd.take() {
                     on_drop.call(DropOutcome {
                         payload,
@@ -393,6 +438,7 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                         effect,
                         client,
                         element,
+                        grab,
                     });
                     if let Some(h) = &on_leave {
                         h.call(());
@@ -405,8 +451,24 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     }
 }
 
-/// Renders its children pinned to the pointer while a drag is in flight —
+/// The functional inline style for a pointer-pinned "ghost": fixed to `pos`
+/// (a viewport-space top-left), out of flow, click-through, above the page.
+/// Kept as a single `fn` so this exact rule has one definition, shared by
+/// every overlay in the crate.
+pub(crate) fn overlay_style(pos: Point) -> String {
+    format!(
+        "position: fixed; left: {}px; top: {}px; pointer-events: none; z-index: 9999;",
+        pos.x, pos.y
+    )
+}
+
+/// Renders its children pinned to the pointer while a drag is in flight -
 /// a custom "ghost" that follows the cursor.
+///
+/// Extra attributes (`class`, …) are forwarded to the wrapper div, so the
+/// ghost styles directly - e.g. Tailwind
+/// `class: "rotate-3 scale-105 shadow-xl"`. A forwarded `style` is merged
+/// after the functional positioning rather than replacing it.
 ///
 /// Note: pointer tracking relies on the `drag` event's coordinates, which a
 /// few webviews report as (0,0). The overlay simply won't move there; treat
@@ -416,6 +478,7 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     /// Internal marker; never set this.
     #[props(default)]
     phantom: std::marker::PhantomData<T>,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
     let _ = phantom;
@@ -423,10 +486,12 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     if !dnd.dragging() {
         return rsx! {};
     }
-    let p = dnd.pointer() - dnd.grab();
+    let mut attributes = attributes;
+    let style = merge_style(&mut attributes, &overlay_style(dnd.pointer() - dnd.grab()));
     rsx! {
         div {
-            style: "position: fixed; left: {p.x}px; top: {p.y}px; pointer-events: none; z-index: 9999;",
+            style: style,
+            ..attributes,
             {children}
         }
     }

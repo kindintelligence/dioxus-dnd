@@ -1,5 +1,5 @@
-//! Drops arriving from *outside* your app — selected text, links dragged from
-//! another tab, content from other applications — plus typed serde payloads
+//! Drops arriving from *outside* your app - selected text, links dragged from
+//! another tab, content from other applications - plus typed serde payloads
 //! over Dioxus 0.7's `DataTransfer` bridge for interop scenarios where the
 //! Rust-side context can't reach.
 //!
@@ -16,9 +16,9 @@ use crate::core::{client_point, element_point, Point};
 /// in order of specificity.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExternalPayload {
-    /// `text/uri-list` — links dragged from the URL bar, bookmarks, other tabs.
+    /// `text/uri-list` - links dragged from the URL bar, bookmarks, other tabs.
     Url(String),
-    /// `text/html` — rich content (e.g. a selection dragged from a page).
+    /// `text/html` - rich content (e.g. a selection dragged from a page).
     Html(String),
     /// `text/plain`.
     Text(String),
@@ -85,6 +85,9 @@ pub fn classify(evt: &DragEvent) -> Vec<ExternalPayload> {
 }
 
 /// A zone accepting drops that originate outside the app.
+///
+/// While a drag hovers the zone the div carries `data-over="true"` (absent
+/// otherwise) for styling without `on_hover` wiring.
 #[component]
 pub fn ExternalDropZone(
     on_drop: EventHandler<ExternalDrop>,
@@ -98,6 +101,7 @@ pub fn ExternalDropZone(
 
     rsx! {
         div {
+            "data-over": if depth() > 0 { "true" },
             ondragover: move |evt: DragEvent| {
                 evt.prevent_default();
             },
@@ -146,8 +150,8 @@ pub fn ExternalDropZone(
 
 /// Typed payloads over the native `DataTransfer` (JSON-encoded under
 /// `application/json`, wire-compatible with dioxus-html's own
-/// `store`/`retrieve`). Useful when the browser must carry the data — e.g.
-/// dragging between two separate Dioxus apps or windows — at the cost of
+/// `store`/`retrieve`). Useful when the browser must carry the data - e.g.
+/// dragging between two separate Dioxus apps or windows - at the cost of
 /// requiring `Serialize`/`Deserialize`.
 #[cfg(feature = "serde")]
 pub mod typed {

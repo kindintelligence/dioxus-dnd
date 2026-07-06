@@ -1,4 +1,4 @@
-//! Cross-container moves — the kanban pattern. Items travel between columns
+//! Cross-container moves - the kanban pattern. Items travel between columns
 //! (and optionally to a position within a column) via the shared
 //! [`crate::core::DndContext`].
 //!
@@ -28,7 +28,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, DropOutcome, DropZone, ZoneId};
+use crate::core::{use_dnd, DragInputMode, DropOutcome, DropZone, ZoneId};
 use crate::pointer::PointerDraggable;
 
 /// Columns are just zones.
@@ -50,7 +50,7 @@ pub struct MoveEvent<T> {
     pub item: T,
     /// `(column, index)` the item came from.
     pub from: (ContainerId, usize),
-    /// Target column, and target index — `None` means "append to the end".
+    /// Target column, and target index - `None` means "append to the end".
     pub to: (ContainerId, Option<usize>),
 }
 
@@ -82,6 +82,15 @@ pub fn BoardItem<T: Clone + PartialEq + 'static>(
     column: ContainerId,
     /// Index within the column.
     index: usize,
+    /// Which input/browser drag path cards use. Defaults to the compatibility
+    /// split (native mouse, pointer touch/pen). Set [`DragInputMode::Pointer`]
+    /// to drive mouse through the synthetic path too - pairs with the `web`
+    /// feature for pointer capture and a styled `DragOverlay`.
+    #[props(default = DragInputMode::Hybrid)]
+    input: DragInputMode,
+    /// Label for screen-reader announcements.
+    #[props(default)]
+    label: Option<String>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
@@ -89,6 +98,8 @@ pub fn BoardItem<T: Clone + PartialEq + 'static>(
         PointerDraggable::<BoardPayload<T>> {
             payload: BoardPayload { item, from: column, index },
             zone: column,
+            input,
+            label,
             attributes,
             {children}
         }
@@ -134,7 +145,9 @@ pub fn BoardColumn<T: Clone + PartialEq + 'static>(
 /// `MoveEvent` targeting exactly `(column, Some(index))`.
 ///
 /// Stop-gap-free precise ordering: render one slot before each item and one
-/// at the end.
+/// at the end. While a drag is in flight the slot carries
+/// `data-active="true"` (absent otherwise) - style it visible then, e.g.
+/// Tailwind `h-0 data-active:h-2`.
 #[component]
 pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     /// The column this slot belongs to.
@@ -149,7 +162,7 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
 
     rsx! {
         div {
-            "data-active": dnd.dragging(),
+            "data-active": if dnd.dragging() { "true" },
             ondragover: move |evt: DragEvent| {
                 if dnd.dragging() {
                     evt.prevent_default();

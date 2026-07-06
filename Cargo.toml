@@ -18,14 +18,30 @@ all-features = true
 dioxus = { version = "0.8.0-alpha.0", default-features = false, features = ["minimal"] }
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
+# `web` feature only. Pinned to the version dioxus-web 0.8 pulls so cargo
+# unifies to a single web-sys - `MountedData::downcast::<web_sys::Element>()`
+# matches only when the type is identical. `Element` brings
+# `set_pointer_capture`. No wasm-bindgen: we downcast via Dioxus, not JsCast.
+web-sys = { version = "0.3.98", optional = true, features = ["Element"] }
 
 [features]
 default = []
 ## Typed DataTransfer payloads in `external::typed` (serde round-trip).
 serde = ["dep:serde", "dep:serde_json"]
+## Native pointer capture via `web-sys` for capture-solid mouse pointer-drags
+## on web (keeps your styled `DragOverlay`). Off by default; the core stays
+## dependency-free and mouse pointer-drag falls back to best-effort.
+web = ["dep:web-sys"]
 
 [dev-dependencies]
-dioxus = { version = "0.8.0-alpha.0", default-features = false, features = ["minimal", "launch", "web"] }
+# `mounted` is REQUIRED: the pointer path measures element rects via
+# `MountedData::get_client_rect()`, and dioxus-web only fires `onmounted` /
+# implements those methods when this feature is on. Without it, rects stay
+# empty, hit-testing finds nothing, and drags stick without dropping.
+dioxus = { version = "0.8.0-alpha.0", default-features = false, features = ["minimal", "launch", "web", "document", "mounted"] }
 dioxus-ssr = "0.8.0-alpha.0"
+# dioxus-web 0.8.0-alpha.0's `document` feature forgets to enable web-sys'
+# `Location`; features are additive, so enabling it here fixes the build.
+web-sys = { version = "0.3", features = ["Location"] }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }

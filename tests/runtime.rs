@@ -1,6 +1,6 @@
 //! Runtime tests: exercise the store/signal-backed state machines inside a
 //! headless `VirtualDom`, and assert rendered accessibility attributes via
-//! SSR. Assertions live inside test components — panics propagate through
+//! SSR. Assertions live inside test components - panics propagate through
 //! `rebuild_in_place`, failing the test.
 
 use dioxus::prelude::*;
@@ -36,7 +36,7 @@ fn dnd_context_lifecycle() {
         assert_eq!(dnd.grab(), Point::new(1.0, 1.0));
         assert_eq!(dnd.mode(), DragMode::Pointer);
 
-        // (0,0) pointer samples are noise from some webviews — filtered.
+        // (0,0) pointer samples are noise from some webviews - filtered.
         dnd.update_pointer(Point::new(0.0, 0.0));
         assert_eq!(dnd.pointer(), Point::new(3.0, 4.0));
         dnd.update_pointer(Point::new(9.0, 9.0));
@@ -246,6 +246,24 @@ fn disabled_draggable_leaves_tab_order() {
 }
 
 #[test]
+fn draggable_native_can_be_disabled_without_losing_keyboard_access() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u8> {
+                Draggable::<u8> { payload: 1, native: false, "keyboard only" }
+            }
+        }
+    }
+    let html = run(app);
+    assert!(
+        html.contains("draggable=false"),
+        "native drag should be explicitly disabled: {html}"
+    );
+    assert!(html.contains("tabindex=0"), "keyboard access lost: {html}");
+    assert!(html.contains(r#"role="button""#), "role missing: {html}");
+}
+
+#[test]
 fn reorder_buttons_render_labels_and_edge_disabling() {
     fn app() -> Element {
         rsx! {
@@ -263,6 +281,38 @@ fn reorder_buttons_render_labels_and_edge_disabling() {
     );
     // index 0: up disabled, down enabled
     assert!(html.contains("disabled"), "edge disabling missing: {html}");
+}
+
+#[test]
+fn sortable_native_drag_is_opt_in() {
+    fn app() -> Element {
+        rsx! {
+            div {
+                SortableList {
+                    len: 1,
+                    on_sort: move |_| {},
+                    render: move |_| rsx! { "pointer" },
+                }
+                SortableList {
+                    len: 1,
+                    input: DragInputMode::Native,
+                    on_sort: move |_| {},
+                    render: move |_| rsx! { "native" },
+                }
+            }
+        }
+    }
+    let html = run(app);
+    assert_eq!(
+        html.matches("draggable=false").count(),
+        1,
+        "default list should opt out of native drag: {html}"
+    );
+    assert_eq!(
+        html.matches("draggable=true").count(),
+        1,
+        "native opt-in list should enable native drag: {html}"
+    );
 }
 
 #[test]
@@ -327,7 +377,7 @@ fn nested_zone_traversal() {
         reg.register(record(10, Some(1), 10.0)); //  A / column 1
         reg.register(record(11, Some(1), 50.0)); //  A / column 2
 
-        // Root siblings cycle among boards only — columns don't leak up.
+        // Root siblings cycle among boards only - columns don't leak up.
         assert_eq!(reg.step_sibling(None, &0, 1), Some(ZoneId(1)));
         assert_eq!(reg.step_sibling(Some(ZoneId(1)), &0, 1), Some(ZoneId(2)));
         assert_eq!(reg.step_sibling(Some(ZoneId(2)), &0, 1), Some(ZoneId(1)));
@@ -410,4 +460,208 @@ fn tree_targets_register_as_zones() {
     }
 
     run(app);
+}
+
+// --- state data-attributes (the Tailwind contract) -----------------------
+//
+// State attributes must be *absent* when inactive - not `="false"` - so
+// presence-based selectors (CSS `[data-dragging]`, Tailwind
+// `data-dragging:opacity-50`) never match idle elements.
+
+#[test]
+fn state_attributes_absent_when_idle() {
+    fn app() -> Element {
+        use_dnd_provider::<String>();
+        rsx! {
+            Draggable::<String> { payload: "a".to_string(), "item" }
+            DropZone::<String> { on_drop: move |_: DropOutcome<String>| {}, "zone" }
+            FileDropZone { on_files: move |_| {}, "files" }
+            SortableList {
+                len: 1,
+                on_sort: move |_| {},
+                render: move |_| rsx! { "sortable" },
+            }
+        }
+    }
+    let html = run(app);
+    for attr in [
+        "data-dragging",
+        "data-disabled",
+        "data-over",
+        "data-active",
+        "data-drop-target",
+    ] {
+        assert!(
+            !html.contains(attr),
+            "{attr} must be absent when idle: {html}"
+        );
+    }
+}
+
+#[test]
+fn disabled_draggable_carries_data_disabled() {
+    fn app() -> Element {
+        use_dnd_provider::<String>();
+        rsx! {
+            Draggable::<String> { payload: "a".to_string(), disabled: true, "item" }
+        }
+    }
+    let html = run(app);
+    assert!(html.contains(r#"data-disabled="true""#), "missing: {html}");
+}
+
+#[test]
+fn state_attributes_present_mid_drag() {
+    fn app() -> Element {
+        let mut dnd = use_dnd_provider::<String>();
+        dnd.start(
+            "x".to_string(),
+            None,
+            Point::new(1.0, 1.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        dnd.enter(ZoneId(9));
+        rsx! {
+            // the dragged payload lights up; the other one doesn't
+            Draggable::<String> { payload: "x".to_string(), "dragged" }
+            Draggable::<String> { payload: "y".to_string(), "bystander" }
+            // hovered zone: data-active + data-over; other zone: active only
+            DropZone::<String> { id: ZoneId(9), on_drop: move |_: DropOutcome<String>| {}, "over" }
+            DropZone::<String> { id: ZoneId(10), on_drop: move |_: DropOutcome<String>| {}, "idle" }
+            // a zone that rejects the payload stays dark entirely
+            DropZone::<String> {
+                id: ZoneId(11),
+                accepts: move |_: String| false,
+                on_drop: move |_: DropOutcome<String>| {},
+                "reject"
+            }
+        }
+    }
+    let html = run(app);
+    assert_eq!(
+        html.matches(r#"data-dragging="true""#).count(),
+        1,
+        "exactly the dragged payload's wrapper lights up: {html}"
+    );
+    assert_eq!(
+        html.matches(r#"data-over="true""#).count(),
+        1,
+        "exactly the hovered zone is over: {html}"
+    );
+    assert_eq!(
+        html.matches(r#"data-active="true""#).count(),
+        2,
+        "both accepting zones are active, the rejecting one is not: {html}"
+    );
+}
+
+// --- class forwarding & style merging ------------------------------------
+
+#[test]
+fn drag_overlay_forwards_class_and_merges_style() {
+    fn app() -> Element {
+        let mut dnd = use_dnd_provider::<String>();
+        dnd.start(
+            "x".to_string(),
+            None,
+            Point::new(10.0, 20.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        rsx! {
+            DragOverlay::<String> {
+                class: "rotate-3 shadow-xl",
+                style: "opacity: 0.9;",
+                "ghost"
+            }
+        }
+    }
+    let html = run(app);
+    assert!(
+        html.contains(r#"class="rotate-3 shadow-xl""#),
+        "class missing: {html}"
+    );
+    // Functional positioning survives the user style, which is appended.
+    assert!(html.contains("position: fixed"), "positioning lost: {html}");
+    assert!(html.contains("opacity: 0.9"), "user style lost: {html}");
+}
+
+#[test]
+fn pointer_draggable_merges_user_style_with_touch_action() {
+    fn app() -> Element {
+        use_dnd_provider::<String>();
+        rsx! {
+            PointerDraggable::<String> {
+                payload: "x".to_string(),
+                style: "background: red;",
+                "item"
+            }
+        }
+    }
+    let html = run(app);
+    assert!(
+        html.contains("touch-action: none; background: red;"),
+        "touch-action must survive a user style: {html}"
+    );
+}
+
+#[test]
+fn pointer_draggable_input_mode_controls_native_attr() {
+    fn app() -> Element {
+        use_dnd_provider::<String>();
+        rsx! {
+            PointerDraggable::<String> {
+                payload: "pointer".to_string(),
+                input: DragInputMode::Pointer,
+                "pointer"
+            }
+            PointerDraggable::<String> {
+                payload: "native".to_string(),
+                input: DragInputMode::Native,
+                "native"
+            }
+        }
+    }
+    let html = run(app);
+    assert_eq!(
+        html.matches("draggable=false").count(),
+        1,
+        "pointer mode should disable native drag: {html}"
+    );
+    assert_eq!(
+        html.matches("draggable=true").count(),
+        1,
+        "native mode should enable native drag: {html}"
+    );
+}
+
+#[test]
+fn grid_merges_user_style_after_layout_default() {
+    fn app() -> Element {
+        rsx! {
+            SortableGrid {
+                len: 2,
+                cols: 2,
+                style: "grid-template-columns: 2fr 1fr;",
+                render: move |ix: usize| rsx! { "t{ix}" },
+                on_sort: move |_| {},
+            }
+        }
+    }
+    let html = run(app);
+    // One merged style attribute: default first, user override after.
+    assert_eq!(
+        html.matches("style=").count(),
+        3,
+        "wrapper + 2 tiles: {html}"
+    );
+    assert!(
+        html.contains(
+            "display: grid; grid-template-columns: repeat(2, 1fr); grid-template-columns: 2fr 1fr;"
+        ),
+        "user tracks must land after the default: {html}"
+    );
 }
