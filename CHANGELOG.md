@@ -109,6 +109,9 @@ elements. Existing `[data-…="true"]` selectors keep working.
 - Browser regressions now cover the native boundary too: synthetic
   `DataTransfer` file drops, external text/link drops and drag-out payload
   formats are checked through the Dioxus-served gallery.
+- `CanvasDropZone` now syncs label changes into the zone registry, matching
+  `DropZone`, and the README documents canvas pointer/position semantics
+  plus the existing modifier chain for richer constraints.
 
 ## 1.0.0
 
