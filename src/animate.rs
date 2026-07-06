@@ -1,11 +1,11 @@
-//! Drop animations. **Experimental** — this module is the one part of the
+//! Drop animations. **Experimental** - this module is the one part of the
 //! crate whose behavior depends on browser paint timing rather than pure
 //! logic; validate it in your target renderer and tune `duration` to taste.
 //!
 //! [`FlipItem`] implements the FLIP technique (First–Last–Invert–Play) for
 //! reorder transitions: when your list order changes, each item measures
 //! where it moved from, renders instantly *back* at its old position via a
-//! transform, then releases the transform with a CSS transition — so tiles
+//! transform, then releases the transform with a CSS transition - so tiles
 //! appear to glide to their new slots.
 //!
 //! You drive it with an `epoch` counter: bump it whenever order changes.
@@ -27,12 +27,12 @@
 //! }
 //! ```
 //!
-//! **Snap-back on cancel** needs no Rust at all — it's a CSS recipe. The
+//! **Snap-back on cancel** needs no Rust at all - it's a CSS recipe. The
 //! core `Draggable` exposes no transform during native drags (the browser
-//! owns the ghost), but touch drags via `PointerDraggable` use your
+//! owns the ghost), but pointer drags via `PointerDraggable` use your
 //! `DragOverlay`; give the overlay's child
 //! `transition: transform 150ms ease` and render it conditionally on
-//! `dnd.dragging()` — reverting your item's `data-dragging` styles with a
+//! `dnd.dragging()` - reverting your item's `data-dragging` styles with a
 //! transition produces the settle effect.
 
 use std::rc::Rc;

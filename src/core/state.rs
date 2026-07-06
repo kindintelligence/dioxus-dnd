@@ -2,14 +2,14 @@
 //! read/written by `Draggable` and `DropZone` components (and by you, if you
 //! wire events manually).
 //!
-//! Payloads travel through this Rust-side store — not through the browser's
-//! `DataTransfer` — so they can be any `Clone` type with zero serialization.
+//! Payloads travel through this Rust-side store - not through the browser's
+//! `DataTransfer` - so they can be any `Clone` type with zero serialization.
 //! (`DataTransfer` interop for external drags lives in [`crate::external`].)
 //!
 //! State is held in a [`struct@Store`], Dioxus 0.8's fine-grained reactivity
 //! primitive: each field gets its own lazy subscription. A component that
 //! reads `dnd.over()` in its render only reruns when the hovered zone
-//! changes — not on every pointer move.
+//! changes - not on every pointer move.
 
 use dioxus::prelude::*;
 
@@ -51,7 +51,7 @@ impl<T> Default for DragState<T> {
     }
 }
 
-/// Handle to the shared drag state. Cheap to copy — it's just a store key.
+/// Handle to the shared drag state. Cheap to copy - it's just a store key.
 pub struct DndContext<T: Clone + 'static> {
     state: Store<DragState<T>>,
     /// Screen-reader announcement channel, rendered by
@@ -129,7 +129,7 @@ impl<T: Clone + 'static> DndContext<T> {
     }
 
     /// Consume the payload on a successful drop. Returns `(payload, source)`.
-    /// After this, `dragging()` is false — which is how `Draggable` tells a
+    /// After this, `dragging()` is false - which is how `Draggable` tells a
     /// completed drop apart from a cancelled one in `ondragend`.
     pub fn take(&mut self) -> Option<(T, Option<ZoneId>)> {
         let (payload, source) = {

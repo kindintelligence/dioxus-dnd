@@ -1,4 +1,4 @@
-//! Drag *out* of your app — the mirror of [`crate::external`]. Wrap content
+//! Drag *out* of your app - the mirror of [`crate::external`]. Wrap content
 //! in [`ExternalDragSource`] and users can drag it into other browser tabs,
 //! the URL bar, text editors, or any application that accepts the standard
 //! `DataTransfer` formats.
@@ -10,7 +10,7 @@
 //! }
 //! ```
 //!
-//! No provider needed — the browser is the transport here, not the shared
+//! No provider needed - the browser is the transport here, not the shared
 //! context. (For dragging typed Rust payloads between two of *your own*
 //! windows, see `external::typed` with the `serde` feature.)
 
