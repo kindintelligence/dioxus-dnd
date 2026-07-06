@@ -106,6 +106,9 @@ elements. Existing `[data-…="true"]` selectors keep working.
   through `DragInputMode::Native` or `Hybrid`, and the native boundary
   components (`FileDropZone`, `ExternalDropZone`, `ExternalDragSource`,
   `external::typed`, plain `Draggable`) are unchanged.
+- Browser regressions now cover the native boundary too: synthetic
+  `DataTransfer` file drops, external text/link drops and drag-out payload
+  formats are checked through the Dioxus-served gallery.
 
 ## 1.0.0
 
