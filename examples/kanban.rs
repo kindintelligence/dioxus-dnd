@@ -1,4 +1,4 @@
-//! Kanban board + file drop demo — now with keyboard access (Tab to a card,
+//! Kanban board + file drop demo - now with keyboard access (Tab to a card,
 //! Space to pick up, arrows to choose a column, Enter to drop, Esc to
 //! cancel), touch support, auto-scrolling columns, and screen-reader
 //! announcements.
@@ -79,9 +79,9 @@ fn App() -> Element {
                             class: "column-scroll",
                             for (ix, card) in board.read().get(&col).cloned().unwrap_or_default().into_iter().enumerate() {
                                 BoardSlot::<Card> { column: col, index: ix, on_move, class: "slot" }
-                                // PointerDraggable: mouse uses native HTML5
-                                // dnd, touch/pen use pointer events. Keyboard
-                                // works out of the box (Tab + Space/arrows).
+                                // PointerDraggable defaults to native mouse
+                                // plus pointer touch/pen. Keyboard works out
+                                // of the box (Tab + Space/arrows).
                                 PointerDraggable::<BoardPayload<Card>> {
                                     payload: BoardPayload { item: card.clone(), from: col, index: ix },
                                     zone: col,
@@ -96,7 +96,7 @@ fn App() -> Element {
             }
         }
 
-        h2 { "Grid (swap mode — try Ctrl-drag for copy cursor)" }
+        h2 { "Grid (swap mode - try Ctrl-drag for copy cursor)" }
         SortableGrid {
             class: "grid",
             len: tiles.read().len(),
