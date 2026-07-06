@@ -469,6 +469,13 @@ There is also a focused board example:
 dx serve --example kanban --platform web --features web
 ```
 
+And a focused canvas example that keeps the core headless while using
+`core::modifiers` for snap and item-aware bounds:
+
+```sh
+dx serve --example canvas --platform web --features web
+```
+
 ## Browser regression checks
 
 The Rust tests cover pure state, SSR output and geometry helpers. Pointer
