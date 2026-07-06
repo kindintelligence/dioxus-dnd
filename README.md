@@ -290,6 +290,41 @@ drag behavior. Style the hover target via `[data-drop-target]` and the
 dragged row via `[data-dragging]` (or Tailwind presence selectors on the
 list root, such as `[&>[data-drop-target]]:border-blue-500`).
 
+## Canvas drops
+
+`CanvasDropZone` is the free-position primitive for node editors,
+whiteboards and floor planners. Start in-app moves with `PointerDraggable`;
+the completed `CanvasDrop` gives you both the raw canvas-relative pointer
+and the corrected top-left position:
+
+- `pointer`: where the pointer landed inside the canvas.
+- `position`: `pointer - grab`, then optional snap and bounds.
+- `Bounds`: clamps the returned top-left point. It does not know the dropped
+  element's own width or height.
+
+```text
+CanvasDropZone::<Node> {
+    snap: SnapGrid(16.0),
+    bounds: Bounds { width: 640.0, height: 360.0 },
+    on_drop: move |drop: CanvasDrop<Node>| {
+        place_node(drop.payload.id, drop.position);
+    },
+    for node in nodes.read().clone() {
+        PointerDraggable::<Node> {
+            payload: node,
+            style: "position: absolute;",
+            NodeView {}
+        }
+    }
+}
+```
+
+For richer constraints such as "keep the whole node inside the canvas", use
+the existing modifier chain (`apply_modifiers`, `DragModifier::KeepInside`,
+`ModifierCtx`) with the element size you know in your app. Keep native
+`DataTransfer` components for browser and OS boundary drags, such as files
+or external text dropped onto a canvas.
+
 ## Auto-scroll
 
 Wrap any scrollable container in `AutoScroll` and drags hovering within

@@ -139,6 +139,9 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     use_drop(move || {
         registry.unregister(zone_id);
     });
+    // Keep the registered label in sync if the prop changes across renders.
+    // Registry readers only `peek`, so this render-time write can't loop.
+    registry.sync_label(zone_id, label.clone());
 
     rsx! {
         div {
@@ -199,5 +202,9 @@ mod tests {
         };
         let p = b.clamp(Point::new(-5.0, 999.0));
         assert_eq!((p.x, p.y), (0.0, 50.0));
+
+        let corrected = Point::new(107.0, 46.0) - Point::new(9.0, 8.0);
+        let positioned = b.clamp(g.snap(corrected));
+        assert_eq!(positioned, Point::new(100.0, 40.0));
     }
 }

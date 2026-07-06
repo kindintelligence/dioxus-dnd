@@ -422,6 +422,29 @@ fn nested_dropzones_discover_parents_from_context() {
     run(app);
 }
 
+#[test]
+fn canvas_dropzone_registers_with_label() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u8> {
+                CanvasDropZone::<u8> {
+                    id: ZoneId(7),
+                    label: "canvas",
+                    on_drop: move |_| {},
+                    CanvasProbe {}
+                }
+            }
+        }
+    }
+    #[component]
+    fn CanvasProbe() -> Element {
+        let reg = use_zone_registry::<u8>();
+        assert_eq!(reg.get(ZoneId(7)).unwrap().label.as_deref(), Some("canvas"));
+        rsx! { div {} }
+    }
+    run(app);
+}
+
 // --- Tree targets join the zone registry ---------------------------------
 
 /// TreeNodeTargets register themselves as zones (that's what makes them

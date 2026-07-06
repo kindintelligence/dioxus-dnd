@@ -95,8 +95,8 @@ These are useful, but not first.
 
 - A small native interop demo that shows file drop, external drop and drag-out
   side by side.
-- Canvas polish: sync changing `CanvasDropZone` labels into the zone registry,
-  and design a better keyboard placement policy than the default origin drop.
+- Canvas polish: design a better keyboard placement policy than the default
+  origin drop.
 - More keyboard examples for sortable and board flows.
 - A migration note for users who depended on native mouse as the default.
 - A tighter public docs page for choosing between pointer, native and hybrid.
