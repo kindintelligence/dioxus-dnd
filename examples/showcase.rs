@@ -1,5 +1,5 @@
 //! The dioxus-dnd website: a landing page whose centerpiece is a live
-//! playground, one interactive demo per drop pattern, plus an "outcome
+//! playground with one interactive demo per drop pattern, plus an "outcome
 //! tape" that prints every `DropOutcome` the library delivers.
 //!
 //! Run with:
@@ -8,7 +8,7 @@
 //! ```
 //!
 //! When deploying as the website, set the page `<title>` and meta
-//! description in your `index.html` / `Dioxus.toml`; the crate stays on
+//! description in your `index.html` / `Dioxus.toml`. The crate stays on
 //! `minimal` features, so it doesn't pull the `document` machinery in.
 
 use std::collections::HashMap;
@@ -26,19 +26,39 @@ fn main() {
 struct TapeEntry {
     demo: &'static str,
     line: String,
+    /// docket number: unique per printed slip, including milestone notices
+    seq: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct Tape(Signal<Vec<TapeEntry>>);
+struct Tape(Signal<Vec<TapeEntry>>, Signal<usize>, Signal<usize>);
 
 impl Tape {
     fn print(&mut self, demo: &'static str, line: impl Into<String>) {
         let mut entries = self.0.write();
+        *self.2.write() += 1;
         entries.push(TapeEntry {
             demo,
             line: line.into(),
+            seq: *self.2.peek(),
         });
-        let overflow = entries.len().saturating_sub(30);
+        *self.1.write() += 1;
+        // milestone lines print into whichever section earned them
+        let milestone = match *self.1.peek() {
+            10 => Some("milestone: 10 drops. OSHA would like a word."),
+            25 => Some("milestone: 25 drops. that crate has frequent flyer status."),
+            50 => Some("milestone: 50 drops. employee of the month. it's you."),
+            _ => None,
+        };
+        if let Some(m) = milestone {
+            *self.2.write() += 1;
+            entries.push(TapeEntry {
+                demo,
+                line: m.into(),
+                seq: *self.2.peek(),
+            });
+        }
+        let overflow = entries.len().saturating_sub(60);
         if overflow > 0 {
             entries.drain(..overflow);
         }
@@ -109,18 +129,34 @@ impl Demo {
         }
     }
 
+    /// The tag each demo prints tape lines under.
+    fn tag(&self) -> &'static str {
+        match self {
+            Demo::Core => "core",
+            Demo::Sortable => "sortable",
+            Demo::Board => "board",
+            Demo::Tree => "tree",
+            Demo::Canvas => "canvas",
+            Demo::Grid => "grid",
+            Demo::MultiSelect => "multiselect",
+            Demo::Files => "files",
+            Demo::InOut => "external",
+            Demo::Keyboard => "a11y",
+        }
+    }
+
     fn hint(&self) -> &'static str {
         match self {
             Demo::Core => "Drag crates between the shelf and the bays. They really move. Hold Ctrl or Cmd while dropping to copy instead. Works with touch.",
-            Demo::Sortable => "Drag a row: it slides toward its landing slot while the others make room. The arrows reorder without any dragging, and the list scrolls itself near its edges.",
+            Demo::Sortable => "Drag a row and it slides toward its landing slot while the others make room. Twelve rows, strong opinions about their order. The arrows reorder without dragging, and the list scrolls itself near its edges.",
             Demo::Board => "Move cards between columns. Drop on the thin slots to insert at an exact position.",
             Demo::Tree => "Drop on the top of a row to place before it, the bottom to place after, the middle to nest inside. The tree restructures for real.",
             Demo::Canvas => "Drag parts from the shelf onto the floor. Positions snap to the grid and stay inside the walls.",
-            Demo::Grid => "Drag one tile onto another and they trade places.",
+            Demo::Grid => "Drag one tile onto another and they trade places. The tiles have accepted their fate.",
             Demo::MultiSelect => "Click selects one crate; Ctrl+click selects more. Drag any selected crate and the whole group ships together.",
-            Demo::Files => "Drop image files from your computer. Anything over 2 MB or not an image gets refused with a reason.",
-            Demo::InOut => "Drag a link or selected text from another tab into the bay, or drag our tag out into your URL bar.",
-            Demo::Keyboard => "No mouse needed: Tab to a crate, press Space, pick a bay with the arrows, press Enter, and watch it land. Crates in bays stay focusable, so you can keep moving them.",
+            Demo::Files => "Drop image files from your computer. It feeds on PNGs and politely declines anything over 2 MB, with the reason on the tape.",
+            Demo::InOut => "Drag a link or selected text from another tab into the bay, or drag our tag out into your URL bar. The original AirDrop was a loading dock.",
+            Demo::Keyboard => "No mouse needed: Tab to a crate, press Space, pick a bay with the arrows, press Enter, and watch it land. Crates in bays stay focusable, so you can keep moving them. The forklift has arrow keys.",
         }
     }
 }
@@ -129,7 +165,7 @@ impl Demo {
 
 #[component]
 fn App() -> Element {
-    use_context_provider(|| Tape(Signal::new(Vec::new())));
+    use_context_provider(|| Tape(Signal::new(Vec::new()), Signal::new(0), Signal::new(0)));
 
     rsx! {
         style { {CSS} }
@@ -149,6 +185,11 @@ fn SiteHeader() -> Element {
             div { class: "shell masthead-row",
                 a { class: "brand", href: "#top", "DIOXUS·DND" }
                 nav { class: "topnav", aria_label: "Site",
+                    a {
+                        class: "ver-chip",
+                        href: "https://github.com/kindintelligence/dioxus-dnd/releases",
+                        "v1.0.0"
+                    }
                     a { href: "#playground", "Playground" }
                     a { href: "https://docs.rs/dioxus-dnd", "Docs" }
                     a { href: "https://crates.io/crates/dioxus-dnd", "crates.io" }
@@ -163,24 +204,28 @@ fn SiteHeader() -> Element {
 fn Hero() -> Element {
     rsx! {
         section { class: "hero", id: "top",
-            div { class: "shell",
+            div { class: "shell hero-grid",
                 p { class: "eyebrow", "A DRAG-AND-DROP LIBRARY FOR DIOXUS 0.8+" }
-                h1 { class: "hero-title", "PICK IT UP." br {} "PUT IT ANYWHERE." }
+                h1 { class: "hero-title", "PICK, DROP & SHIP" }
+                div { class: "hero-copy",
                 p { class: "lede",
                     "Sortable lists, boards, trees, grids, canvases, OS file drops, "
                     "multi-select, drag-out to other apps, with touch and keyboard "
                     "handled for you. Any payload type, no serialization, no JS."
                 }
                 div { class: "install-row",
-                    // `user-select: all` lets one click select the whole command.
+                    // `user-select: all`: one click selects the whole command
                     code { class: "install", title: "Click to select, then copy", "cargo add dioxus-dnd" }
                     span { class: "install-hint", "click to select" }
-                    a { class: "cta", href: "#playground", "Try it live ↓" }
+                }
+                }
+                div { class: "hero-cta-panel",
+                    a { class: "cta cta-large", href: "#playground", "Try it live ↓" }
                 }
                 ul { class: "ticks", aria_label: "Highlights",
                     li { span { class: "tick-key", "12" } " drop patterns, one small core" }
                     li { span { class: "tick-key", "3" } " input methods: mouse, touch, keyboard" }
-                    li { span { class: "tick-key", "38" } " tests, zero warnings, zero extra deps" }
+                    li { span { class: "tick-key", "50" } " tests, zero warnings, zero extra deps" }
                     li { span { class: "tick-key", "OS" } " file drops in, links dragged out" }
                 }
             }
@@ -190,56 +235,73 @@ fn Hero() -> Element {
 
 #[component]
 fn Playground() -> Element {
-    let mut current = use_signal(|| Demo::Core);
-
     rsx! {
         section { class: "playground", id: "playground",
             div { class: "shell-wide",
                 div { class: "playground-head",
+                    div { class: "playground-head-copy",
                     h2 { "THE LOADING DOCK" }
-                    p { "Every demo is the real library. Drag something, and its DropOutcome prints on the tape below." }
-                }
-                div { class: "unit",
-                    div { class: "unit-body",
-                        nav { class: "manifest", aria_label: "Demos",
-                            span { class: "manifest-head", "MANIFEST" }
-                            for (ix, demo) in Demo::ALL.iter().enumerate() {
-                                button {
-                                    class: "manifest-line",
-                                    "data-active": current() == *demo,
-                                    onclick: {
-                                        let demo = *demo;
-                                        move |_| current.set(demo)
-                                    },
-                                    span { class: "manifest-no", {format!("{:02}", ix + 1)} }
-                                    span { class: "manifest-title", "{demo.title()}" }
-                                    span { class: "manifest-module", "{demo.module()}" }
-                                }
+                    p { "Every demo is the real library. Drag something, and its DropOutcome prints on that demo's tape." }
+                    nav { class: "demo-index", aria_label: "Demos",
+                        for (ix, demo) in Demo::ALL.iter().enumerate() {
+                            a { class: "demo-index-pill", href: "#demo-{ix + 1}",
+                                span { class: "demo-index-no", {format!("{:02}", ix + 1)} }
+                                "{demo.title()}"
                             }
                         }
-                        main { class: "stage",
-                            div { class: "stage-head",
-                                h3 { "{current().title()}" }
-                                code { class: "stage-module", "dioxus_dnd::{current().module()}" }
-                            }
-                            p { class: "stage-hint", "{current().hint()}" }
-                            div { class: "stage-body",
-                                match current() {
-                                    Demo::Core => rsx! { CoreDemo {} },
-                                    Demo::Sortable => rsx! { SortableDemo {} },
-                                    Demo::Board => rsx! { BoardDemo {} },
-                                    Demo::Tree => rsx! { TreeDemo {} },
-                                    Demo::Canvas => rsx! { CanvasDemo {} },
-                                    Demo::Grid => rsx! { GridDemo {} },
-                                    Demo::MultiSelect => rsx! { MultiSelectDemo {} },
-                                    Demo::Files => rsx! { FilesDemo {} },
-                                    Demo::InOut => rsx! { InOutDemo {} },
-                                    Demo::Keyboard => rsx! { KeyboardDemo {} },
-                                }
+                        span { class: "demo-index-kbd", "⌨ most demos work with Tab + Space too" }
+                    }
+                    }
+                    DropSign {}
+                }
+            }
+            for (ix, demo) in Demo::ALL.iter().enumerate() {
+                DemoSection { demo: *demo, index: ix }
+            }
+        }
+    }
+}
+
+/// One full-viewport demo panel. Copy and stage alternate sides down the
+/// page; each section owns a generation counter so RESET remounts just its
+/// demo (keyed single-item list, so the keyed diff replaces the subtree).
+#[component]
+fn DemoSection(demo: Demo, index: usize) -> Element {
+    let mut generation = use_signal(|| 0u32);
+
+    rsx! {
+        section { class: "demo-section", id: "demo-{index + 1}",
+            div { class: "shell-wide demo-grid",
+                div { class: "demo-copy",
+                    span { class: "demo-no", {format!("{:02}", index + 1)} }
+                    h3 { "{demo.title()}" }
+                    code { class: "stage-module", "dioxus_dnd::{demo.module()}" }
+                    p { class: "stage-hint", "{demo.hint()}" }
+                    DocketPrinter { tag: demo.tag() }
+                }
+                div { class: "demo-stage",
+                    button {
+                        class: "stage-reset",
+                        title: "Restart this demo with fresh state",
+                        onclick: move |_| generation += 1,
+                        "RESET"
+                    }
+                    for stage_key in [format!("{}-{}", index, generation())] {
+                        div { key: "{stage_key}",
+                            match demo {
+                                Demo::Core => rsx! { CoreDemo {} },
+                                Demo::Sortable => rsx! { SortableDemo {} },
+                                Demo::Board => rsx! { BoardDemo {} },
+                                Demo::Tree => rsx! { TreeDemo {} },
+                                Demo::Canvas => rsx! { CanvasDemo {} },
+                                Demo::Grid => rsx! { GridDemo {} },
+                                Demo::MultiSelect => rsx! { MultiSelectDemo {} },
+                                Demo::Files => rsx! { FilesDemo {} },
+                                Demo::InOut => rsx! { InOutDemo {} },
+                                Demo::Keyboard => rsx! { KeyboardDemo {} },
                             }
                         }
                     }
-                    OutcomeTape {}
                 }
             }
         }
@@ -262,7 +324,7 @@ fn SiteFooter() -> Element {
                     a { href: "https://github.com/kindintelligence/dioxus-dnd/blob/main/CHANGELOG.md", "Changelog" }
                 }
                 p { class: "footer-meta",
-                    "MIT · built with Dioxus 0.8 · no cookies, no tracking, just crates"
+                    "MIT or Apache-2.0 · built with Dioxus 0.8 · no cookies, no tracking, just crates"
                 }
             }
         }
@@ -271,22 +333,56 @@ fn SiteFooter() -> Element {
 
 /// The signature element: a receipt of every drop the library delivered.
 #[component]
-fn OutcomeTape() -> Element {
+fn DocketPrinter(tag: &'static str) -> Element {
     let tape = use_tape();
-    let entries = tape.0.read();
+    let recent: Vec<(usize, String)> = tape
+        .0
+        .read()
+        .iter()
+        .rev()
+        .filter(|e| e.demo == tag)
+        .take(2)
+        .map(|e| (e.seq, e.line.clone()))
+        .collect();
 
     rsx! {
-        footer { class: "tape", aria_label: "Drop outcomes",
-            div { class: "tape-label", "OUTCOME TAPE" }
-            div { class: "tape-roll",
-                if entries.is_empty() {
-                    span { class: "tape-empty", "No drops yet. Drag anything above and its DropOutcome prints here." }
-                } else {
-                    for (ix, e) in entries.iter().enumerate().rev() {
-                        div { class: "tape-line", key: "{ix}",
-                            span { class: "tape-demo", "[{e.demo}]" }
-                            span { "{e.line}" }
+        div { class: "docket", aria_live: "polite",
+            div { class: "docket-head",
+                span { class: "docket-screw" }
+                span { class: "docket-brand", "DOCKETS" }
+                span { class: "docket-screw" }
+            }
+            div { class: "docket-out",
+                // the pile: previous slip peeks out behind the fresh one
+                if let Some((seq, line)) = recent.get(1) {
+                    div { class: "slip slip-back",
+                        div { class: "slip-top",
+                            span { class: "slip-no", {format!("No. {seq:04}")} }
+                            span { class: "slip-tag", "{tag}" }
                         }
+                        span { class: "slip-line", "{line}" }
+                        span { class: "slip-code" }
+                    }
+                }
+                if let Some((seq, line)) = recent.first() {
+                    for k in [*seq] {
+                        div { class: "slip slip-front", key: "{k}",
+                            div { class: "slip-top",
+                                span { class: "slip-no", {format!("No. {seq:04}")} }
+                                span { class: "slip-tag", "{tag}" }
+                            }
+                            span { class: "slip-line", "{line}" }
+                            span { class: "slip-code" }
+                        }
+                    }
+                } else {
+                    div { class: "slip slip-front",
+                        div { class: "slip-top",
+                            span { class: "slip-no", "No. 0000" }
+                            span { class: "slip-tag", "{tag}" }
+                        }
+                        span { class: "slip-line", "test print. printer ok. awaiting first drop." }
+                        span { class: "slip-code" }
                     }
                 }
             }
@@ -294,18 +390,38 @@ fn OutcomeTape() -> Element {
     }
 }
 
-// --- 01 core: stateful shelf & bays ----------------------------------------
+/// The classic factory safety sign, proudly resetting on every drop.
+#[component]
+fn DropSign() -> Element {
+    let tape = use_tape();
+    let total = *tape.1.read();
+    let days = if total == 0 { "1" } else { "0" };
 
-#[derive(Debug, Clone, PartialEq)]
+    rsx! {
+        div { class: "drop-sign", aria_label: "Days without a dropped crate: {days}",
+            span { class: "drop-sign-caption", "DAYS WITHOUT" }
+            span { class: "drop-sign-caption", "A DROPPED CRATE" }
+            // keyed by the running total so the digit re-stamps on each drop
+            for k in [total] {
+                span { class: "drop-sign-digit", key: "{k}", "{days}" }
+            }
+            span { class: "drop-sign-total", "TOTAL DROPS: {total}" }
+        }
+    }
+}
+
+// --- the core demo's freight ------------------------------------------------
+
+const SHELF: ZoneId = ZoneId(11);
+const BAY_A: ZoneId = ZoneId(12);
+const BAY_B: ZoneId = ZoneId(13);
+
+#[derive(Clone, PartialEq)]
 struct Crate {
     id: u32,
     name: &'static str,
     fragile: bool,
 }
-
-const SHELF: ZoneId = ZoneId(11);
-const BAY_A: ZoneId = ZoneId(12);
-const BAY_B: ZoneId = ZoneId(13);
 
 #[component]
 fn CoreDemo() -> Element {
@@ -338,24 +454,48 @@ fn CoreDemo() -> Element {
     });
     let mut next_id = use_signal(|| 100u32);
 
+    // (seq, zone, word): a rubber stamp lands on the receiving zone per drop.
+    let mut stamp = use_signal(|| (0u64, ZoneId(0), ""));
+    let stamp_for = move |zone: ZoneId| -> Element {
+        let (seq, z, word) = stamp();
+        if z == zone && seq > 0 {
+            rsx! {
+                for k in [seq] {
+                    span { class: "stamp", key: "{k}", "{word}" }
+                }
+            }
+        } else {
+            rsx! {}
+        }
+    };
+
     // One landing routine for every zone: Copy duplicates, Move relocates.
     let mut land = move |o: DropOutcome<Crate>, to_name: &'static str| {
-        let name = o.payload.name;
+        let effect_was_copy = o.effect == DropEffect::Copy;
+        let mut c = o.payload.clone();
         if o.effect == DropEffect::Copy {
-            tape.print("core", format!("{name} copied → {to_name} (Ctrl/Cmd held)"));
+            c.id = next_id();
+            next_id += 1;
+            tape.print(
+                "core",
+                format!("{} copied → {to_name} (Ctrl/Cmd held)", c.name),
+            );
         } else {
-            tape.print("core", format!("{name} moved → {to_name}"));
+            if let Some(from) = o.from {
+                if let Some(v) = stock.write().get_mut(&from) {
+                    v.retain(|x| x.id != o.payload.id);
+                }
+            }
+            tape.print("core", format!("{} moved → {to_name}", c.name));
         }
-        apply_clone_or_move(
-            &mut stock.write(),
-            o,
-            |c| c.id,
-            |mut c| {
-                c.id = next_id();
-                next_id += 1;
-                c
-            },
-        );
+        stock.write().entry(o.to).or_default().push(c);
+        let word = if effect_was_copy {
+            "COPIED"
+        } else {
+            "DELIVERED"
+        };
+        let next_seq = stamp.peek().0 + 1;
+        stamp.set((next_seq, o.to, word));
     };
 
     let crates_in = move |zone: ZoneId| stock.read().get(&zone).cloned().unwrap_or_default();
@@ -363,10 +503,6 @@ fn CoreDemo() -> Element {
     rsx! {
         DndProvider::<Crate> {
             LiveRegion::<Crate> {}
-            div { class: "helper-note",
-                code { "apply_clone_or_move" }
-                span { "Move removes by id. Copy runs the clone hook and assigns a fresh id." }
-            }
             div { class: "dock",
                 DropZone::<Crate> {
                     id: SHELF,
@@ -374,6 +510,7 @@ fn CoreDemo() -> Element {
                     class: "bay bay-shelf",
                     on_drop: move |o: DropOutcome<Crate>| land(o, "the shelf"),
                     span { class: "bay-name", "SHELF" }
+                    {stamp_for(SHELF)}
                     div { class: "bay-stack",
                         for c in crates_in(SHELF) {
                             PointerDraggable::<Crate> {
@@ -395,6 +532,7 @@ fn CoreDemo() -> Element {
                     on_drop: move |o: DropOutcome<Crate>| land(o, "Bay A"),
                     span { class: "bay-name", "BAY A" }
                     span { class: "bay-rule", "accepts anything" }
+                    {stamp_for(BAY_A)}
                     div { class: "bay-stack",
                         for c in crates_in(BAY_A) {
                             PointerDraggable::<Crate> {
@@ -415,7 +553,8 @@ fn CoreDemo() -> Element {
                     class: "bay",
                     on_drop: move |o: DropOutcome<Crate>| land(o, "Bay B"),
                     span { class: "bay-name", "BAY B" }
-                    span { class: "bay-rule", "padded, fragile only" }
+                    span { class: "bay-rule", "padded walls, precious things only" }
+                    {stamp_for(BAY_B)}
                     div { class: "bay-stack",
                         for c in crates_in(BAY_B) {
                             PointerDraggable::<Crate> {
@@ -431,22 +570,7 @@ fn CoreDemo() -> Element {
                     }
                 }
             }
-            DragOverlay::<Crate> { CrateDragPreview {} }
-        }
-    }
-}
-
-#[component]
-fn CrateDragPreview() -> Element {
-    let dnd = use_dnd::<Crate>();
-    let Some(c) = dnd.payload() else {
-        return rsx! {};
-    };
-
-    rsx! {
-        div { class: "crate drag-preview",
-            span { class: "crate-label", "{c.name}" }
-            if c.fragile { span { class: "crate-tag", "FRAGILE" } }
+            DragOverlay::<Crate> { div { class: "ghost", "▣" } }
         }
     }
 }
@@ -853,22 +977,8 @@ fn MultiSelectDemo() -> Element {
                     }
                 }
             }
-            DragOverlay::<Vec<u32>> { SelectionDragPreview {} }
-        }
-    }
-}
-
-#[component]
-fn SelectionDragPreview() -> Element {
-    let dnd = use_dnd::<Vec<u32>>();
-    let Some(ids) = dnd.payload() else {
-        return rsx! {};
-    };
-
-    rsx! {
-        div { class: "selection-preview drag-preview",
-            for id in ids {
-                span { class: "box preview-box", key: "{id}", "#{id}" }
+            DragOverlay::<Vec<u32>> {
+                div { class: "ghost", SelectionCount::<u32> {} }
             }
         }
     }
@@ -881,6 +991,7 @@ fn FilesDemo() -> Element {
     let mut tape = use_tape();
     let mut received = use_signal(Vec::<String>::new);
     let mut hovering = use_signal(|| false);
+    let mut refuse_seq = use_signal(|| 0u64);
 
     rsx! {
         FileDropZone {
@@ -906,10 +1017,16 @@ fn FilesDemo() -> Element {
                         FileRejection::Extension => "wrong extension",
                     };
                     tape.print("files", format!("refused {}: {why}", f.name()));
+                    refuse_seq += 1;
                 }
             },
             if received.read().is_empty() {
                 span { class: "filebay-prompt", "Drop images here, up to 6, 2 MB each" }
+                if refuse_seq() > 0 {
+                    for k in [refuse_seq()] {
+                        span { class: "stamp stamp-refused", key: "{k}", "REFUSED" }
+                    }
+                }
             } else {
                 ul { class: "filebay-list",
                     for name in received.read().iter() {
@@ -1026,7 +1143,7 @@ fn KeyboardDemo() -> Element {
                     }
                 }
             }
-            div { class: "dock",
+            div { class: "keyboard-layout",
                 for (zone, title, rule) in [
                     (K_SHELF, "SHELF", "start here"),
                     (K_NORTH, "BAY NORTH", ""),
@@ -1035,7 +1152,7 @@ fn KeyboardDemo() -> Element {
                     DropZone::<Crate> {
                         id: zone,
                         label: zone_name(zone),
-                        class: "bay",
+                        class: if zone == K_SHELF { "bay keyboard-bay keyboard-shelf" } else { "bay keyboard-bay" },
                         on_drop: move |o: DropOutcome<Crate>| land(o),
                         span { class: "bay-name", "{title}" }
                         if !rule.is_empty() { span { class: "bay-rule", "{rule}" } }
@@ -1083,6 +1200,7 @@ const CSS: &str = r#"
     --panel: #F1EFE8;
     --ink: #23281F;
     --line: rgba(35, 40, 31, 0.18);
+    --teal: #23281F;
     --safety: #F5C518;
     --oxide: #8C3B2E;
 }
@@ -1093,14 +1211,14 @@ body { background: var(--floor); color: var(--ink); font: 15px/1.55 'Archivo', s
 h1, h2, h3 { font-family: 'Big Shoulders Stencil Display', sans-serif; letter-spacing: 0.04em; margin: 0; }
 button { font: inherit; color: inherit; }
 a { color: inherit; }
-:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 
-/* outcome tape colour scrollbars, everywhere */
-* { scrollbar-width: thin; scrollbar-color: var(--ink) transparent; }
+/* teal scrollbars, everywhere */
+* { scrollbar-width: thin; scrollbar-color: var(--teal) transparent; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--ink); border-radius: 6px; border: 2px solid var(--floor); }
-::-webkit-scrollbar-thumb:hover { background: #11140F; }
+::-webkit-scrollbar-thumb { background: var(--teal); border-radius: 6px; border: 2px solid var(--floor); }
+::-webkit-scrollbar-thumb:hover { background: #0a5850; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* page scaffolding */
@@ -1109,69 +1227,120 @@ a { color: inherit; }
 
 /* header */
 .masthead { position: sticky; top: 0; z-index: 50; background: var(--bench); border-bottom: 2px solid var(--ink); }
-.masthead-row { display: flex; align-items: center; justify-content: space-between; padding-top: 0.8rem; padding-bottom: 0.8rem; }
+.masthead-row { display: flex; align-items: center; justify-content: space-between; padding-top: 1.1rem; padding-bottom: 1.1rem; }
 .brand { font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 1.4rem; letter-spacing: 0.06em; text-decoration: none; }
-.topnav { display: flex; gap: 1.4rem; }
+.topnav { display: flex; gap: 1.75rem; align-items: center; }
 .topnav a { text-decoration: none; font-weight: 600; font-size: 0.9rem; border-bottom: 2px solid transparent; padding-bottom: 2px; }
 .topnav a:hover { border-bottom-color: var(--safety); }
 
 /* hero */
-.hero { padding: 4.5rem 0 3.5rem; }
-.eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; letter-spacing: 0.25em; color: var(--ink); margin: 0 0 1rem; }
-.hero-title { font-size: clamp(3rem, 8vw, 5.5rem); line-height: 0.95; }
-.lede { max-width: 58ch; font-size: 1.1rem; margin: 1.4rem 0 2rem; opacity: 0.85; }
+.hero { padding: 4rem 0 4.5rem; }
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+  grid-template-areas:
+    "eyebrow eyebrow"
+    "title   title"
+    "copy    action"
+    "ticks   ticks";
+  column-gap: 4.5rem;
+  align-items: start;
+}
+.hero-grid > .eyebrow { grid-area: eyebrow; }
+.hero-grid > .hero-title { grid-area: title; margin: 0 0 2.25rem; }
+.hero-copy { grid-area: copy; min-width: 0; display: flex; flex-direction: column; }
+.hero-cta-panel { grid-area: action; align-self: end; justify-self: center; padding-bottom: 0.75rem; }
+.hero-crate { padding: 0.9rem 1.2rem; gap: 0.3rem; }
+.hero-crate .crate-label { font-size: 1.3rem; }
+.crate-sub { font-family: 'IBM Plex Mono', monospace; font-size: 0.6rem; letter-spacing: 0.08em; opacity: 0.6; }
+section[id] { scroll-margin-top: 5.5rem; }
+.ver-chip { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; border: 1px solid var(--ink); border-radius: 999px; padding: 0.15rem 0.6rem; }
+.stage-reset { position: absolute; top: 0.85rem; left: 0.85rem; z-index: 10; font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; letter-spacing: 0.15em; background: none; border: 1px solid var(--ink); border-radius: 4px; padding: 0.25rem 0.7rem; cursor: pointer; }
+.stage-reset:hover { background: var(--safety); }
+.demo-stage { position: relative; padding: 3.1rem 0.85rem 0.85rem; user-select: none; -webkit-user-select: none; }
+.eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; letter-spacing: 0.25em; color: var(--teal); margin: 0 0 1.25rem; }
+.hero-title { font-size: clamp(2.75rem, 7vw, 4.75rem); line-height: 0.92; }
+.lede { max-width: 52ch; font-size: 1.12rem; line-height: 1.6; margin: 0 0 auto; opacity: 0.85; padding-bottom: 2rem; }
 .install-row { display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; }
 .install { background: var(--ink); color: var(--floor); font-family: 'IBM Plex Mono', monospace; font-size: 0.95rem; padding: 0.7rem 1.1rem; border-radius: 6px; user-select: all; }
 .install-hint { font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; opacity: 0.55; }
 .cta { font-weight: 600; text-decoration: none; border-bottom: 2px solid var(--safety); margin-left: 0.4rem; }
-.ticks { list-style: none; display: flex; gap: 2rem; flex-wrap: wrap; padding: 0; margin: 2.4rem 0 0; }
+.cta-large { font-size: 1.12rem; }
+.ticks { grid-area: ticks; list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.25rem 2rem; padding: 1.75rem 0 0; margin: 3rem 0 0; border-top: 1px dashed rgba(35, 40, 31, 0.3); }
+.ticks li { display: grid; grid-template-columns: 2.4rem 1fr; column-gap: 0.65rem; align-items: baseline; }
 .ticks li { font-size: 0.9rem; opacity: 0.85; }
-.tick-key { font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 1.5rem; color: var(--ink); margin-right: 0.35rem; }
+.tick-key { font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 1.5rem; color: var(--teal); text-align: right; line-height: 1; }
 
 /* playground */
-.playground { padding: 1rem 0 4rem; }
-.playground-head { margin-bottom: 1.2rem; }
-.playground-head h2 { font-size: 2rem; }
-.playground-head p { margin: 0.3rem 0 0; opacity: 0.75; max-width: 60ch; }
-.unit { background: var(--bench); border: 2px solid var(--ink); border-radius: 12px; box-shadow: 6px 6px 0 rgba(35, 40, 31, 0.15); overflow: hidden; }
-.unit-body { display: flex; min-height: 560px; }
-.manifest { width: 250px; flex-shrink: 0; border-right: 2px solid var(--ink); padding: 1rem 0; display: flex; flex-direction: column; gap: 1px; background: var(--panel); }
-.manifest-head { font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; letter-spacing: 0.2em; padding: 0 1.2rem 0.6rem; opacity: 0.6; }
-.manifest-line { display: grid; grid-template-columns: 2rem 1fr; gap: 0 0.4rem; text-align: left; background: none; border: none; border-left: 4px solid transparent; padding: 0.55rem 1.2rem 0.55rem 0.8rem; cursor: pointer; }
-.manifest-line:hover { background: var(--bench); }
-.manifest-line[data-active="true"] { border-left-color: var(--safety); background: var(--bench); }
-.manifest-no { font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; opacity: 0.55; }
-.manifest-title { font-weight: 600; }
-.manifest-module { grid-column: 2; font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; opacity: 0.55; }
+.playground { padding: 4rem 0 0; }
+.demo-index { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 1.75rem; }
+.demo-index-pill { display: inline-flex; gap: 0.4rem; align-items: baseline; font-size: 0.82rem; font-weight: 600; text-decoration: none; border: 1px solid var(--ink); border-radius: 999px; padding: 0.3rem 0.85rem; background: var(--bench); }
+.demo-index-pill:hover { background: var(--safety); }
+.demo-index-no { font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; opacity: 0.55; }
+.demo-index-kbd { font-family: 'IBM Plex Mono', monospace; font-size: 0.62rem; opacity: 0.5; flex-basis: 100%; margin-top: 0.4rem; }
+.demo-section { padding: 4rem 0; border-top: 1px dashed rgba(35, 40, 31, 0.25); }
+.demo-section:first-of-type { border-top: none; margin-top: 2.5rem; }
+.demo-section:nth-of-type(even) { background: var(--bench); }
+.demo-grid { display: grid; grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.28fr); gap: 4rem; align-items: center; width: 100%; }
+/* criss-cross: copy flips to the right on even sections */
+.demo-section:nth-of-type(even) .demo-grid { grid-template-columns: minmax(0, 1.28fr) minmax(300px, 0.72fr); }
+.demo-section:nth-of-type(even) .demo-copy { order: 2; }
+.demo-copy { display: flex; flex-direction: column; }
+.demo-copy h3 { font-size: 2.1rem; margin: 0.5rem 0 0.75rem; }
+.demo-no { font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 3.5rem; line-height: 1; color: var(--safety); -webkit-text-stroke: 1px var(--ink); display: block; }
+.demo-copy .stage-hint { margin: 1rem 0 1.5rem; }
+.demo-stage { min-width: 0; }
+.playground-head { margin-bottom: 1rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3rem 4rem; align-items: start; }
+.playground-head-copy { min-width: 0; }
+.playground-head h2 { font-size: clamp(2.2rem, 4.5vw, 3rem); }
+.playground-head p { margin: 0.9rem 0 0; opacity: 0.75; max-width: 56ch; font-size: 1.05rem; }
 
-.stage { flex: 1; min-width: 0; padding: 1.4rem 1.8rem 1.8rem; }
-.stage-head { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
-.stage-head h3 { font-size: 1.7rem; }
-.stage-module { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; background: var(--ink); color: var(--floor); padding: 0.15rem 0.5rem; border-radius: 3px; }
-.stage-hint { max-width: 62ch; opacity: 0.8; margin: 0.4rem 0 1.1rem; }
+.stage-module { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; background: var(--ink); color: var(--floor); padding: 0.15rem 0.5rem; border-radius: 3px; align-self: flex-start; }
+.stage-hint { max-width: 46ch; opacity: 0.8; margin: 1rem 0 1.5rem; }
 /* fixed working height: switching demos never jumps the page */
-.stage-body { min-height: 380px; }
-.helper-note { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; max-width: 680px; margin: 0 0 1rem; padding: 0.55rem 0.7rem; background: var(--panel); border-left: 4px solid var(--ink); font-size: 0.82rem; }
-.helper-note code { font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; background: var(--ink); color: var(--floor); border-radius: 3px; padding: 0.12rem 0.42rem; }
-.helper-note span { opacity: 0.76; }
 
 /* tape: docked to the bottom of the unit */
-.tape { border-top: 2px solid var(--ink); background: var(--ink); color: #EDEDE6; display: flex; height: 6rem; }
-.tape-label { writing-mode: vertical-rl; transform: rotate(180deg); font-family: 'IBM Plex Mono', monospace; font-size: 0.62rem; letter-spacing: 0.25em; padding: 0.4rem 0.3rem; color: var(--safety); border-right: 1px dashed rgba(237,237,230,0.3); }
-.tape-roll { flex: 1; overflow-y: auto; padding: 0.5rem 1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem; scrollbar-color: var(--safety) var(--ink); }
-.tape-roll::-webkit-scrollbar-thumb { border-color: var(--ink); }
-.tape-line { display: flex; gap: 0.6rem; padding: 0.1rem 0; border-bottom: 1px dotted rgba(237,237,230,0.12); }
-.tape-demo { color: var(--safety); }
-.tape-empty { opacity: 0.55; }
+/* the docket printer: every drop prints a numbered receipt */
+.docket { margin-top: 1.75rem; max-width: 300px; }
+.docket-head { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; background: var(--ink); color: #EDEDE6; border-radius: 8px 8px 3px 3px; padding: 0.5rem 0.8rem; box-shadow: 0 3px 0 rgba(35, 40, 31, 0.35), 5px 5px 0 rgba(35, 40, 31, 0.15); }
+.docket-head::after { content: ""; position: absolute; left: 10%; right: 10%; bottom: -2px; height: 3px; background: #0f120d; border-radius: 2px; }
+.docket-brand { font-family: 'IBM Plex Mono', monospace; font-size: 0.58rem; letter-spacing: 0.3em; color: var(--safety); }
+.docket-screw { width: 6px; height: 6px; border-radius: 50%; background: rgba(237, 237, 230, 0.35); box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.6); }
+.docket-out { position: relative; display: grid; padding: 0 12px; overflow: hidden; }
+.slip { grid-area: 1 / 1; background: var(--bench); border: 1px solid rgba(35, 40, 31, 0.22); border-top: none; padding: 0.65rem 0.85rem 1.1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; display: grid; gap: 0.45rem; box-shadow: 0 5px 10px rgba(35, 40, 31, 0.12); clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), 95.8% 100%, 91.6% calc(100% - 7px), 87.5% 100%, 83.3% calc(100% - 7px), 79.1% 100%, 75% calc(100% - 7px), 70.8% 100%, 66.6% calc(100% - 7px), 62.5% 100%, 58.3% calc(100% - 7px), 54.1% 100%, 50% calc(100% - 7px), 45.8% 100%, 41.6% calc(100% - 7px), 37.5% 100%, 33.3% calc(100% - 7px), 29.1% 100%, 25% calc(100% - 7px), 20.8% 100%, 16.6% calc(100% - 7px), 12.5% 100%, 8.3% calc(100% - 7px), 4.1% 100%, 0 calc(100% - 7px)); }
+.slip-back { transform: translateY(10px) rotate(1.8deg) scale(0.97); opacity: 0.45; z-index: 0; }
+.slip-front { position: relative; z-index: 1; animation: print-out 480ms cubic-bezier(0.2, 0.85, 0.3, 1); }
+@keyframes print-out { from { transform: translateY(-60%); } to { transform: translateY(0); } }
+.slip-top { display: flex; justify-content: space-between; gap: 0.6rem; padding-bottom: 0.4rem; border-bottom: 1px dashed rgba(35, 40, 31, 0.35); }
+.slip-no { font-weight: 700; letter-spacing: 0.05em; }
+.slip-tag { text-transform: uppercase; font-size: 0.58rem; letter-spacing: 0.2em; opacity: 0.55; }
+.slip-line { overflow-wrap: anywhere; line-height: 1.5; }
+.slip-code { height: 13px; width: 62%; background: repeating-linear-gradient(90deg, var(--ink) 0 2px, transparent 2px 5px, var(--ink) 5px 6px, transparent 6px 10px, var(--ink) 10px 13px, transparent 13px 16px); opacity: 0.85; }
+
+/* the safety sign that proudly resets */
+.drop-sign { justify-self: end; flex: none; display: grid; justify-items: center; background: var(--ink); color: #EDEDE6; border-radius: 8px; padding: 1.1rem 1.6rem 0.9rem; box-shadow: 6px 6px 0 rgba(35, 40, 31, 0.2); transform: rotate(-1.2deg); }
+.drop-sign-caption { font-family: 'IBM Plex Mono', monospace; font-size: 0.58rem; letter-spacing: 0.22em; opacity: 0.75; }
+.drop-sign-digit { font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 3.4rem; line-height: 1.05; color: var(--safety); animation: sign-pop 320ms ease-out; }
+.drop-sign-total { font-family: 'IBM Plex Mono', monospace; font-size: 0.58rem; letter-spacing: 0.15em; opacity: 0.6; margin-top: 0.45rem; padding-top: 0.45rem; border-top: 1px dashed rgba(237, 237, 230, 0.3); }
+@keyframes sign-pop { from { transform: scale(1.7); } to { transform: scale(1); } }
+
+/* rubber stamps on receiving zones */
+.stamp { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-14deg); font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 1.7rem; letter-spacing: 0.12em; color: var(--oxide); border: 3px solid var(--oxide); border-radius: 4px; padding: 0.05rem 0.55rem; background: rgba(255, 255, 255, 0.7); pointer-events: none; opacity: 0; animation: stamp-in 1.8s ease-out forwards; z-index: 5; }
+@keyframes stamp-in {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(-14deg) scale(2.3); }
+  22% { opacity: 1; transform: translate(-50%, -50%) rotate(-14deg) scale(1); }
+  72% { opacity: 1; }
+  100% { opacity: 0; }
+}
 
 /* footer */
-.site-footer { background: var(--ink); color: var(--floor); padding: 2.4rem 0; }
+.site-footer { background: var(--ink); color: var(--floor); padding: 4rem 0; margin-top: 4rem; }
 .footer-row { display: flex; gap: 2.5rem; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; }
 .footer-brand p { margin: 0.4rem 0 0; opacity: 0.7; font-size: 0.9rem; }
 .footer-links { display: flex; gap: 1.4rem; flex-wrap: wrap; }
-.footer-links a { font-weight: 600; font-size: 0.9rem; text-decoration: none; border-bottom: 2px solid var(--ink); padding-bottom: 2px; }
+.footer-links a { font-weight: 600; font-size: 0.9rem; text-decoration: none; border-bottom: 2px solid var(--teal); padding-bottom: 2px; }
 .footer-links a:hover { border-bottom-color: var(--safety); }
-.footer-meta { margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; opacity: 0.6; width: 100%; }
+.footer-meta { margin: 1.5rem 0 0; font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; opacity: 0.6; width: 100%; }
 
 /* shared demo furniture */
 .dock { display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: stretch; }
@@ -1180,8 +1349,8 @@ a { color: inherit; }
 .crate { background: var(--bench); border: 2px solid var(--ink); border-radius: 4px; padding: 0.6rem 0.9rem; cursor: grab; display: inline-flex; flex-direction: column; gap: 0.15rem; box-shadow: 3px 3px 0 var(--ink); }
 .crate:active { cursor: grabbing; }
 .crate-label { font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 1.15rem; letter-spacing: 0.08em; }
-.crate-tag { font-family: 'IBM Plex Mono', monospace; font-size: 0.6rem; color: var(--oxide); letter-spacing: 0.15em; }
-.bay { flex: 1; min-width: 180px; min-height: 150px; border: 2px dashed var(--ink); border-radius: 6px; padding: 0.8rem; display: flex; flex-direction: column; gap: 0.3rem; background: var(--panel); }
+.crate-tag { font-family: 'IBM Plex Mono', monospace; font-size: 0.6rem; color: var(--oxide); letter-spacing: 0.15em; margin-left: 0.45em; }
+.bay { position: relative; flex: 1; min-width: 180px; min-height: 150px; border: 2px dashed var(--ink); border-radius: 6px; padding: 0.8rem; display: flex; flex-direction: column; gap: 0.3rem; background: var(--panel); }
 .bay-shelf { border-style: solid; }
 .bay-wide { min-width: 300px; }
 .bay-name { font-family: 'Big Shoulders Stencil Display', sans-serif; font-size: 1.1rem; letter-spacing: 0.1em; }
@@ -1189,20 +1358,18 @@ a { color: inherit; }
 .bay-stack { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; align-content: flex-start; }
 .chip { background: var(--bench); border: 1.5px solid var(--ink); border-radius: 999px; padding: 0.15rem 0.6rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; }
 .chip-wide { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.drag-preview { opacity: 0.82; transform: rotate(-1deg); }
-.selection-preview { display: flex; gap: 0.35rem; align-items: center; }
-.preview-box { min-width: 48px; padding-left: 0.65rem; padding-right: 0.65rem; background: var(--bench); }
+.ghost { background: var(--safety); border: 2px solid var(--ink); border-radius: 4px; padding: 0.3rem 0.7rem; font-weight: 600; box-shadow: 5px 7px 0 var(--ink); transform: rotate(-4deg); }
 
 /* sortable */
 .list-scroll { max-height: 320px; overflow-y: auto; max-width: 440px; border: 2px solid var(--ink); border-radius: 6px; }
-.row { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.9rem; background: var(--bench); cursor: grab; box-shadow: inset 0 -1px 0 var(--line); }
-[data-sort-handle] { opacity: 0.4; }
+.row { display: flex; flex: 1; align-items: center; gap: 0.6rem; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--line); background: var(--bench); cursor: grab; }
+[data-sort-handle] { opacity: 0.55; background: var(--bench); border-bottom: 1px solid var(--line); }
 .row-text { flex: 1; }
 .row-buttons { display: flex; gap: 2px; opacity: 0; }
 .row:hover .row-buttons, .row-buttons:focus-within { opacity: 1; }
 .row-buttons button { border: 1.5px solid var(--ink); background: var(--panel); border-radius: 3px; cursor: pointer; line-height: 1; padding: 0.1rem 0.3rem; }
 .row-buttons button:disabled { opacity: 0.3; cursor: default; }
-[data-dragging="true"] .row { opacity: 0.68; background: var(--bench); box-shadow: inset 0 -1px 0 var(--line); }
+[data-dragging="true"] .row { opacity: 0.45; background: var(--panel); box-shadow: inset 0 0 0 2px var(--safety); }
 [data-drop-target="true"] .row { background: var(--panel); }
 
 /* board */
@@ -1238,11 +1405,11 @@ a { color: inherit; }
 /* multi-select */
 .boxes { display: grid; grid-template-columns: repeat(4, 64px); gap: 10px; align-content: flex-start; }
 .box { text-align: center; padding: 0.9rem 0; background: var(--panel); border: 2px solid var(--ink); border-radius: 4px; cursor: grab; font-family: 'IBM Plex Mono', monospace; }
-[data-selected="true"] .box, [data-selected="true"].box { background: var(--ink); color: var(--floor); }
+[data-selected="true"] .box, [data-selected="true"].box { background: var(--teal); color: var(--floor); }
 
 /* files */
-.filebay { border: 3px dashed var(--ink); border-radius: 8px; min-height: 160px; max-width: 480px; display: grid; place-items: center; padding: 1rem; background: var(--panel); }
-.filebay[data-hover="true"] { border-color: var(--ink); background: rgba(35, 40, 31, 0.08); }
+.filebay { position: relative; border: 3px dashed var(--ink); border-radius: 8px; min-height: 160px; max-width: 480px; display: grid; place-items: center; padding: 1rem; background: var(--panel); }
+.filebay[data-hover="true"] { border-color: var(--teal); background: rgba(14, 107, 99, 0.08); }
 .filebay-prompt { opacity: 0.6; }
 .filebay-list { margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; }
 
@@ -1251,22 +1418,28 @@ a { color: inherit; }
 .outbound-tag { display: inline-block; background: var(--safety); border: 2px solid var(--ink); border-radius: 999px; padding: 0.5rem 1.1rem; cursor: grab; font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; box-shadow: 3px 3px 0 var(--ink); }
 
 /* keyboard */
-.keys { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.2rem; }
-.keycap-pair { display: flex; gap: 0.4rem; align-items: center; font-size: 0.8rem; }
+.keys { display: flex; flex-wrap: wrap; gap: 0.45rem 0.8rem; align-items: center; margin-bottom: 0.9rem; max-width: 680px; }
+.keycap-pair { display: inline-flex; gap: 0.35rem; align-items: center; font-size: 0.76rem; white-space: nowrap; }
 kbd { background: var(--ink); color: var(--floor); border-radius: 4px; padding: 0.15rem 0.5rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; box-shadow: 0 2px 0 rgba(35,40,31,0.5); }
-.echo { font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; background: var(--panel); border-left: 4px solid var(--ink); padding: 0.6rem 0.9rem; max-width: 480px; margin-top: 1.2rem; }
+.keyboard-layout { display: grid; grid-template-columns: minmax(190px, 0.72fr) minmax(250px, 1fr); grid-template-rows: repeat(2, minmax(108px, auto)); gap: 0.85rem; align-items: stretch; max-width: 680px; }
+.keyboard-shelf { grid-column: 1; grid-row: 1 / span 2; min-height: 0; }
+.keyboard-bay { min-width: 0; min-height: 108px; }
+.keyboard-bay .bay-stack { min-height: 42px; }
+.echo { font-family: 'IBM Plex Mono', monospace; font-size: 0.82rem; background: var(--panel); border-left: 4px solid var(--teal); padding: 0.65rem 0.85rem; max-width: 680px; min-height: 42px; margin-top: 0.95rem; }
 
-@media (max-width: 820px) {
-    .unit-body { flex-direction: column; min-height: 0; }
-    .manifest { width: 100%; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 2px solid var(--ink); padding: 0.4rem; }
-    .manifest-head { display: none; }
-    .manifest-line { border-left: none; border-bottom: 4px solid transparent; white-space: nowrap; }
-    .manifest-line[data-active="true"] { border-bottom-color: var(--safety); }
-    .manifest-module { display: none; }
-    .stage { padding: 1rem; }
-    .stage-body { min-height: 0; }
-    .hero { padding: 3rem 0 2.5rem; }
-    .topnav { gap: 0.9rem; }
+@media (max-width: 900px) {
+    .demo-grid { grid-template-columns: 1fr; gap: 2rem; }
+    .demo-section:nth-of-type(even) .demo-copy { order: 0; }
+    .demo-section { padding: 3rem 0; }
+    .hero-grid { grid-template-columns: 1fr; grid-template-areas: "eyebrow" "title" "copy" "action" "ticks"; row-gap: 2rem; }
+    .ticks { grid-template-columns: 1fr 1fr; margin-top: 0; }
+    .hero-grid > .hero-title { margin-bottom: 0; }
+    .lede { padding-bottom: 0; }
+    .playground-head { grid-template-columns: 1fr; }
+    .drop-sign { justify-self: start; }
+    .topnav { gap: 0.9rem; flex-wrap: wrap; }
+    .keyboard-layout { grid-template-columns: 1fr; }
+    .keyboard-shelf { grid-column: auto; grid-row: auto; }
     .floor { width: 100%; }
 }
 "#;
