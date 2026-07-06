@@ -38,7 +38,11 @@ impl SnapGrid {
     }
 }
 
-/// Clamp positions into `0..=width` × `0..=height`.
+/// Clamp reported top-left positions into `0..=width` × `0..=height`.
+///
+/// Bounds constrain the drop position returned in [`CanvasDrop::position`].
+/// They do not account for the dropped element's own width or height; subtract
+/// that yourself when you need the whole element to stay inside the canvas.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
     pub width: f64,
@@ -68,7 +72,7 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     /// Snap the corrected position to a grid.
     #[props(default)]
     snap: Option<SnapGrid>,
-    /// Clamp the corrected position into these bounds.
+    /// Clamp the corrected top-left position into these bounds.
     #[props(default)]
     bounds: Option<Bounds>,
     /// Announced to screen readers when a keyboard drag targets the canvas.
