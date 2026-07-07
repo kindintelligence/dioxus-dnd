@@ -300,7 +300,8 @@ and the corrected top-left position:
 - `pointer`: where the pointer landed inside the canvas.
 - `position`: `pointer - grab`, then optional snap and bounds.
 - `Bounds`: clamps the returned top-left point. It does not know the dropped
-  element's own width or height.
+  element's own width or height; use `Bounds::clamp_item` or
+  `Bounds::clamp_rect` when you want the whole item inside.
 
 ```text
 CanvasDropZone::<Node> {
@@ -320,10 +321,12 @@ CanvasDropZone::<Node> {
 ```
 
 For richer constraints such as "keep the whole node inside the canvas", use
-the existing modifier chain (`apply_modifiers`, `DragModifier::KeepInside`,
-`ModifierCtx`) with the element size you know in your app. Keep native
-`DataTransfer` components for browser and OS boundary drags, such as files
-or external text dropped onto a canvas.
+`Bounds::clamp_item` for simple bounds or the existing modifier chain
+(`apply_modifiers`, `DragModifier::KeepInside`, `ModifierCtx`) with the
+element size you know in your app. The pure helpers `client_to_canvas`,
+`canvas_to_client` and `canvas_position` are available when wiring custom
+interactions. Keep native `DataTransfer` components for browser and OS
+boundary drags, such as files or external text dropped onto a canvas.
 
 ## Auto-scroll
 
@@ -472,7 +475,8 @@ dx serve --example kanban --platform web --features web
 ```
 
 And a focused canvas example that keeps the core headless while using
-`core::modifiers` for snap and item-aware bounds:
+`CanvasDropZone` snapping and `Bounds::clamp_item` for item-aware bounds,
+with app-owned handles and edges layered on top:
 
 ```sh
 dx serve --example canvas --platform web --features web
