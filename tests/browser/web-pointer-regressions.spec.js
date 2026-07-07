@@ -311,6 +311,29 @@ test("focused canvas keyboard drop lands at the selected canvas geometry", async
   await expect(page.getByText("Created Bad at (360, 216)", { exact: true })).toBeVisible();
 });
 
+test("focused canvas native boundary surface accepts DataTransfer drops", async ({ page }) => {
+  await openCanvasExample(page);
+
+  const boundary = page.locator("section", {
+    has: page.getByRole("heading", { name: "Native boundary" }),
+  });
+  const zone = boundary.locator(".relative").first();
+
+  await dispatchNativeDrop(zone, {
+    data: {
+      "text/uri-list": "https://dioxuslabs.com\n",
+      "text/plain": "https://dioxuslabs.com",
+    },
+  });
+  await expect(boundary.getByText("Link https://dioxuslabs.com", { exact: true })).toBeVisible();
+
+  await dispatchNativeDrop(zone, {
+    file: { name: "requirements.txt", type: "text/plain", body: "native canvas note" },
+  });
+  await expect(boundary.getByText("File requirements.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^Native drop: File requirements.txt at/)).toBeVisible();
+});
+
 test("native DataTransfer paths handle files, external drops, and drag-out", async ({ page }) => {
   await openGallery(page);
 
