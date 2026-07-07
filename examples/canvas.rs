@@ -19,6 +19,10 @@ const CANVAS: ZoneId = ZoneId(42);
 const CANVAS_W: f64 = 720.0;
 const CANVAS_H: f64 = 420.0;
 const GRID: f64 = 24.0;
+const MIN_ZOOM: f64 = 0.6;
+const MAX_ZOOM: f64 = 1.8;
+const ZOOM_STEP: f64 = 0.2;
+const PAN_STEP: f64 = 48.0;
 
 fn main() {
     dioxus::launch(App);
@@ -128,14 +132,17 @@ fn App() -> Element {
         ]
     });
     let mut last_drop = use_signal(|| "Drag a node or palette item onto the canvas.".to_string());
+    let mut viewport = use_signal(CanvasViewport::default);
 
     let mut place = move |drop: CanvasDrop<NodeDrag>| {
+        let view = viewport();
+        let world_position = SnapGrid(GRID).snap(screen_to_world(drop.position, view));
         let mut all = nodes.write();
         match drop.payload {
             NodeDrag::Existing(id) => {
                 if let Some(ix) = all.iter().position(|node| node.id == id) {
                     let kind = all[ix].kind;
-                    let p = constrained(drop.position, all[ix].width, all[ix].height);
+                    let p = constrained(world_position, all[ix].width, all[ix].height);
                     all[ix].x = p.x;
                     all[ix].y = p.y;
                     let moved = all.remove(ix);
@@ -150,7 +157,7 @@ fn App() -> Element {
             }
             NodeDrag::New(kind) => {
                 let (width, height) = default_size(kind);
-                let p = constrained(drop.position, width, height);
+                let p = constrained(world_position, width, height);
                 let id = next_id();
                 next_id.set(id + 1);
                 all.push(Node {
@@ -199,6 +206,17 @@ fn App() -> Element {
         edges.write().push(Edge { id, from, to });
         last_drop.set(format!("Connected node {from} to node {to}."));
     };
+    let zoom = viewport().zoom;
+    let pan = viewport().pan;
+    let mut set_zoom = move |next: f64| {
+        let view = viewport();
+        viewport.set(CanvasViewport::new(view.pan, next).clamped_zoom(MIN_ZOOM, MAX_ZOOM));
+    };
+    let mut pan_by = move |delta: Point| {
+        let view = viewport();
+        viewport.set(CanvasViewport::new(view.pan + delta, view.zoom));
+    };
+    let reset_view = move |_| viewport.set(CanvasViewport::default());
 
     rsx! {
         document::Script { src: "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }
@@ -243,28 +261,78 @@ fn App() -> Element {
                                     h2 { class: "text-sm font-semibold text-neutral-200", "Builder" }
                                     p { class: "text-xs text-neutral-500", "{last_drop}" }
                                 }
-                                div { class: "flex items-center gap-1 rounded-md border border-white/10 bg-black/30 p-1",
-                                    button { class: "rounded px-2 py-1 text-xs text-neutral-300 hover:bg-white/10", "Inspect" }
-                                    button { class: "rounded bg-white px-2 py-1 text-xs font-medium text-neutral-950", "Deploy" }
+                                div { class: "flex flex-wrap items-center justify-end gap-1 rounded-md border border-white/10 bg-black/30 p-1 text-xs",
+                                    button {
+                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        aria_label: "Pan canvas left",
+                                        onclick: move |_| pan_by(Point::new(PAN_STEP, 0.0)),
+                                        "←"
+                                    }
+                                    button {
+                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        aria_label: "Pan canvas up",
+                                        onclick: move |_| pan_by(Point::new(0.0, PAN_STEP)),
+                                        "↑"
+                                    }
+                                    button {
+                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        aria_label: "Pan canvas down",
+                                        onclick: move |_| pan_by(Point::new(0.0, -PAN_STEP)),
+                                        "↓"
+                                    }
+                                    button {
+                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        aria_label: "Pan canvas right",
+                                        onclick: move |_| pan_by(Point::new(-PAN_STEP, 0.0)),
+                                        "→"
+                                    }
+                                    button {
+                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        aria_label: "Zoom canvas out",
+                                        onclick: move |_| set_zoom(zoom - ZOOM_STEP),
+                                        "−"
+                                    }
+                                    span { class: "min-w-12 px-1 text-center text-neutral-400", "{zoom * 100.0:.0}%" }
+                                    button {
+                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        aria_label: "Zoom canvas in",
+                                        onclick: move |_| set_zoom(zoom + ZOOM_STEP),
+                                        "+"
+                                    }
+                                    button {
+                                        class: "rounded bg-white px-2 py-1 font-medium text-neutral-950",
+                                        aria_label: "Reset canvas view",
+                                        onclick: reset_view,
+                                        "Reset"
+                                    }
                                 }
                             }
                             CanvasDropZone::<NodeDrag> {
                                 id: CANVAS,
                                 label: "Workbench",
-                                snap: SnapGrid(GRID),
                                 on_drop: move |drop| place(drop),
-                                class: "relative overflow-hidden rounded-md border border-white/10 bg-[#080808] bg-[radial-gradient(rgba(255,255,255,0.15)_1px,transparent_1px)] [background-size:24px_24px] shadow-inner shadow-black data-active:border-white/40",
-                                style: format!("width: {CANVAS_W}px; height: {CANVAS_H}px;"),
+                                class: "relative overflow-hidden rounded-md border border-white/10 bg-[#080808] bg-[radial-gradient(rgba(255,255,255,0.15)_1px,transparent_1px)] shadow-inner shadow-black data-active:border-white/40",
+                                style: format!(
+                                    "width: {CANVAS_W}px; height: {CANVAS_H}px; background-size: {}px {}px; background-position: {}px {}px;",
+                                    GRID * zoom,
+                                    GRID * zoom,
+                                    pan.x,
+                                    pan.y
+                                ),
                                 svg {
                                     class: "pointer-events-none absolute inset-0 z-0 h-full w-full",
                                     view_box: format!("0 0 {CANVAS_W} {CANVAS_H}"),
-                                    for edge in edges.read().clone() {
-                                        EdgePath { edge, nodes: nodes.read().clone() }
+                                    g {
+                                        transform: format!("translate({} {}) scale({})", pan.x, pan.y, zoom),
+                                        for edge in edges.read().clone() {
+                                            EdgePath { edge, nodes: nodes.read().clone() }
+                                        }
                                     }
                                 }
                                 for node in nodes.read().clone() {
                                     CanvasNode {
                                         node,
+                                        viewport: viewport(),
                                         connecting: connecting_from(),
                                         on_start_connection: move |id| start_connection(id),
                                         on_finish_connection: move |id| finish_connection(id),
@@ -282,6 +350,12 @@ fn App() -> Element {
                                 div {
                                     dt { class: "text-neutral-500", "Connections" }
                                     dd { class: "mt-1 text-lg font-semibold text-neutral-100", "{edges.read().len()}" }
+                                }
+                                div {
+                                    dt { class: "text-neutral-500", "View" }
+                                    dd { class: "mt-1 leading-5 text-neutral-300",
+                                        "{zoom * 100.0:.0}% at ({pan.x:.0}, {pan.y:.0})"
+                                    }
                                 }
                                 div {
                                     dt { class: "text-neutral-500", "Model" }
@@ -305,11 +379,14 @@ fn App() -> Element {
 #[component]
 fn CanvasNode(
     node: Node,
+    viewport: CanvasViewport,
     connecting: Option<u32>,
     on_start_connection: EventHandler<u32>,
     on_finish_connection: EventHandler<u32>,
 ) -> Element {
     let armed = connecting == Some(node.id);
+    let screen = world_to_screen(Point::new(node.x, node.y), viewport);
+    let size = world_delta_to_screen(Point::new(node.width, node.height), viewport);
     rsx! {
         PointerDraggable::<NodeDrag> {
             payload: NodeDrag::Existing(node.id),
@@ -317,11 +394,15 @@ fn CanvasNode(
             label: node.kind.label(),
             style: format!(
                 "position: absolute; z-index: 10; left: {}px; top: {}px; width: {}px; height: {}px;",
-                node.x,
-                node.y,
-                node.width,
-                node.height
+                screen.x,
+                screen.y,
+                size.x,
+                size.y
             ),
+            "data-world-x": format!("{:.3}", node.x),
+            "data-world-y": format!("{:.3}", node.y),
+            "data-world-width": format!("{:.3}", node.width),
+            "data-world-height": format!("{:.3}", node.height),
             class: "cursor-grab select-none rounded-lg border border-neutral-800 bg-black px-4 py-4 text-center shadow-2xl shadow-black/40 transition hover:border-neutral-700 data-dragging:opacity-40",
             button {
                 class: if connecting.is_some() {
