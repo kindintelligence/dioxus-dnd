@@ -290,12 +290,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn node_id_from_u64() {
+        assert_eq!(NodeId::from(42), NodeId(42));
+    }
+
+    #[test]
     fn intent_bands() {
         assert_eq!(intent_from_offset(2.0, 28.0), DropIntent::Before);
         assert_eq!(intent_from_offset(14.0, 28.0), DropIntent::Into);
         assert_eq!(intent_from_offset(26.0, 28.0), DropIntent::After);
         // degenerate height doesn't divide by zero
         assert_eq!(intent_from_offset(0.0, 0.0), DropIntent::Before);
+    }
+
+    #[test]
+    fn intent_bands_use_quarter_boundaries() {
+        assert_eq!(intent_from_offset(24.9, 100.0), DropIntent::Before);
+        assert_eq!(intent_from_offset(25.0, 100.0), DropIntent::Into);
+        assert_eq!(intent_from_offset(75.0, 100.0), DropIntent::Into);
+        assert_eq!(intent_from_offset(75.1, 100.0), DropIntent::After);
+    }
+
+    #[test]
+    fn intent_bands_clamp_out_of_range_offsets() {
+        assert_eq!(intent_from_offset(-20.0, 100.0), DropIntent::Before);
+        assert_eq!(intent_from_offset(120.0, 100.0), DropIntent::After);
+        assert_eq!(intent_from_offset(50.0, -10.0), DropIntent::After);
     }
 
     #[test]
@@ -312,5 +332,27 @@ mod tests {
         assert!(would_create_cycle(parent, NodeId(2), NodeId(2)));
         // dropping 3 into the root = fine
         assert!(!would_create_cycle(parent, NodeId(3), NodeId(1)));
+    }
+
+    #[test]
+    fn cycle_detection_handles_missing_parents() {
+        let parent = |n: NodeId| match n.0 {
+            9 => Some(NodeId(8)),
+            _ => None,
+        };
+
+        assert!(!would_create_cycle(parent, NodeId(1), NodeId(9)));
+        assert!(!would_create_cycle(parent, NodeId(9), NodeId(1)));
+    }
+
+    #[test]
+    fn cycle_detection_treats_parent_map_cycles_as_unsafe() {
+        let parent = |n: NodeId| match n.0 {
+            2 => Some(NodeId(3)),
+            3 => Some(NodeId(2)),
+            _ => None,
+        };
+
+        assert!(would_create_cycle(parent, NodeId(1), NodeId(2)));
     }
 }

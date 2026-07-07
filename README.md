@@ -446,6 +446,13 @@ FileDropZone {
 }
 ```
 
+`FileFilter::content_types` supports exact MIME types (`application/pdf`),
+top-level wildcards (`image/*`), all typed files (`*/*`) and structured
+suffix wildcards (`application/*+json`, `*/*+json`). Matching is
+case-insensitive and ignores MIME parameters such as `; charset=utf-8`.
+`FileFilter::extensions` is also case-insensitive and accepts extensions with
+or without a leading dot.
+
 ## Dragging out
 
 ```text

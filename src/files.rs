@@ -62,24 +62,38 @@ impl FileFilter {
         Self::default()
     }
 
-    /// Allow only these extensions (case-insensitive, no leading dot).
+    /// Allow only these extensions (case-insensitive, leading dot optional).
     pub fn extensions<I, S>(mut self, exts: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.extensions = exts.into_iter().map(|s| s.into().to_lowercase()).collect();
+        self.extensions = exts
+            .into_iter()
+            .map(|s| normalize_extension(&s.into()))
+            .filter(|s| !s.is_empty())
+            .collect();
         self
     }
 
-    /// Allow only these MIME types. A trailing `/*` wildcard is supported
-    /// (`"image/*"`).
+    /// Allow only these MIME types.
+    ///
+    /// Supported patterns:
+    ///
+    /// - exact types: `"application/pdf"`
+    /// - top-level wildcards: `"image/*"`
+    /// - all typed files: `"*/*"`
+    /// - structured suffix wildcards: `"application/*+json"` and `"*/*+json"`
     pub fn content_types<I, S>(mut self, types: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.content_types = types.into_iter().map(|s| s.into().to_lowercase()).collect();
+        self.content_types = types
+            .into_iter()
+            .map(|s| normalize_content_type(&s.into()))
+            .filter(|s| !s.is_empty())
+            .collect();
         self
     }
 
@@ -108,14 +122,14 @@ impl FileFilter {
             }
         }
         if !self.content_types.is_empty() {
-            let ct = file.content_type().unwrap_or_default().to_lowercase();
-            let ok = self.content_types.iter().any(|allowed| {
-                if let Some(prefix) = allowed.strip_suffix("/*") {
-                    ct.starts_with(prefix)
-                } else {
-                    ct == *allowed
-                }
-            });
+            let ct = file
+                .content_type()
+                .map(|s| normalize_content_type(&s))
+                .unwrap_or_default();
+            let ok = self
+                .content_types
+                .iter()
+                .any(|allowed| content_type_matches(allowed, &ct));
             if !ok {
                 return Err(FileRejection::ContentType);
             }
@@ -149,6 +163,57 @@ impl FileFilter {
         }
         (ok, bad)
     }
+}
+
+fn normalize_extension(ext: &str) -> String {
+    ext.trim().trim_start_matches('.').to_ascii_lowercase()
+}
+
+fn normalize_content_type(content_type: &str) -> String {
+    content_type
+        .split_once(';')
+        .map(|(base, _)| base)
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn split_content_type(content_type: &str) -> Option<(&str, &str)> {
+    let (ty, subtype) = content_type.split_once('/')?;
+    if ty.is_empty() || subtype.is_empty() || subtype.contains('/') {
+        return None;
+    }
+    Some((ty, subtype))
+}
+
+fn content_type_matches(pattern: &str, content_type: &str) -> bool {
+    let Some((pattern_type, pattern_subtype)) = split_content_type(pattern) else {
+        return false;
+    };
+    let Some((actual_type, actual_subtype)) = split_content_type(content_type) else {
+        return false;
+    };
+
+    if pattern_type == "*" && pattern_subtype == "*" {
+        return true;
+    }
+    if pattern_type == "*" && !pattern_subtype.starts_with("*+") {
+        return false;
+    }
+    if pattern_type != "*" && pattern_type != actual_type {
+        return false;
+    }
+    if pattern_subtype == "*" {
+        return true;
+    }
+    if let Some(suffix) = pattern_subtype.strip_prefix("*+") {
+        return actual_subtype
+            .rsplit_once('+')
+            .map(|(_, actual_suffix)| actual_suffix == suffix)
+            .unwrap_or(false);
+    }
+
+    pattern_subtype == actual_subtype
 }
 
 /// A zone that accepts files dragged in from the operating system.
@@ -306,9 +371,10 @@ mod tests {
 
     #[test]
     fn extension_filter_is_case_insensitive() {
-        let f = FileFilter::new().extensions(["png", "JPG"]);
+        let f = FileFilter::new().extensions(["png", ".JPG", " gif "]);
         assert!(f.check(&file("Photo.PNG", 10, None)).is_ok());
         assert!(f.check(&file("photo.jpg", 10, None)).is_ok());
+        assert!(f.check(&file("clip.GIF", 10, None)).is_ok());
         assert_eq!(
             f.check(&file("notes.txt", 10, None)),
             Err(FileRejection::Extension)
@@ -332,6 +398,99 @@ mod tests {
         // missing content type fails a type-restricted filter
         assert_eq!(
             f.check(&file("d", 1, None)),
+            Err(FileRejection::ContentType)
+        );
+    }
+
+    #[test]
+    fn content_type_wildcards_match_whole_type_only() {
+        let f = FileFilter::new().content_types(["image/*"]);
+        assert!(f.check(&file("a", 1, Some("image/svg+xml"))).is_ok());
+        assert_eq!(
+            f.check(&file("b", 1, Some("imageevil/png"))),
+            Err(FileRejection::ContentType)
+        );
+        assert_eq!(
+            f.check(&file("c", 1, Some("application/image"))),
+            Err(FileRejection::ContentType)
+        );
+        assert_eq!(
+            f.check(&file("d", 1, Some("image/png/extra"))),
+            Err(FileRejection::ContentType)
+        );
+    }
+
+    #[test]
+    fn content_type_matching_normalizes_case_whitespace_and_parameters() {
+        let f = FileFilter::new().content_types([" Application/PDF ", "text/plain"]);
+        assert!(f.check(&file("a", 1, Some("application/pdf"))).is_ok());
+        assert!(f
+            .check(&file("b", 1, Some("TEXT/PLAIN; charset=utf-8")))
+            .is_ok());
+    }
+
+    #[test]
+    fn content_type_all_wildcard_accepts_any_typed_file() {
+        let f = FileFilter::new().content_types(["*/*"]);
+        assert!(f.check(&file("a", 1, Some("image/png"))).is_ok());
+        assert!(f
+            .check(&file("b", 1, Some("application/octet-stream")))
+            .is_ok());
+        assert_eq!(
+            f.check(&file("c", 1, None)),
+            Err(FileRejection::ContentType)
+        );
+    }
+
+    #[test]
+    fn content_type_structured_suffix_wildcards() {
+        let app_json = FileFilter::new().content_types(["application/*+json"]);
+        assert!(app_json
+            .check(&file("a", 1, Some("application/ld+json")))
+            .is_ok());
+        assert!(app_json
+            .check(&file("b", 1, Some("application/vnd.api+json")))
+            .is_ok());
+        assert_eq!(
+            app_json.check(&file("c", 1, Some("text/ld+json"))),
+            Err(FileRejection::ContentType)
+        );
+        assert_eq!(
+            app_json.check(&file("d", 1, Some("application/json"))),
+            Err(FileRejection::ContentType)
+        );
+
+        let any_json = FileFilter::new().content_types(["*/*+json"]);
+        assert!(any_json
+            .check(&file("e", 1, Some("application/problem+json")))
+            .is_ok());
+        assert!(any_json
+            .check(&file("f", 1, Some("model/gltf+json")))
+            .is_ok());
+        assert_eq!(
+            any_json.check(&file("g", 1, Some("application/json"))),
+            Err(FileRejection::ContentType)
+        );
+    }
+
+    #[test]
+    fn malformed_content_type_patterns_do_not_match() {
+        let f = FileFilter::new().content_types(["image", "image/", "/png", "image/png/extra"]);
+        assert_eq!(
+            f.check(&file("a", 1, Some("image/png"))),
+            Err(FileRejection::ContentType)
+        );
+    }
+
+    #[test]
+    fn unsupported_subtype_only_wildcard_does_not_match() {
+        let f = FileFilter::new().content_types(["*/json"]);
+        assert_eq!(
+            f.check(&file("a", 1, Some("application/json"))),
+            Err(FileRejection::ContentType)
+        );
+        assert_eq!(
+            f.check(&file("b", 1, Some("text/json"))),
             Err(FileRejection::ContentType)
         );
     }
