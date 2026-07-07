@@ -120,6 +120,27 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     let mut dnd = use_dnd::<T>();
     let mut registry = use_zone_registry::<T>();
     let mut intent = use_signal(|| None::<DropIntent>);
+    let mut label_now = use_signal(|| label.clone());
+    let mut accepts_now = use_signal(|| accepts);
+    let mut row_height_now = use_signal(|| row_height);
+    let mut on_drop_now = use_signal(|| on_drop);
+    let mut node_now = use_signal(|| node);
+
+    if *label_now.peek() != label {
+        label_now.set(label.clone());
+    }
+    if *accepts_now.peek() != accepts {
+        accepts_now.set(accepts);
+    }
+    if *row_height_now.peek() != row_height {
+        row_height_now.set(row_height);
+    }
+    if *on_drop_now.peek() != on_drop {
+        on_drop_now.set(on_drop);
+    }
+    if *node_now.peek() != node {
+        node_now.set(node);
+    }
 
     // --- zone registration: makes this row a touch and keyboard target ----
     let zone_id = use_zone_id();
@@ -128,38 +149,45 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     let rect = use_signal(|| None::<Rect>);
     // Registry-level filter: would *any* intent be accepted? (Hover can't
     // know the final band yet; the exact intent is re-checked at drop.)
-    let registered_accepts = accepts.map(|cb| {
-        Callback::new(move |p: T| {
+    let registered_accepts = Callback::new(move |p: T| match *accepts_now.peek() {
+        Some(cb) => {
             cb.call((p.clone(), DropIntent::Before))
                 || cb.call((p.clone(), DropIntent::After))
                 || cb.call((p, DropIntent::Into))
-        })
+        }
+        None => true,
     });
     let registered_drop = Callback::new(move |o: DropOutcome<T>| {
-        let it = intent_from_offset(o.element.y, row_height);
-        let ok = accepts.map_or(true, |cb| cb.call((o.payload.clone(), it)));
+        let it = intent_from_offset(o.element.y, *row_height_now.peek());
+        let ok = match *accepts_now.peek() {
+            Some(cb) => cb.call((o.payload.clone(), it)),
+            None => true,
+        };
         if ok {
-            on_drop.call(TreeDropEvent {
+            on_drop_now.peek().call(TreeDropEvent {
                 payload: o.payload,
-                target: node,
+                target: *node_now.peek(),
                 intent: it,
             });
         }
     });
-    use_hook(|| {
+    use_hook(move || {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
-            label: label.clone(),
+            label: label_now.peek().clone(),
             on_drop: registered_drop,
-            accepts: registered_accepts,
+            accepts: Some(registered_accepts),
             mounted,
             rect,
-        });
+        })
     });
     use_drop(move || {
         registry.unregister(zone_id);
     });
+    // Keep the registered label in sync if the prop changes across renders.
+    // Registry readers only `peek`, so this render-time write can't loop.
+    registry.sync_label(zone_id, label.clone());
 
     // Native drags drive `intent` from dragover; pointer (touch/pen) drags
     // derive a live band from the shared pointer position, so fingers see

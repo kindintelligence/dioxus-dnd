@@ -881,6 +881,174 @@ fn tree_targets_register_as_zones() {
     run(app);
 }
 
+#[derive(Clone, Props)]
+struct DynamicTreeTargetProps {
+    phase: Shared<u8>,
+    drops: Shared<Vec<(u8, TreeDropEvent<&'static str>)>>,
+    runs: Shared<Vec<u8>>,
+}
+
+impl PartialEq for DynamicTreeTargetProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.phase, &other.phase)
+            && Arc::ptr_eq(&self.drops, &other.drops)
+            && Arc::ptr_eq(&self.runs, &other.runs)
+    }
+}
+
+fn dynamic_tree_target_app(props: DynamicTreeTargetProps) -> Element {
+    let phase = *props.phase.lock().unwrap();
+    let drops = props.drops.clone();
+    let probe_runs = props.runs.clone();
+    rsx! {
+        DndProvider::<&'static str> {
+            TreeNodeTarget::<&'static str> {
+                node: if phase == 0 { NodeId(7) } else { NodeId(8) },
+                label: if phase == 0 { "alpha" } else { "beta" },
+                row_height: if phase == 0 { 100.0 } else { 400.0 },
+                accepts: move |(payload, _): (&'static str, DropIntent)| {
+                    phase == 0 || payload == "allowed"
+                },
+                on_drop: move |ev| drops.lock().unwrap().push((phase, ev)),
+                "node"
+            }
+            DynamicTreeTargetProbe {
+                phase,
+                runs: probe_runs,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Props)]
+struct DynamicTreeTargetProbeProps {
+    phase: u8,
+    runs: Shared<Vec<u8>>,
+}
+
+impl PartialEq for DynamicTreeTargetProbeProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.phase == other.phase && Arc::ptr_eq(&self.runs, &other.runs)
+    }
+}
+
+#[allow(non_snake_case)]
+fn DynamicTreeTargetProbe(props: DynamicTreeTargetProbeProps) -> Element {
+    let phase = props.phase;
+    {
+        let mut runs = props.runs.lock().unwrap();
+        if runs.contains(&phase) {
+            return rsx! { div {} };
+        }
+        runs.push(phase);
+    }
+
+    let registry = use_zone_registry::<&'static str>();
+    match phase {
+        0 => {
+            let zones = registry.children_of(None, &"blocked");
+            assert_eq!(zones.len(), 1);
+            assert_eq!(zones[0].label.as_deref(), Some("alpha"));
+            zones[0].on_drop.call(DropOutcome {
+                payload: "first",
+                from: None,
+                to: zones[0].id,
+                effect: DropEffect::Move,
+                mode: DragMode::Keyboard,
+                client: Point::default(),
+                element: Point::new(0.0, 120.0),
+                grab: Point::default(),
+            });
+        }
+        1 => {
+            assert!(
+                registry.children_of(None, &"blocked").is_empty(),
+                "updated accepts callback should reject blocked payloads"
+            );
+            let zones = registry.children_of(None, &"allowed");
+            assert_eq!(zones.len(), 1);
+            assert_eq!(zones[0].label.as_deref(), Some("beta"));
+            zones[0].on_drop.call(DropOutcome {
+                payload: "blocked",
+                from: None,
+                to: zones[0].id,
+                effect: DropEffect::Move,
+                mode: DragMode::Keyboard,
+                client: Point::default(),
+                element: Point::new(0.0, 120.0),
+                grab: Point::default(),
+            });
+            zones[0].on_drop.call(DropOutcome {
+                payload: "allowed",
+                from: None,
+                to: zones[0].id,
+                effect: DropEffect::Move,
+                mode: DragMode::Keyboard,
+                client: Point::default(),
+                element: Point::new(0.0, 120.0),
+                grab: Point::default(),
+            });
+        }
+        other => panic!("unexpected phase {other}"),
+    }
+
+    rsx! { div {} }
+}
+
+#[test]
+fn tree_target_registered_callback_reads_latest_props() {
+    let phase = Arc::new(Mutex::new(0));
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        dynamic_tree_target_app,
+        DynamicTreeTargetProps {
+            phase: phase.clone(),
+            drops: drops.clone(),
+            runs: runs.clone(),
+        },
+    );
+
+    dom.rebuild_in_place();
+    assert_eq!(
+        *drops.lock().unwrap(),
+        vec![(
+            0,
+            TreeDropEvent {
+                payload: "first",
+                target: NodeId(7),
+                intent: DropIntent::After,
+            },
+        )]
+    );
+
+    *phase.lock().unwrap() = 1;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+
+    assert_eq!(
+        *drops.lock().unwrap(),
+        vec![
+            (
+                0,
+                TreeDropEvent {
+                    payload: "first",
+                    target: NodeId(7),
+                    intent: DropIntent::After,
+                },
+            ),
+            (
+                1,
+                TreeDropEvent {
+                    payload: "allowed",
+                    target: NodeId(8),
+                    intent: DropIntent::Into,
+                },
+            ),
+        ]
+    );
+}
+
 // --- state data-attributes (the Tailwind contract) -----------------------
 //
 // State attributes must be *absent* when inactive - not `="false"` - so
