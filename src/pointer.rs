@@ -144,19 +144,21 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
     // Resolve and deliver a drop at `point`. Shared by the normal pointer-up
     // and by the capture-free recovery in `onpointermove`.
     let mut finish_drop = move |point: Point| {
-        // Fast path: cached rects contain the point.
+        // Fast path: the topmost cached rect containing the point, if it
+        // accepts the payload.
         if let Some(target) = registry.hit_test(point) {
-            let dropped = deliver_to(target, point, effect);
-            if !dropped {
-                dnd.cancel();
+            if deliver_to(target, point, effect) {
+                if let Some(h) = &on_drag_end {
+                    h.call(true);
+                }
+                return;
             }
-            if let Some(h) = &on_drag_end {
-                h.call(dropped);
-            }
-            return;
+            // Fell through: the topmost zone rejected the payload. Don't cancel
+            // yet - a zone *under* it (or nearby) may accept. Retry below.
         }
-        // Miss: rects may be stale (scroll/resize mid-drag). Re-measure, then
-        // retry with a closest-center fallback for gutter drops.
+        // Miss or rejection: rects may be stale (scroll/resize mid-drag), or the
+        // geometric top zone rejects. Re-measure, then retry with an
+        // acceptance-aware closest-center fallback for gutter/overlap drops.
         spawn(async move {
             registry.measure_all().await;
             let target = dnd

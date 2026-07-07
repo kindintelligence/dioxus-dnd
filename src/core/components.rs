@@ -203,7 +203,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     registry.refresh_rects();
                     let name = kb_label.clone().unwrap_or_else(|| "item".to_string());
                     dnd.announce(format!(
-                        "Picked up {name}. Use arrow keys to choose a drop target,                          Enter to drop, Escape to cancel."
+                        "Picked up {name}. Use arrow keys to choose a drop target, Enter to drop, Escape to cancel."
                     ));
                     if let Some(h) = &on_drag_start {
                         h.call(());

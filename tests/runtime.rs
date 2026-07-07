@@ -171,6 +171,32 @@ fn registry_spatial_step_accepts_and_hit_test() {
         // outside everything
         assert_eq!(reg.hit_test(Point::new(500.0, 500.0)), None);
 
+        // hit_test_closest is acceptance-aware: a rejecting zone (id 6) on top
+        // of the point is skipped in favor of the accepting zone under it.
+        reg.register(record(
+            6,
+            Some(Rect::new(0.0, 0.0, 40.0, 40.0)),
+            Some(Callback::new(|v: u32| v >= 10)),
+        ));
+        // Topmost by geometry is the rejecting zone 6...
+        assert_eq!(reg.hit_test(Point::new(10.0, 10.0)), Some(ZoneId(6)));
+        // ...but a small payload falls through to accepting zone 5 beneath it.
+        assert_eq!(
+            reg.hit_test_closest(Point::new(10.0, 10.0), &5, 48.0),
+            Some(ZoneId(5))
+        );
+        // A large payload is accepted by zone 6 directly.
+        assert_eq!(
+            reg.hit_test_closest(Point::new(10.0, 10.0), &10, 48.0),
+            Some(ZoneId(6))
+        );
+        // Gutter drop just above zone 1 (outside every rect): the nearest
+        // acceptable center within max_distance wins.
+        assert_eq!(
+            reg.hit_test_closest(Point::new(20.0, 95.0), &5, 48.0),
+            Some(ZoneId(1))
+        );
+
         rsx! { div {} }
     }
     run(app);
@@ -839,6 +865,174 @@ fn board_slot_registers_for_pointer_and_keyboard_paths() {
             },
         ]
     );
+}
+
+// --- Board slots inherit the column's acceptance filter (#4) --------------
+
+/// A `BoardSlot` must honor the enclosing `BoardColumn`'s `accepts` filter, so
+/// a precise-insert respects the same WIP limit as an append. It inherits the
+/// filter via context: the slot is filtered out of the column's acceptable
+/// children for a rejected payload, and its registered drop is a no-op for one.
+#[test]
+fn board_slot_inherits_column_accepts() {
+    let moves: Shared<Vec<MoveEvent<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+    fn app(props: BoardSlotRegistryProps) -> Element {
+        let moves = props.moves.clone();
+        rsx! {
+            DndProvider::<BoardPayload<&'static str>> {
+                BoardColumn::<&'static str> {
+                    id: ZoneId(90),
+                    // WIP-style filter: reject anything labelled "blocked".
+                    accepts: move |p: BoardPayload<&'static str>| p.item != "blocked",
+                    on_move: move |_| {},
+                    BoardSlot::<&'static str> {
+                        column: ZoneId(90),
+                        index: 0,
+                        on_move: move |mv| moves.lock().unwrap().push(mv),
+                        "slot"
+                    }
+                    BoardAcceptsProbe {}
+                }
+            }
+        }
+    }
+
+    #[component]
+    fn BoardAcceptsProbe() -> Element {
+        let registry = use_zone_registry::<BoardPayload<&'static str>>();
+        let ok = BoardPayload { item: "ok", from: ZoneId(10), index: 0 };
+        let blocked = BoardPayload { item: "blocked", from: ZoneId(10), index: 0 };
+
+        // Hover/keyboard filtering: the slot is an acceptable child for an
+        // allowed payload, and filtered out for a rejected one.
+        let accepted = registry.children_of(Some(ZoneId(90)), &ok);
+        assert_eq!(accepted.len(), 1, "slot accepts an allowed payload");
+        assert!(
+            registry.children_of(Some(ZoneId(90)), &blocked).is_empty(),
+            "slot inherits the column's rejection"
+        );
+
+        // Drop delivery: a rejected payload is a no-op; an allowed one moves.
+        let slot = &accepted[0];
+        for (payload, mode) in [(blocked, DragMode::Pointer), (ok, DragMode::Keyboard)] {
+            slot.on_drop.call(DropOutcome {
+                payload,
+                from: Some(ZoneId(10)),
+                to: slot.id,
+                effect: DropEffect::Move,
+                mode,
+                client: Point::default(),
+                element: Point::default(),
+                grab: Point::default(),
+            });
+        }
+        rsx! { div {} }
+    }
+
+    let mut dom = VirtualDom::new_with_props(
+        app,
+        BoardSlotRegistryProps {
+            moves: moves.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+
+    // Only the allowed payload produced a move; the blocked one was dropped.
+    assert_eq!(
+        *moves.lock().unwrap(),
+        vec![MoveEvent {
+            item: "ok",
+            from: (ZoneId(10), 0),
+            to: (ZoneId(90), Some(0)),
+        }]
+    );
+}
+
+// --- Board slots deliver the current index after a prop change (#3) -------
+
+#[derive(Clone, Props)]
+struct DynamicBoardSlotProps {
+    phase: Shared<u8>,
+    moves: Shared<Vec<MoveEvent<&'static str>>>,
+}
+
+impl PartialEq for DynamicBoardSlotProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.phase, &other.phase) && Arc::ptr_eq(&self.moves, &other.moves)
+    }
+}
+
+fn dynamic_board_slot_app(props: DynamicBoardSlotProps) -> Element {
+    let phase = *props.phase.lock().unwrap();
+    let moves = props.moves.clone();
+    // The slot's index is positional; it changes as items shift above it.
+    let index = if phase >= 2 { 3 } else { 1 };
+    rsx! {
+        DndProvider::<BoardPayload<&'static str>> {
+            BoardColumn::<&'static str> {
+                id: ZoneId(90),
+                on_move: move |_| {},
+                BoardSlot::<&'static str> {
+                    column: ZoneId(90),
+                    index,
+                    on_move: move |mv| moves.lock().unwrap().push(mv),
+                    "slot"
+                }
+                DynamicBoardSlotProbe { phase }
+            }
+        }
+    }
+}
+
+#[component]
+fn DynamicBoardSlotProbe(phase: u8) -> Element {
+    let registry = use_zone_registry::<BoardPayload<&'static str>>();
+    if phase == 0 || phase == 2 {
+        let payload = BoardPayload { item: "card", from: ZoneId(10), index: 0 };
+        let slot = registry.children_of(Some(ZoneId(90)), &payload).remove(0);
+        slot.on_drop.call(DropOutcome {
+            payload,
+            from: Some(ZoneId(10)),
+            to: slot.id,
+            effect: DropEffect::Move,
+            mode: DragMode::Keyboard,
+            client: Point::default(),
+            element: Point::default(),
+            grab: Point::default(),
+        });
+    }
+    rsx! { div {} }
+}
+
+/// The registered (pointer/keyboard) drop must target the slot's *current*
+/// index, not the one captured when the zone first registered.
+#[test]
+fn board_slot_registered_drop_reads_latest_index() {
+    let phase = Arc::new(Mutex::new(0u8));
+    let moves = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        dynamic_board_slot_app,
+        DynamicBoardSlotProps {
+            phase: phase.clone(),
+            moves: moves.clone(),
+        },
+    );
+
+    dom.rebuild_in_place();
+    assert_eq!(moves.lock().unwrap().last().unwrap().to, (ZoneId(90), Some(1)));
+
+    // Prop-update pass: no drop delivered, just re-render with the new index.
+    *phase.lock().unwrap() = 1;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    assert_eq!(moves.lock().unwrap().len(), 1);
+
+    // Deliver again: the drop now targets the updated index, not the stale one.
+    *phase.lock().unwrap() = 2;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    assert_eq!(moves.lock().unwrap().last().unwrap().to, (ZoneId(90), Some(3)));
 }
 
 // --- Tree targets join the zone registry ---------------------------------

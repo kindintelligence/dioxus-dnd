@@ -7,8 +7,8 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 
 use crate::core::{
-    element_point, use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone,
-    Point, Rect, ZoneId, ZoneRecord,
+    client_point, element_point, use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome,
+    ParentZone, Point, Rect, ZoneId, ZoneRecord,
 };
 
 /// A payload dropped at a position on the canvas.
@@ -66,7 +66,10 @@ pub struct Bounds {
 
 impl Bounds {
     pub fn clamp(&self, p: Point) -> Point {
-        Point::new(p.x.clamp(0.0, self.width), p.y.clamp(0.0, self.height))
+        Point::new(
+            clamp_axis(p.x, 0.0, self.width),
+            clamp_axis(p.y, 0.0, self.height),
+        )
     }
 
     /// Clamp a top-left position so an item of `width` × `height` stays fully
@@ -125,11 +128,16 @@ pub fn canvas_keyboard_pointer(policy: CanvasKeyboardPlacement, element: Point) 
 }
 
 fn clamp_axis(v: f64, min: f64, max: f64) -> f64 {
-    if min > max {
-        min
-    } else {
-        v.clamp(min, max)
+    // std `f64::clamp` panics when a bound is NaN or when min > max. Treat a
+    // NaN bound as "unconstrained" on that side (rather than snapping the item
+    // to the origin), and an inverted *finite* range - e.g. an item larger than
+    // the container - pins to `min`, matching KeepInside's oversized behavior.
+    let lo = if min.is_nan() { f64::NEG_INFINITY } else { min };
+    let hi = if max.is_nan() { f64::INFINITY } else { max };
+    if lo > hi {
+        return if min.is_nan() { v } else { min };
     }
+    v.clamp(lo, hi)
 }
 
 /// A canvas that reports drop positions.
@@ -255,7 +263,17 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
             },
             ondrop: move |evt: DragEvent| {
                 evt.prevent_default();
-                let pointer = element_point(&evt);
+                // `element_point` is relative to the *deepest* element under
+                // the cursor, which is a child node when the drop lands on an
+                // already-placed item - not the canvas. Derive canvas-relative
+                // coordinates from the client point and the measured canvas
+                // origin instead, matching the pointer/keyboard path
+                // (`DropOutcome::element = point - rect.origin`). Fall back to
+                // `element_point` only before the rect has been measured.
+                let pointer = match *rect.peek() {
+                    Some(r) => client_point(&evt) - r.origin(),
+                    None => element_point(&evt),
+                };
                 let grab = dnd.grab();
                 if let Some((payload, _)) = dnd.take() {
                     place(payload, pointer, grab);
@@ -291,6 +309,24 @@ mod tests {
         let corrected = Point::new(107.0, 46.0) - Point::new(9.0, 8.0);
         let positioned = b.clamp(g.snap(corrected));
         assert_eq!(positioned, Point::new(100.0, 40.0));
+    }
+
+    #[test]
+    fn clamp_does_not_panic_on_non_finite_bounds() {
+        // Caller-supplied NaN/inf bounds must not panic (std `f64::clamp`
+        // would). A NaN bound is treated as unconstrained on that axis, and a
+        // negative position still can't go below the origin.
+        let b = Bounds {
+            width: f64::NAN,
+            height: f64::INFINITY,
+        };
+        let p = b.clamp(Point::new(25.0, 25.0));
+        assert_eq!((p.x, p.y), (25.0, 25.0), "unconstrained, unchanged");
+        let p = b.clamp(Point::new(-10.0, -10.0));
+        assert_eq!((p.x, p.y), (0.0, 0.0), "still floored at the origin");
+        // clamp_item is NaN-guarded via clamp_axis too.
+        let q = b.clamp_item(Point::new(-3.0, 10.0), 5.0, 5.0);
+        assert_eq!(q.x, 0.0);
     }
 
     #[test]
