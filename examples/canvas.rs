@@ -16,13 +16,14 @@ use dioxus::prelude::*;
 use dioxus_dnd::prelude::*;
 
 const CANVAS: ZoneId = ZoneId(42);
-const CANVAS_W: f64 = 720.0;
-const CANVAS_H: f64 = 420.0;
+const CANVAS_W: f64 = 960.0;
+const CANVAS_H: f64 = 560.0;
 const GRID: f64 = 24.0;
 const MIN_ZOOM: f64 = 0.6;
 const MAX_ZOOM: f64 = 1.8;
 const ZOOM_STEP: f64 = 0.2;
 const PAN_STEP: f64 = 48.0;
+const KEYBOARD_FIXED: Point = Point { x: 744.0, y: 408.0 };
 
 fn main() {
     dioxus::launch(App);
@@ -104,24 +105,24 @@ fn App() -> Element {
             Node {
                 id: 1,
                 kind: NodeKind::Source,
-                x: 48.0,
-                y: 120.0,
+                x: 64.0,
+                y: 176.0,
                 width: 160.0,
                 height: 128.0,
             },
             Node {
                 id: 2,
                 kind: NodeKind::Transform,
-                x: 280.0,
-                y: 120.0,
+                x: 384.0,
+                y: 176.0,
                 width: 190.0,
                 height: 128.0,
             },
             Node {
                 id: 3,
                 kind: NodeKind::Output,
-                x: 528.0,
-                y: 120.0,
+                x: 720.0,
+                y: 176.0,
                 width: 150.0,
                 height: 128.0,
             },
@@ -143,6 +144,7 @@ fn App() -> Element {
     });
     let mut last_drop = use_signal(|| "Drag a node or palette item onto the canvas.".to_string());
     let mut viewport = use_signal(CanvasViewport::default);
+    let mut keyboard_policy = use_signal(CanvasKeyboardPlacement::default);
 
     let mut place = move |drop: CanvasDrop<NodeDrag>| {
         let view = viewport();
@@ -218,6 +220,8 @@ fn App() -> Element {
     };
     let zoom = viewport().zoom;
     let pan = viewport().pan;
+    let keyboard = keyboard_policy();
+    let keyboard_preview = keyboard_preview_point(keyboard);
     let mut set_zoom = move |next: f64| {
         let view = viewport();
         viewport.set(CanvasViewport::new(view.pan, next).clamped_zoom(MIN_ZOOM, MAX_ZOOM));
@@ -260,82 +264,129 @@ fn App() -> Element {
                 }
                 DndProvider::<NodeDrag> {
                     LiveRegion::<NodeDrag> {}
-                    div { class: "grid min-h-[520px] gap-4 lg:grid-cols-[240px_minmax(0,1fr)_220px]",
-                        aside { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
-                            h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Blocks" }
-                            div { class: "space-y-2",
-                                for kind in [NodeKind::Source, NodeKind::Transform, NodeKind::Output] {
-                                    PointerDraggable::<NodeDrag> {
-                                        payload: NodeDrag::New(kind),
-                                        label: format!("New {}", kind.label()),
-                                        class: format!(
-                                            "cursor-grab select-none rounded-md border px-3 py-3 text-sm transition hover:border-white/30 data-dragging:opacity-50 {}",
-                                            kind.palette_tone()
-                                        ),
-                                        "{kind.label()}"
+                    div { class: "grid min-h-[680px] gap-4 xl:grid-cols-[280px_minmax(0,1fr)]",
+                        aside { class: "space-y-4 xl:sticky xl:top-4 xl:self-start",
+                            section { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                                h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Blocks" }
+                                div { class: "space-y-2",
+                                    for kind in [NodeKind::Source, NodeKind::Transform, NodeKind::Output] {
+                                        PointerDraggable::<NodeDrag> {
+                                            payload: NodeDrag::New(kind),
+                                            label: format!("New {}", kind.label()),
+                                            class: format!(
+                                                "cursor-grab select-none rounded-md border px-3 py-3 text-sm transition hover:border-white/30 data-dragging:opacity-50 {}",
+                                                kind.palette_tone()
+                                            ),
+                                            "{kind.label()}"
+                                        }
                                     }
                                 }
                             }
-                            p { class: "mt-4 text-xs leading-5 text-neutral-500",
-                                "Palette drops use the same headless canvas path as moved nodes."
-                            }
-                        }
 
-                        section { class: "overflow-x-auto rounded-lg border border-white/10 bg-neutral-900 p-3 shadow-2xl shadow-black/30",
-                            div { class: "mb-3 flex items-center justify-between gap-3 px-1",
-                                div {
-                                    h2 { class: "text-sm font-semibold text-neutral-200", "Builder" }
-                                    p { class: "text-xs text-neutral-500", "{last_drop}" }
-                                }
-                                div { class: "flex flex-wrap items-center justify-end gap-1 rounded-md border border-white/10 bg-black/30 p-1 text-xs",
+                            section { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                                h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "View" }
+                                div { class: "grid grid-cols-4 gap-1 text-xs",
                                     button {
-                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        class: "rounded border border-white/10 px-2 py-1.5 text-neutral-300 hover:bg-white/10",
                                         aria_label: "Pan canvas left",
                                         onclick: move |_| pan_by(Point::new(PAN_STEP, 0.0)),
                                         "←"
                                     }
                                     button {
-                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        class: "rounded border border-white/10 px-2 py-1.5 text-neutral-300 hover:bg-white/10",
                                         aria_label: "Pan canvas up",
                                         onclick: move |_| pan_by(Point::new(0.0, PAN_STEP)),
                                         "↑"
                                     }
                                     button {
-                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        class: "rounded border border-white/10 px-2 py-1.5 text-neutral-300 hover:bg-white/10",
                                         aria_label: "Pan canvas down",
                                         onclick: move |_| pan_by(Point::new(0.0, -PAN_STEP)),
                                         "↓"
                                     }
                                     button {
-                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        class: "rounded border border-white/10 px-2 py-1.5 text-neutral-300 hover:bg-white/10",
                                         aria_label: "Pan canvas right",
                                         onclick: move |_| pan_by(Point::new(-PAN_STEP, 0.0)),
                                         "→"
                                     }
                                     button {
-                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        class: "rounded border border-white/10 px-2 py-1.5 text-neutral-300 hover:bg-white/10",
                                         aria_label: "Zoom canvas out",
                                         onclick: move |_| set_zoom(zoom - ZOOM_STEP),
                                         "−"
                                     }
-                                    span { class: "min-w-12 px-1 text-center text-neutral-400", "{zoom * 100.0:.0}%" }
+                                    span { class: "col-span-2 rounded border border-white/10 px-2 py-1.5 text-center text-neutral-400", "{zoom * 100.0:.0}%" }
                                     button {
-                                        class: "rounded px-2 py-1 text-neutral-300 hover:bg-white/10",
+                                        class: "rounded border border-white/10 px-2 py-1.5 text-neutral-300 hover:bg-white/10",
                                         aria_label: "Zoom canvas in",
                                         onclick: move |_| set_zoom(zoom + ZOOM_STEP),
                                         "+"
                                     }
                                     button {
-                                        class: "rounded bg-white px-2 py-1 font-medium text-neutral-950",
+                                        class: "col-span-4 rounded bg-white px-2 py-1.5 font-medium text-neutral-950",
                                         aria_label: "Reset canvas view",
                                         onclick: reset_view,
                                         "Reset"
                                     }
                                 }
                             }
+
+                            section { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                                h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Keyboard" }
+                                div {
+                                    class: "grid grid-cols-3 gap-1 text-xs",
+                                    role: "group",
+                                    aria_label: "Keyboard placement",
+                                    for (policy, label) in [
+                                        (CanvasKeyboardPlacement::Center, "Center"),
+                                        (CanvasKeyboardPlacement::Origin, "Origin"),
+                                        (CanvasKeyboardPlacement::Fixed(KEYBOARD_FIXED), "Fixed"),
+                                    ] {
+                                        button {
+                                            class: keyboard_policy_class(keyboard == policy),
+                                            aria_label: format!("Keyboard placement {label}"),
+                                            aria_pressed: if keyboard == policy { "true" } else { "false" },
+                                            onclick: move |_| keyboard_policy.set(policy),
+                                            "{label}"
+                                        }
+                                    }
+                                }
+                            }
+
+                            section { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                                h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Inspector" }
+                                dl { class: "space-y-3 text-xs",
+                                    div {
+                                        dt { class: "text-neutral-500", "Nodes" }
+                                        dd { class: "mt-1 text-lg font-semibold text-neutral-100", "{nodes.read().len()}" }
+                                    }
+                                    div {
+                                        dt { class: "text-neutral-500", "Connections" }
+                                        dd { class: "mt-1 text-lg font-semibold text-neutral-100", "{edges.read().len()}" }
+                                    }
+                                    div {
+                                        dt { class: "text-neutral-500", "View" }
+                                        dd { class: "mt-1 leading-5 text-neutral-300",
+                                            "{zoom * 100.0:.0}% at ({pan.x:.0}, {pan.y:.0})"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        main { class: "min-w-0 space-y-4",
+                            section { class: "overflow-x-auto rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                                div { class: "mb-3 flex items-center justify-between gap-3 px-1",
+                                div {
+                                    h2 { class: "text-sm font-semibold text-neutral-200", "Builder" }
+                                    p { class: "text-xs text-neutral-500", "{last_drop}" }
+                                }
+                            }
                             CanvasDropZone::<NodeDrag> {
                                 id: CANVAS,
                                 label: "Workbench",
+                                keyboard,
                                 on_drop: move |drop| place(drop),
                                 class: "relative overflow-hidden rounded-md border border-white/10 bg-[#080808] bg-[radial-gradient(rgba(255,255,255,0.15)_1px,transparent_1px)] shadow-inner shadow-black data-active:border-white/40",
                                 style: format!(
@@ -355,6 +406,15 @@ fn App() -> Element {
                                         }
                                     }
                                 }
+                                div {
+                                    class: "pointer-events-none absolute z-30",
+                                    "data-keyboard-placement-preview": "true",
+                                    style: format!("left: {}px; top: {}px;", keyboard_preview.x, keyboard_preview.y),
+                                    div { class: "h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-amber-200 bg-amber-300/25 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" }
+                                    div { class: "absolute left-3 top-3 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-neutral-950 shadow-lg shadow-black/40",
+                                        "{keyboard_policy_label(keyboard)}"
+                                    }
+                                }
                                 for node in nodes.read().clone() {
                                     CanvasNode {
                                         node,
@@ -366,32 +426,7 @@ fn App() -> Element {
                                 }
                             }
                         }
-                        aside { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
-                            h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Inspector" }
-                            dl { class: "space-y-3 text-xs",
-                                div {
-                                    dt { class: "text-neutral-500", "Nodes" }
-                                    dd { class: "mt-1 text-lg font-semibold text-neutral-100", "{nodes.read().len()}" }
-                                }
-                                div {
-                                    dt { class: "text-neutral-500", "Connections" }
-                                    dd { class: "mt-1 text-lg font-semibold text-neutral-100", "{edges.read().len()}" }
-                                }
-                                div {
-                                    dt { class: "text-neutral-500", "View" }
-                                    dd { class: "mt-1 leading-5 text-neutral-300",
-                                        "{zoom * 100.0:.0}% at ({pan.x:.0}, {pan.y:.0})"
-                                    }
-                                }
-                                div {
-                                    dt { class: "text-neutral-500", "Model" }
-                                    dd { class: "mt-1 leading-5 text-neutral-300",
-                                        "Edges and handles are example state. The canvas primitive only reports drops."
-                                    }
-                                }
-                            }
-                        }
-                        section { class: "lg:col-span-3 rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                        section { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
                             div { class: "mb-3 flex items-center justify-between gap-3",
                                 div {
                                     h2 { class: "text-sm font-semibold text-neutral-200", "Native boundary" }
@@ -424,6 +459,7 @@ fn App() -> Element {
                                     }
                                 }
                             }
+                        }
                         }
                     }
                     DragOverlay::<NodeDrag> {
@@ -616,6 +652,30 @@ fn constrained(position: Point, width: f64, height: f64) -> Point {
         height: CANVAS_H,
     }
     .clamp_item(position, width, height)
+}
+
+fn keyboard_policy_class(active: bool) -> &'static str {
+    if active {
+        "rounded bg-white px-2 py-1 font-medium text-neutral-950"
+    } else {
+        "rounded px-2 py-1 text-neutral-300 hover:bg-white/10"
+    }
+}
+
+fn keyboard_preview_point(policy: CanvasKeyboardPlacement) -> Point {
+    match policy {
+        CanvasKeyboardPlacement::Center => Point::new(CANVAS_W / 2.0, CANVAS_H / 2.0),
+        CanvasKeyboardPlacement::Origin => Point::default(),
+        CanvasKeyboardPlacement::Fixed(point) => point,
+    }
+}
+
+fn keyboard_policy_label(policy: CanvasKeyboardPlacement) -> &'static str {
+    match policy {
+        CanvasKeyboardPlacement::Center => "Center",
+        CanvasKeyboardPlacement::Origin => "Origin",
+        CanvasKeyboardPlacement::Fixed(_) => "Fixed",
+    }
 }
 
 fn boundary_label(drop: &ExternalDrop) -> String {

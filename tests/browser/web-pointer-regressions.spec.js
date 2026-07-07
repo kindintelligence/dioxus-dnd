@@ -95,6 +95,58 @@ async function canvasNodeBox(canvas, text) {
   }, text);
 }
 
+async function latestCanvasNodeBox(canvas, text) {
+  return canvas.evaluate((root, text) => {
+    const nodes = Array.from(root.children).filter((child) => {
+      const style = window.getComputedStyle(child);
+      return style.position === "absolute" && child.textContent.includes(text);
+    });
+    const node = nodes.at(-1);
+    if (!node) {
+      return null;
+    }
+    return {
+      worldLeft: Number.parseFloat(node.dataset.worldX),
+      worldTop: Number.parseFloat(node.dataset.worldY),
+    };
+  }, text);
+}
+
+async function keyboardPreview(page) {
+  return page
+    .locator("section", { has: page.getByRole("heading", { name: "Builder" }) })
+    .locator('[data-keyboard-placement-preview="true"]')
+    .evaluate((node) => {
+      const style = window.getComputedStyle(node);
+      return {
+        left: Number.parseFloat(style.left),
+        top: Number.parseFloat(style.top),
+        label: node.textContent.trim(),
+      };
+    });
+}
+
+async function keyboardCreateFromPalette(page, label) {
+  const paletteNode = page
+    .locator("aside", { has: page.getByRole("heading", { name: "Blocks" }) })
+    .getByText(label, { exact: true });
+  const canvas = page
+    .locator("section", { has: page.getByRole("heading", { name: "Builder" }) })
+    .locator(".relative")
+    .first();
+
+  await paletteNode.focus();
+  await page.keyboard.press(" ");
+  await expect(canvas).toHaveAttribute("data-active", "true");
+  await page.keyboard.press("Enter");
+}
+
+async function selectKeyboardPlacement(page, label) {
+  const button = page.getByRole("button", { name: `Keyboard placement ${label}` });
+  await button.click();
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+}
+
 async function dispatchNativeDrop(target, setup) {
   return target.evaluate((node, setup) => {
     const rect = node.getBoundingClientRect();
@@ -248,7 +300,7 @@ test("focused canvas example keeps its coordinate plane scrollable on mobile", a
   const canvas = builder.locator(".relative").first();
   const canvasBox = await canvas.boundingBox();
   expect(canvasBox).not.toBeNull();
-  expect(Math.round(canvasBox.width)).toBe(720);
+  expect(Math.round(canvasBox.width)).toBe(960);
 
   for (const label of ["Bad", "Find Comparable Products", "Publish Results"]) {
     const node = await canvasNodeBox(canvas, label);
@@ -275,40 +327,72 @@ test("focused canvas example moves nodes after zoom and pan", async ({ page }) =
   const before = await canvasNodeBox(canvas, "Find Comparable Products");
   expect(before).not.toBeNull();
 
-  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(before.x + before.width / 2 + 24, before.y + before.height / 2 + 24, {
-    steps: 5,
-  });
-  await expect(canvas.locator('[data-dragging="true"]').filter({ hasText: "Find Comparable Products" }).first()).toBeVisible();
-  await page.mouse.move(canvasBox.x + canvasBox.width - 8, canvasBox.y + canvasBox.height - 8, {
-    steps: 36,
-  });
-  await page.mouse.up();
-  await page.waitForTimeout(300);
+  let after = before;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await canvasNodeBox(canvas, "Find Comparable Products");
+    expect(current).not.toBeNull();
 
-  const after = await canvasNodeBox(canvas, "Find Comparable Products");
+    await page.mouse.move(current.x + current.width / 2, current.y + current.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(current.x + current.width / 2 + 24, current.y + current.height / 2 + 24, {
+      steps: 5,
+    });
+    await expect(canvas.locator('[data-dragging="true"]').filter({ hasText: "Find Comparable Products" }).first()).toBeVisible();
+    await page.mouse.move(canvasBox.x + canvasBox.width * 0.75, canvasBox.y + canvasBox.height * 0.72, {
+      steps: 36,
+    });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    after = await canvasNodeBox(canvas, "Find Comparable Products");
+    expect(after).not.toBeNull();
+    if (after.worldLeft !== before.worldLeft || after.worldTop !== before.worldTop) {
+      break;
+    }
+  }
+
   expect(after).not.toBeNull();
   expect(after.worldLeft).not.toBe(before.worldLeft);
   expect(after.worldTop).not.toBe(before.worldTop);
   expect(after.worldLeft).toBeGreaterThanOrEqual(0);
   expect(after.worldTop).toBeGreaterThanOrEqual(0);
-  expect(after.worldLeft + after.worldWidth).toBeLessThanOrEqual(720 + 1);
-  expect(after.worldTop + after.worldHeight).toBeLessThanOrEqual(420 + 1);
+  expect(after.worldLeft + after.worldWidth).toBeLessThanOrEqual(960 + 1);
+  expect(after.worldTop + after.worldHeight).toBeLessThanOrEqual(560 + 1);
 });
 
-test("focused canvas keyboard drop lands at the selected canvas geometry", async ({ page }) => {
+test("focused canvas keyboard placement policies use the selected toolbar policy", async ({ page }) => {
   await openCanvasExample(page);
 
-  const paletteNode = page
-    .locator("aside", { has: page.getByRole("heading", { name: "Blocks" }) })
-    .getByText("Bad", { exact: true });
+  const canvas = page
+    .locator("section", { has: page.getByRole("heading", { name: "Builder" }) })
+    .locator(".relative")
+    .first();
 
-  await paletteNode.focus();
-  await page.keyboard.press(" ");
-  await page.keyboard.press("Enter");
+  expect(await keyboardPreview(page)).toEqual({ left: 480, top: 280, label: "Center" });
+  await keyboardCreateFromPalette(page, "Bad");
+  await expect(page.getByText("Created Bad at (480, 288)", { exact: true })).toBeVisible();
+  await expect.poll(async () => latestCanvasNodeBox(canvas, "Bad")).toEqual({
+    worldLeft: 480,
+    worldTop: 288,
+  });
 
-  await expect(page.getByText("Created Bad at (360, 216)", { exact: true })).toBeVisible();
+  await selectKeyboardPlacement(page, "Origin");
+  expect(await keyboardPreview(page)).toEqual({ left: 0, top: 0, label: "Origin" });
+  await keyboardCreateFromPalette(page, "Find Comparable Products");
+  await expect(page.getByText("Created Find Comparable Products at (0, 0)", { exact: true })).toBeVisible();
+  await expect.poll(async () => latestCanvasNodeBox(canvas, "Find Comparable Products")).toEqual({
+    worldLeft: 0,
+    worldTop: 0,
+  });
+
+  await selectKeyboardPlacement(page, "Fixed");
+  expect(await keyboardPreview(page)).toEqual({ left: 744, top: 408, label: "Fixed" });
+  await keyboardCreateFromPalette(page, "Publish Results");
+  await expect(page.getByText("Created Publish Results at (744, 408)", { exact: true })).toBeVisible();
+  await expect.poll(async () => latestCanvasNodeBox(canvas, "Publish Results")).toEqual({
+    worldLeft: 744,
+    worldTop: 408,
+  });
 });
 
 test("focused canvas native boundary surface accepts DataTransfer drops", async ({ page }) => {

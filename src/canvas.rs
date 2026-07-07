@@ -7,8 +7,8 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 
 use crate::core::{
-    element_point, use_dnd, use_zone_id, use_zone_registry, DropOutcome, ParentZone, Point, Rect,
-    ZoneId, ZoneRecord,
+    element_point, use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone,
+    Point, Rect, ZoneId, ZoneRecord,
 };
 
 /// A payload dropped at a position on the canvas.
@@ -36,6 +36,21 @@ impl SnapGrid {
             (p.y / self.0).round() * self.0,
         )
     }
+}
+
+/// Where a keyboard-driven canvas drop should place its pointer.
+///
+/// Pointer and native drops always use their event geometry. This policy is
+/// only applied when the completed drop came from keyboard interaction.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum CanvasKeyboardPlacement {
+    /// Use the selected zone geometry supplied by core keyboard navigation.
+    #[default]
+    Center,
+    /// Place at the canvas origin.
+    Origin,
+    /// Place at a fixed canvas-local point.
+    Fixed(Point),
 }
 
 /// Clamp reported top-left positions into `0..=width` × `0..=height`.
@@ -100,6 +115,15 @@ pub fn canvas_position(
     position
 }
 
+/// Resolve the canvas-local pointer for a keyboard drop.
+pub fn canvas_keyboard_pointer(policy: CanvasKeyboardPlacement, element: Point) -> Point {
+    match policy {
+        CanvasKeyboardPlacement::Center => element,
+        CanvasKeyboardPlacement::Origin => Point::default(),
+        CanvasKeyboardPlacement::Fixed(point) => point,
+    }
+}
+
 fn clamp_axis(v: f64, min: f64, max: f64) -> f64 {
     if min > max {
         min
@@ -128,6 +152,9 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     /// Clamp the corrected top-left position into these bounds.
     #[props(default)]
     bounds: Option<Bounds>,
+    /// Placement policy for keyboard-driven canvas drops.
+    #[props(default)]
+    keyboard: CanvasKeyboardPlacement,
     /// Announced to screen readers when a keyboard drag targets the canvas.
     #[props(default)]
     label: Option<String>,
@@ -146,11 +173,15 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     // and same-frame drops observe the latest geometry.
     let mut snap_now = use_signal(|| snap);
     let mut bounds_now = use_signal(|| bounds);
+    let mut keyboard_now = use_signal(|| keyboard);
     if *snap_now.peek() != snap {
         snap_now.set(snap);
     }
     if *bounds_now.peek() != bounds {
         bounds_now.set(bounds);
+    }
+    if *keyboard_now.peek() != keyboard {
+        keyboard_now.set(keyboard);
     }
 
     // Turn a corrected drop at `pointer` (canvas-relative) into a CanvasDrop.
@@ -172,7 +203,12 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     let mounted = use_signal(|| None::<Rc<MountedData>>);
     let rect = use_signal(|| None::<Rect>);
     let registered_drop = Callback::new(move |o: DropOutcome<T>| {
-        place(o.payload, o.element, o.grab);
+        let pointer = if o.mode == DragMode::Keyboard {
+            canvas_keyboard_pointer(*keyboard_now.peek(), o.element)
+        } else {
+            o.element
+        };
+        place(o.payload, pointer, o.grab);
     });
     use_hook(|| {
         registry.register(ZoneRecord {
@@ -301,6 +337,33 @@ mod tests {
         );
 
         assert_eq!(p, Point::new(100.0, 40.0));
+    }
+
+    #[test]
+    fn canvas_keyboard_pointer_uses_center_element_by_default() {
+        assert_eq!(
+            canvas_keyboard_pointer(CanvasKeyboardPlacement::default(), Point::new(40.0, 20.0)),
+            Point::new(40.0, 20.0)
+        );
+    }
+
+    #[test]
+    fn canvas_keyboard_pointer_can_use_origin() {
+        assert_eq!(
+            canvas_keyboard_pointer(CanvasKeyboardPlacement::Origin, Point::new(40.0, 20.0)),
+            Point::default()
+        );
+    }
+
+    #[test]
+    fn canvas_keyboard_pointer_can_use_fixed_point() {
+        assert_eq!(
+            canvas_keyboard_pointer(
+                CanvasKeyboardPlacement::Fixed(Point::new(12.0, 18.0)),
+                Point::new(40.0, 20.0),
+            ),
+            Point::new(12.0, 18.0)
+        );
     }
 
     #[test]

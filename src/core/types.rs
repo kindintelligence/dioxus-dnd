@@ -198,6 +198,8 @@ pub struct DropOutcome<T> {
     pub to: ZoneId,
     /// The effect the drag was started with.
     pub effect: DropEffect,
+    /// Which input path produced this completed drop.
+    pub mode: DragMode,
     /// Pointer position in client (viewport) coordinates at drop time.
     pub client: Point,
     /// Pointer position relative to the drop zone's element.

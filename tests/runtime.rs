@@ -506,6 +506,7 @@ fn DynamicCanvasProbe(phase: u8) -> Element {
                 from: None,
                 to: ZoneId(7),
                 effect: DropEffect::Move,
+                mode: DragMode::Pointer,
                 client: Point::new(107.0, 46.0),
                 element: Point::new(107.0, 46.0),
                 grab: Point::new(9.0, 8.0),
@@ -545,6 +546,199 @@ fn canvas_dropzone_registered_callback_reads_latest_snap_and_bounds() {
     assert_eq!(
         *drops.lock().unwrap(),
         vec![Point::new(100.0, 40.0), Point::new(60.0, 50.0)]
+    );
+}
+
+#[derive(Clone, Props)]
+struct KeyboardPolicyCanvasProps {
+    policy: CanvasKeyboardPlacement,
+    mode: DragMode,
+    drops: Shared<Vec<Point>>,
+}
+
+impl PartialEq for KeyboardPolicyCanvasProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.policy == other.policy
+            && self.mode == other.mode
+            && Arc::ptr_eq(&self.drops, &other.drops)
+    }
+}
+
+fn keyboard_policy_canvas_app(props: KeyboardPolicyCanvasProps) -> Element {
+    let drops = props.drops.clone();
+    rsx! {
+        DndProvider::<u8> {
+            CanvasDropZone::<u8> {
+                id: ZoneId(77),
+                keyboard: props.policy,
+                on_drop: move |drop: CanvasDrop<u8>| drops.lock().unwrap().push(drop.position),
+                KeyboardPolicyProbe { mode: props.mode }
+            }
+        }
+    }
+}
+
+#[component]
+fn KeyboardPolicyProbe(mode: DragMode) -> Element {
+    let reg = use_zone_registry::<u8>();
+    reg.get(ZoneId(77))
+        .expect("canvas zone registered")
+        .on_drop
+        .call(DropOutcome {
+            payload: 1,
+            from: None,
+            to: ZoneId(77),
+            effect: DropEffect::Move,
+            mode,
+            client: Point::new(100.0, 80.0),
+            element: Point::new(80.0, 60.0),
+            grab: Point::default(),
+        });
+    rsx! { div {} }
+}
+
+fn run_keyboard_policy(policy: CanvasKeyboardPlacement, mode: DragMode) -> Vec<Point> {
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        keyboard_policy_canvas_app,
+        KeyboardPolicyCanvasProps {
+            policy,
+            mode,
+            drops: drops.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+    let out = drops.lock().unwrap().clone();
+    out
+}
+
+#[test]
+fn canvas_keyboard_policy_defaults_to_core_center_geometry() {
+    assert_eq!(
+        run_keyboard_policy(CanvasKeyboardPlacement::default(), DragMode::Keyboard),
+        vec![Point::new(80.0, 60.0)]
+    );
+}
+
+#[test]
+fn canvas_keyboard_policy_can_use_origin() {
+    assert_eq!(
+        run_keyboard_policy(CanvasKeyboardPlacement::Origin, DragMode::Keyboard),
+        vec![Point::default()]
+    );
+}
+
+#[test]
+fn canvas_keyboard_policy_can_use_fixed_point() {
+    assert_eq!(
+        run_keyboard_policy(
+            CanvasKeyboardPlacement::Fixed(Point::new(24.0, 36.0)),
+            DragMode::Keyboard,
+        ),
+        vec![Point::new(24.0, 36.0)]
+    );
+}
+
+#[test]
+fn canvas_keyboard_policy_does_not_affect_pointer_drops() {
+    assert_eq!(
+        run_keyboard_policy(CanvasKeyboardPlacement::Origin, DragMode::Pointer),
+        vec![Point::new(80.0, 60.0)]
+    );
+}
+
+#[test]
+fn canvas_keyboard_policy_does_not_affect_native_outcomes() {
+    assert_eq!(
+        run_keyboard_policy(CanvasKeyboardPlacement::Origin, DragMode::Native),
+        vec![Point::new(80.0, 60.0)]
+    );
+}
+
+#[derive(Clone, Props)]
+struct DynamicKeyboardPolicyProps {
+    phase: Shared<u8>,
+    drops: Shared<Vec<Point>>,
+}
+
+impl PartialEq for DynamicKeyboardPolicyProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.phase, &other.phase) && Arc::ptr_eq(&self.drops, &other.drops)
+    }
+}
+
+fn dynamic_keyboard_policy_app(props: DynamicKeyboardPolicyProps) -> Element {
+    let phase = *props.phase.lock().unwrap();
+    let drops = props.drops.clone();
+    let keyboard = match phase {
+        0 => CanvasKeyboardPlacement::Center,
+        1 => CanvasKeyboardPlacement::Origin,
+        _ => CanvasKeyboardPlacement::Fixed(Point::new(24.0, 36.0)),
+    };
+
+    rsx! {
+        DndProvider::<u8> {
+            CanvasDropZone::<u8> {
+                id: ZoneId(78),
+                keyboard,
+                on_drop: move |drop: CanvasDrop<u8>| drops.lock().unwrap().push(drop.position),
+                DynamicKeyboardPolicyProbe { phase }
+            }
+        }
+    }
+}
+
+#[component]
+fn DynamicKeyboardPolicyProbe(phase: u8) -> Element {
+    let reg = use_zone_registry::<u8>();
+    if phase == 0 || phase == 2 {
+        reg.get(ZoneId(78))
+            .expect("canvas zone registered")
+            .on_drop
+            .call(DropOutcome {
+                payload: 1,
+                from: None,
+                to: ZoneId(78),
+                effect: DropEffect::Move,
+                mode: DragMode::Keyboard,
+                client: Point::new(100.0, 80.0),
+                element: Point::new(80.0, 60.0),
+                grab: Point::default(),
+            });
+    }
+    rsx! { div {} }
+}
+
+#[test]
+fn canvas_dropzone_registered_callback_reads_latest_keyboard_policy() {
+    let phase = Arc::new(Mutex::new(0));
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        dynamic_keyboard_policy_app,
+        DynamicKeyboardPolicyProps {
+            phase: phase.clone(),
+            drops: drops.clone(),
+        },
+    );
+
+    dom.rebuild_in_place();
+    assert_eq!(*drops.lock().unwrap(), vec![Point::new(80.0, 60.0)]);
+
+    *phase.lock().unwrap() = 1;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    assert_eq!(
+        drops.lock().unwrap().len(),
+        1,
+        "prop update pass should not deliver a drop"
+    );
+
+    *phase.lock().unwrap() = 2;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    assert_eq!(
+        *drops.lock().unwrap(),
+        vec![Point::new(80.0, 60.0), Point::new(24.0, 36.0)]
     );
 }
 
