@@ -142,14 +142,16 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
 
     // Mirror `snap`/`bounds` into signals so the registry callback - which is
     // registered once (first render) - reads the *current* values, not the
-    // ones captured at mount. Without this, runtime changes to snap/bounds
-    // would apply to native mouse drops but not pointer/keyboard drops.
+    // ones captured at mount. Keep them current during render so child probes
+    // and same-frame drops observe the latest geometry.
     let mut snap_now = use_signal(|| snap);
     let mut bounds_now = use_signal(|| bounds);
-    use_effect(use_reactive!(|snap, bounds| {
+    if *snap_now.peek() != snap {
         snap_now.set(snap);
+    }
+    if *bounds_now.peek() != bounds {
         bounds_now.set(bounds);
-    }));
+    }
 
     // Turn a corrected drop at `pointer` (canvas-relative) into a CanvasDrop.
     let place = move |payload: T, pointer: Point, grab: Point| {

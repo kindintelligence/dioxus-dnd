@@ -5,6 +5,9 @@
 
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::*;
+use std::sync::{Arc, Mutex};
+
+type Shared<T> = Arc<Mutex<T>>;
 
 /// Build a one-shot headless app and return its SSR output.
 fn run(app: fn() -> Element) -> String {
@@ -443,6 +446,106 @@ fn canvas_dropzone_registers_with_label() {
         rsx! { div {} }
     }
     run(app);
+}
+
+#[derive(Clone, Props)]
+struct DynamicCanvasProps {
+    phase: Shared<u8>,
+    drops: Shared<Vec<Point>>,
+}
+
+impl PartialEq for DynamicCanvasProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.phase, &other.phase) && Arc::ptr_eq(&self.drops, &other.drops)
+    }
+}
+
+fn dynamic_canvas_app(props: DynamicCanvasProps) -> Element {
+    let phase = *props.phase.lock().unwrap();
+    let drops = props.drops.clone();
+    let snap = if phase == 0 {
+        SnapGrid(10.0)
+    } else {
+        SnapGrid(25.0)
+    };
+    let bounds = if phase == 0 {
+        Bounds {
+            width: 100.0,
+            height: 50.0,
+        }
+    } else {
+        Bounds {
+            width: 60.0,
+            height: 60.0,
+        }
+    };
+
+    rsx! {
+        DndProvider::<u8> {
+            CanvasDropZone::<u8> {
+                id: ZoneId(7),
+                snap,
+                bounds,
+                on_drop: move |drop: CanvasDrop<u8>| drops.lock().unwrap().push(drop.position),
+                DynamicCanvasProbe { phase }
+            }
+        }
+    }
+}
+
+#[component]
+fn DynamicCanvasProbe(phase: u8) -> Element {
+    let reg = use_zone_registry::<u8>();
+
+    if phase == 0 || phase == 2 {
+        reg.get(ZoneId(7))
+            .expect("canvas zone registered")
+            .on_drop
+            .call(DropOutcome {
+                payload: 1,
+                from: None,
+                to: ZoneId(7),
+                effect: DropEffect::Move,
+                client: Point::new(107.0, 46.0),
+                element: Point::new(107.0, 46.0),
+                grab: Point::new(9.0, 8.0),
+            });
+    }
+
+    rsx! { div {} }
+}
+
+#[test]
+fn canvas_dropzone_registered_callback_reads_latest_snap_and_bounds() {
+    let phase = Arc::new(Mutex::new(0));
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        dynamic_canvas_app,
+        DynamicCanvasProps {
+            phase: phase.clone(),
+            drops: drops.clone(),
+        },
+    );
+
+    dom.rebuild_in_place();
+    assert_eq!(*drops.lock().unwrap(), vec![Point::new(100.0, 40.0)]);
+
+    *phase.lock().unwrap() = 1;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    assert_eq!(
+        drops.lock().unwrap().len(),
+        1,
+        "prop update pass should not deliver a drop"
+    );
+
+    *phase.lock().unwrap() = 2;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    assert_eq!(
+        *drops.lock().unwrap(),
+        vec![Point::new(100.0, 40.0), Point::new(60.0, 50.0)]
+    );
 }
 
 // --- Tree targets join the zone registry ---------------------------------
