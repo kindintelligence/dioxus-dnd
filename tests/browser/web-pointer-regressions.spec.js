@@ -256,6 +256,20 @@ test("focused canvas example keeps its coordinate plane scrollable on mobile", a
   }
 });
 
+test("focused canvas keyboard drop lands at the selected canvas geometry", async ({ page }) => {
+  await openCanvasExample(page);
+
+  const paletteNode = page
+    .locator("aside", { has: page.getByRole("heading", { name: "Blocks" }) })
+    .getByText("Bad", { exact: true });
+
+  await paletteNode.focus();
+  await page.keyboard.press(" ");
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByText("Created Bad at (360, 216)", { exact: true })).toBeVisible();
+});
+
 test("native DataTransfer paths handle files, external drops, and drag-out", async ({ page }) => {
   await openGallery(page);
 
