@@ -31,10 +31,12 @@ pub mod prelude {
     };
     pub use crate::core::{
         apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point,
-        effective_effect, element_point, transition, use_dnd, use_dnd_provider, use_zone_id,
-        use_zone_registry, DndContext, DndProvider, DragId, DragInputMode, DragMode, DragModifier,
-        DragOverlay, DragState, Draggable, DropEffect, DropOutcome, DropZone, GestureEffect,
-        GestureEvent, GesturePhase, ModifierCtx, Point, Rect, ZoneId, ZoneRecord, ZoneRegistry,
+        effective_effect, element_point, screen_delta_to_world, screen_to_world, transition,
+        use_dnd, use_dnd_provider, use_zone_id, use_zone_registry, world_delta_to_screen,
+        world_to_screen, CanvasViewport, DndContext, DndProvider, DragId, DragInputMode, DragMode,
+        DragModifier, DragOverlay, DragState, Draggable, DropEffect, DropOutcome, DropZone,
+        GestureEffect, GestureEvent, GesturePhase, ModifierCtx, Point, Rect, ZoneId, ZoneRecord,
+        ZoneRegistry,
     };
     pub use crate::dragout::{ExternalDragSource, OutboundContent};
     pub use crate::external::{classify, ExternalDrop, ExternalDropZone, ExternalPayload};

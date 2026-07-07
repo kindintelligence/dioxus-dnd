@@ -10,6 +10,7 @@ pub(crate) mod platform;
 pub mod registry;
 pub mod state;
 pub mod types;
+pub mod viewport;
 
 pub use components::{DndProvider, DragOverlay, Draggable, DropZone, ParentZone};
 pub use hooks::{
@@ -22,4 +23,7 @@ pub use registry::{ZoneRecord, ZoneRegistry};
 pub use state::{DndContext, DragState};
 pub use types::{
     effective_effect, DragId, DragInputMode, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId,
+};
+pub use viewport::{
+    screen_delta_to_world, screen_to_world, world_delta_to_screen, world_to_screen, CanvasViewport,
 };

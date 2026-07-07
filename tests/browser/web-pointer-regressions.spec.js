@@ -87,6 +87,10 @@ async function canvasNodeBox(canvas, text) {
       height: rect.height,
       left: Number.parseFloat(style.left),
       top: Number.parseFloat(style.top),
+      worldLeft: Number.parseFloat(node.dataset.worldX),
+      worldTop: Number.parseFloat(node.dataset.worldY),
+      worldWidth: Number.parseFloat(node.dataset.worldWidth),
+      worldHeight: Number.parseFloat(node.dataset.worldHeight),
     };
   }, text);
 }
@@ -254,6 +258,43 @@ test("focused canvas example keeps its coordinate plane scrollable on mobile", a
     expect(node.left + node.width).toBeLessThanOrEqual(canvasBox.width + 1);
     expect(node.top + node.height).toBeLessThanOrEqual(canvasBox.height + 1);
   }
+});
+
+test("focused canvas example moves nodes after zoom and pan", async ({ page }) => {
+  await openCanvasExample(page);
+
+  const builder = page.locator("section", { has: page.getByRole("heading", { name: "Builder" }) });
+  const canvas = builder.locator(".relative").first();
+
+  await page.getByLabel("Zoom canvas in").click();
+  await page.getByLabel("Pan canvas left").click();
+
+  const canvasBox = await canvas.boundingBox();
+  expect(canvasBox).not.toBeNull();
+
+  const before = await canvasNodeBox(canvas, "Find Comparable Products");
+  expect(before).not.toBeNull();
+
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(before.x + before.width / 2 + 24, before.y + before.height / 2 + 24, {
+    steps: 5,
+  });
+  await expect(canvas.locator('[data-dragging="true"]').filter({ hasText: "Find Comparable Products" }).first()).toBeVisible();
+  await page.mouse.move(canvasBox.x + canvasBox.width - 8, canvasBox.y + canvasBox.height - 8, {
+    steps: 36,
+  });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  const after = await canvasNodeBox(canvas, "Find Comparable Products");
+  expect(after).not.toBeNull();
+  expect(after.worldLeft).not.toBe(before.worldLeft);
+  expect(after.worldTop).not.toBe(before.worldTop);
+  expect(after.worldLeft).toBeGreaterThanOrEqual(0);
+  expect(after.worldTop).toBeGreaterThanOrEqual(0);
+  expect(after.worldLeft + after.worldWidth).toBeLessThanOrEqual(720 + 1);
+  expect(after.worldTop + after.worldHeight).toBeLessThanOrEqual(420 + 1);
 });
 
 test("focused canvas keyboard drop lands at the selected canvas geometry", async ({ page }) => {
