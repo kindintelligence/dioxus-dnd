@@ -49,6 +49,20 @@ pub struct BoardPayload<T> {
     pub index: usize,
 }
 
+/// Context a [`BoardColumn`] provides so nested [`BoardSlot`]s inherit its
+/// acceptance filter (WIP limits) with no extra wiring - a precise-insert slot
+/// then honors the same limit as an append to the column.
+struct ColumnAccepts<T: Clone + 'static>(Option<Callback<BoardPayload<T>, bool>>);
+
+// Manual impls: `derive` would demand `T: Copy`, but the field is just a
+// `Callback` handle (Copy) wrapped in an `Option`.
+impl<T: Clone + 'static> Clone for ColumnAccepts<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: Clone + 'static> Copy for ColumnAccepts<T> {}
+
 /// A completed cross-container move.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoveEvent<T> {
@@ -132,6 +146,9 @@ pub fn BoardColumn<T: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
+    // Share the column's acceptance filter with any nested `BoardSlot`s so
+    // precise inserts respect the same WIP limit as an append.
+    use_context_provider(|| ColumnAccepts(accepts));
     rsx! {
         DropZone::<BoardPayload<T>> {
             id,
@@ -177,16 +194,44 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
     let mounted = use_signal(|| None::<Rc<MountedData>>);
     let rect = use_signal(|| None);
+    // The enclosing column's acceptance filter (WIP limits), inherited via
+    // context so a precise-insert honors the same limit as an append. The
+    // `Callback` is a stable handle whose closure reads live state at call
+    // time, so capturing it once (below) still sees the current column.
+    let column_accepts = try_use_context::<ColumnAccepts<T>>().and_then(|c| c.0);
+    let accepts = move |p: BoardPayload<T>| column_accepts.map(|cb| cb.call(p)).unwrap_or(true);
+
+    // `index` is positional - it shifts as items move above this slot - so the
+    // registered (pointer/keyboard) drop must read the *current* props, not the
+    // ones captured when the zone first registered. Mirror them through signals.
+    // (The native `ondrop` below closes over the live props each render already.)
+    let mut column_now = use_signal(|| column);
+    let mut index_now = use_signal(|| index);
+    let mut on_move_now = use_signal(|| on_move);
+    if *column_now.peek() != column {
+        column_now.set(column);
+    }
+    if *index_now.peek() != index {
+        index_now.set(index);
+    }
+    if *on_move_now.peek() != on_move {
+        on_move_now.set(on_move);
+    }
+
     let slot_label = label
         .clone()
         .or_else(|| Some(format!("Insert at position {index}")));
 
+    let registered_accepts = Callback::new(move |p: BoardPayload<T>| accepts(p));
     let registered_drop = Callback::new(move |outcome: DropOutcome<BoardPayload<T>>| {
         let p = outcome.payload;
-        on_move.call(MoveEvent {
+        if !accepts(p.clone()) {
+            return;
+        }
+        on_move_now.peek().call(MoveEvent {
             item: p.item,
             from: (p.from, p.index),
-            to: (column, Some(index)),
+            to: (*column_now.peek(), Some(*index_now.peek())),
         });
     });
     let registered_label = slot_label.clone();
@@ -196,7 +241,7 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
             parent,
             label: registered_label.clone(),
             on_drop: registered_drop,
-            accepts: None,
+            accepts: Some(registered_accepts),
             mounted,
             rect,
         });
@@ -206,16 +251,19 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     });
     registry.sync_label(zone_id, slot_label);
 
+    // Does the in-flight payload pass the inherited column filter?
+    let acceptable = move || dnd.payload().map(accepts).unwrap_or(false);
+
     rsx! {
         div {
-            "data-active": if dnd.dragging() { "true" },
-            "data-over": if dnd.over() == Some(zone_id) { "true" },
+            "data-active": if acceptable() { "true" },
+            "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
             onmounted: move |evt: Event<MountedData>| {
                 let mut mounted = mounted;
                 mounted.set(Some(evt.data()));
             },
             ondragover: move |evt: DragEvent| {
-                if dnd.dragging() {
+                if acceptable() {
                     evt.prevent_default();
                     evt.data_transfer().set_drop_effect(DropEffect::Move.as_str());
                 }
@@ -225,6 +273,9 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
                 move |evt: DragEvent| {
                     evt.prevent_default();
                     evt.stop_propagation();
+                    if !acceptable() {
+                        return;
+                    }
                     if let Some((p, _)) = dnd.take() {
                         on_move.call(MoveEvent {
                             item: p.item,

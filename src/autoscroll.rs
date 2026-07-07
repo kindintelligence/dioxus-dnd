@@ -44,26 +44,40 @@ pub fn edge_delta(
     speed: f64,
     axis: ScrollAxis,
 ) -> (f64, f64) {
+    // Only scroll while the pointer is within the container. Under pointer
+    // capture the container keeps receiving (bubbled) pointermove events even
+    // when the cursor is far outside it; without this gate the delta pins to
+    // full `speed` and the container scrolls forever. A pointer right at the
+    // edge still scrolls - `contains` is edge-inclusive.
+    if !rect.contains(pos) {
+        return (0.0, 0.0);
+    }
     let ramp = |dist_into_band: f64| (dist_into_band / threshold.max(1.0)).clamp(0.0, 1.0) * speed;
+    // Scroll toward whichever edge is nearer on this axis. Choosing the nearer
+    // edge (rather than a plain `if left else if right`) means a container
+    // narrower than `2 * threshold` - where the pointer is within the band of
+    // both edges at once - still scrolls both ways instead of the near edge
+    // always winning.
+    let edge = |lo: f64, hi: f64| -> f64 {
+        if lo <= hi {
+            if lo < threshold {
+                -ramp(threshold - lo)
+            } else {
+                0.0
+            }
+        } else if hi < threshold {
+            ramp(threshold - hi)
+        } else {
+            0.0
+        }
+    };
     let mut dx = 0.0;
     let mut dy = 0.0;
     if matches!(axis, ScrollAxis::X | ScrollAxis::Both) {
-        let from_left = pos.x - rect.x;
-        let from_right = rect.x + rect.width - pos.x;
-        if from_left < threshold {
-            dx = -ramp(threshold - from_left);
-        } else if from_right < threshold {
-            dx = ramp(threshold - from_right);
-        }
+        dx = edge(pos.x - rect.x, rect.x + rect.width - pos.x);
     }
     if matches!(axis, ScrollAxis::Y | ScrollAxis::Both) {
-        let from_top = pos.y - rect.y;
-        let from_bottom = rect.y + rect.height - pos.y;
-        if from_top < threshold {
-            dy = -ramp(threshold - from_top);
-        } else if from_bottom < threshold {
-            dy = ramp(threshold - from_bottom);
-        }
+        dy = edge(pos.y - rect.y, rect.y + rect.height - pos.y);
     }
     (dx, dy)
 }
@@ -191,6 +205,33 @@ mod tests {
         // axis filtering: Y-only ignores horizontal proximity
         let (dx, _) = edge_delta(Point::new(1.0, 200.0), rect, 48.0, 24.0, ScrollAxis::Y);
         assert_eq!(dx, 0.0);
+    }
+
+    #[test]
+    fn no_scroll_when_pointer_leaves_the_container() {
+        // Under pointer capture a bubbled move can report a cursor far outside
+        // the container; that must not scroll (previously it pinned to full
+        // speed forever).
+        let rect = Rect::new(0.0, 0.0, 200.0, 400.0);
+        assert_eq!(
+            edge_delta(Point::new(100.0, 900.0), rect, 48.0, 24.0, ScrollAxis::Both),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            edge_delta(Point::new(-50.0, 200.0), rect, 48.0, 24.0, ScrollAxis::Both),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn narrow_container_scrolls_toward_the_nearer_edge() {
+        // 40px wide, band 48: the pointer is within both edges' bands, so the
+        // nearer edge must win rather than the left always winning.
+        let rect = Rect::new(0.0, 0.0, 40.0, 400.0);
+        let (dx, _) = edge_delta(Point::new(35.0, 200.0), rect, 48.0, 24.0, ScrollAxis::X);
+        assert!(dx > 0.0, "near the right edge should scroll right, got {dx}");
+        let (dx, _) = edge_delta(Point::new(5.0, 200.0), rect, 48.0, 24.0, ScrollAxis::X);
+        assert!(dx < 0.0, "near the left edge should scroll left, got {dx}");
     }
 
     #[test]

@@ -158,6 +158,25 @@ pub fn pointer_target(
     }
 }
 
+/// The bounding box of all measured rows - the list's occupied area. Used to
+/// decide whether a pointer release landed on the list at all: a drop outside
+/// this box commits no reorder, mirroring the native path (where a release off
+/// the rows fires `dragend`/cancel rather than `drop`). `None` when no rows are
+/// measured yet.
+pub(crate) fn list_bounds(rects: &HashMap<usize, Rect>) -> Option<Rect> {
+    let mut it = rects.values();
+    let first = it.next()?;
+    let (mut min_x, mut min_y) = (first.x, first.y);
+    let (mut max_x, mut max_y) = (first.x + first.width, first.y + first.height);
+    for r in it {
+        min_x = min_x.min(r.x);
+        min_y = min_y.min(r.y);
+        max_x = max_x.max(r.x + r.width);
+        max_y = max_y.max(r.y + r.height);
+    }
+    Some(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
+}
+
 /// Layout direction of the list - decides whether the midpoint test uses
 /// the Y axis (vertical lists) or the X axis (horizontal ones).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -294,8 +313,18 @@ pub fn SortableList(
             }
             GestureEffect::Drop { at } => {
                 let from_opt = *drag_from.peek();
-                let to = from_opt
-                    .and_then(|from| pointer_target(&rects.peek(), from, *over.peek(), at, axis));
+                // A release outside the list's bounds commits no reorder, the
+                // same way the native path cancels a drop that lands off the
+                // rows. Inside the bounds, snap to the hovered target as usual.
+                let to = {
+                    let rects_ref = rects.peek();
+                    if list_bounds(&rects_ref).map(|b| b.contains(at)).unwrap_or(false) {
+                        from_opt
+                            .and_then(|from| pointer_target(&rects_ref, from, *over.peek(), at, axis))
+                    } else {
+                        None
+                    }
+                };
                 // Clear ALL drag state BEFORE notifying: `on_sort` mutates the
                 // caller's list, which re-renders this component; observing a
                 // still-active drag would re-apply the preview to the already-
@@ -668,6 +697,20 @@ mod pointer_target_tests {
             .collect();
         let t = pointer_target(&r, 0, None, Point::new(100.0, 20.0), Axis::Horizontal);
         assert_eq!(t, Some(1)); // past x = 90 midpoint of tile 1
+    }
+
+    #[test]
+    fn list_bounds_covers_all_rows_and_excludes_outside() {
+        let r = rows(); // three 40px rows spanning y 0..120, x 0..200
+        let b = list_bounds(&r).unwrap();
+        assert_eq!(b, Rect::new(0.0, 0.0, 200.0, 120.0));
+        // a release inside the span (even in a gap) is on the list
+        assert!(b.contains(Point::new(50.0, 60.0)));
+        // a release well outside is not - the Drop arm cancels there
+        assert!(!b.contains(Point::new(500.0, 500.0)));
+        assert!(!b.contains(Point::new(50.0, 130.0)));
+        // no measured rows: no bounds
+        assert_eq!(list_bounds(&HashMap::new()), None);
     }
 }
 

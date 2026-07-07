@@ -9,6 +9,21 @@ async function sortableRows(page) {
   return sortable.locator(":scope > div").last().locator(":scope > div");
 }
 
+async function sortableRowTexts(page) {
+  return (await sortableRows(page)).allInnerTexts();
+}
+
+async function gridTileTexts(page) {
+  const grid = await section(page, "Grid");
+  return grid.evaluate((root) => {
+    const container = Array.from(root.querySelectorAll("div")).find(
+      (node) => window.getComputedStyle(node).display === "grid",
+    );
+    if (!container) return [];
+    return Array.from(container.children).map((child) => child.textContent.trim());
+  });
+}
+
 async function elementBox(scope, text, position = null) {
   return scope.evaluate(
     (root, { text, position }) => {
@@ -162,6 +177,27 @@ async function selectKeyboardPlacement(page, label) {
   const button = page.getByRole("button", { name: `Keyboard placement ${label}` });
   await button.click();
   await expect(button).toHaveAttribute("aria-pressed", "true");
+}
+
+async function openRegressions(page) {
+  await page.goto("http://127.0.0.1:8083/dioxus-dnd/", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Regressions" })).toBeVisible({ timeout: 60_000 });
+}
+
+async function dispatchNativeDropAt(target, setup, clientX, clientY) {
+  return target.evaluate(
+    (node, { setup, clientX, clientY }) => {
+      const dataTransfer = new DataTransfer();
+      for (const [type, value] of Object.entries(setup.data || {})) {
+        dataTransfer.setData(type, value);
+      }
+      const init = { bubbles: true, cancelable: true, clientX, clientY, dataTransfer };
+      for (const type of ["dragenter", "dragover", "drop"]) {
+        node.dispatchEvent(new DragEvent(type, init));
+      }
+    },
+    { setup, clientX, clientY },
+  );
 }
 
 async function dispatchNativeDrop(target, setup) {
@@ -518,4 +554,185 @@ test("native DataTransfer paths handle files, external drops, and drag-out", asy
     text: "https://dioxuslabs.com",
     html: '<a href="https://dioxuslabs.com">Dioxus</a>',
   });
+});
+
+// A pointer drag released outside the list/grid must commit no reorder, the
+// same way the native path cancels a drop that lands off the rows. (Regression
+// for the pointer path previously snapping to the last-hovered target.)
+test("sortable release outside the list commits no reorder", async ({ page }) => {
+  await openGallery(page);
+
+  const before = await sortableRowTexts(page);
+  expect(before).toEqual(["Research", "Draft", "Review", "Revise", "Publish"]);
+
+  const sortable = await section(page, "Sortable list");
+  const source = await elementBox(sortable, "Research");
+  expect(source).not.toBeNull();
+
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  // cross the threshold and hover a real target...
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height * 1.6, { steps: 6 });
+  // ...then wander far below every row and release there.
+  await page.mouse.move(source.x + source.width / 2, source.y + 1200, { steps: 24 });
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  expect(await sortableRowTexts(page)).toEqual(before);
+});
+
+test("sortable release inside the list still reorders (control)", async ({ page }) => {
+  await openGallery(page);
+
+  const sortable = await section(page, "Sortable list");
+  const source = await elementBox(sortable, "Research");
+  const target = await elementBox(sortable, "Revise");
+  expect(source).not.toBeNull();
+  expect(target).not.toBeNull();
+
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height * 1.6, { steps: 6 });
+  await page.mouse.move(source.x + source.width / 2, target.y + target.height * 0.75, { steps: 24 });
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  // Research moved down past Revise.
+  expect(await sortableRowTexts(page)).toEqual(["Draft", "Review", "Revise", "Research", "Publish"]);
+});
+
+test("grid release outside the tiles commits no reorder", async ({ page }) => {
+  await openGallery(page);
+
+  const before = await gridTileTexts(page);
+  expect(before.slice(0, 3)).toEqual(["Tile 1", "Tile 2", "Tile 3"]);
+
+  const grid = await section(page, "Grid");
+  const source = await elementBox(grid, "Tile 1");
+  expect(source).not.toBeNull();
+
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(source.x + source.width * 1.6, source.y + source.height / 2, { steps: 6 });
+  // release far to the right of the whole grid
+  await page.mouse.move(source.x + 2000, source.y + source.height / 2, { steps: 24 });
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  expect(await gridTileTexts(page)).toEqual(before);
+});
+
+// Autoscroll must not run away: once the pointer leaves the container, scrolling
+// stops even though (under pointer capture) move events keep bubbling in.
+test("autoscroll stops when the pointer leaves the container", async ({ page }) => {
+  const demo = await openShowcaseSortable(page);
+  const scroll = demo.locator(".list-scroll");
+  await expect(scroll).toBeVisible();
+  await scroll.scrollIntoViewIfNeeded();
+  await scroll.evaluate((node) => {
+    node.scrollTop = 0;
+  });
+
+  const box = await scroll.boundingBox();
+  expect(box).not.toBeNull();
+
+  // Start a real pointer drag from the grip.
+  const handle = scroll.locator("[data-sort-handle]").first();
+  const handleBox = await handle.boundingBox();
+  expect(handleBox).not.toBeNull();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    handleBox.x + handleBox.width / 2 + 24,
+    handleBox.y + handleBox.height / 2 + 24,
+    { steps: 5 },
+  );
+  await expect(
+    scroll.locator('[data-dragging="true"]').filter({ hasText: "Unload the truck" }).first(),
+  ).toBeVisible();
+
+  // Move the pointer far ABOVE the container (outside it) and keep nudging it
+  // there. Pre-fix this pinned the delta to full speed and scrolled anyway.
+  const outsideX = box.x + box.width / 2;
+  const outsideY = box.y - 200;
+  for (let i = 0; i < 12; i += 1) {
+    await page.mouse.move(outsideX, outsideY - (i % 2), { steps: 2 });
+    await page.waitForTimeout(25);
+  }
+  expect(await scroll.evaluate((node) => node.scrollTop)).toBe(0);
+
+  await page.mouse.up();
+});
+
+// A pointer drop over a zone that rejects the payload must fall through to an
+// accepting zone stacked underneath, not cancel. (Regression for finish_drop
+// cancelling when the geometric-topmost zone rejected.)
+test("pointer drop falls through a rejecting zone to the accepting one under it", async ({ page }) => {
+  await openRegressions(page);
+
+  const status = page.locator("#overlap-status");
+  await expect(status).toHaveAttribute("data-landed", "none");
+
+  const source = page.getByText("drag me", { exact: true });
+  const stack = page.locator("#overlap-stack");
+  const sb = await source.boundingBox();
+  const tb = await stack.boundingBox();
+  expect(sb).not.toBeNull();
+  expect(tb).not.toBeNull();
+
+  await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2 + 12, { steps: 5 });
+  await page.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 20 });
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+
+  // The drop reached the accepting zone under the rejecting one.
+  await expect(status).toHaveAttribute("data-landed", "accept", { timeout: 5_000 });
+});
+
+// A native drop landing on a child node inside a canvas must report
+// canvas-relative coordinates, not coordinates relative to the child element.
+test("canvas native drop over a child reports canvas-relative coordinates", async ({ page }) => {
+  await openRegressions(page);
+
+  const canvas = page.locator("#canvas-child").locator("xpath=ancestor::div[1]");
+  const child = page.locator("#canvas-child");
+  const out = page.locator("#canvas-drop-pointer");
+
+  const canvasBox = await canvas.boundingBox();
+  const childBox = await child.boundingBox();
+  expect(canvasBox).not.toBeNull();
+  expect(childBox).not.toBeNull();
+
+  // Where we'll drop: the centre of the child (which sits at ~200,120 inside
+  // the canvas). In canvas coordinates that is child-centre minus canvas origin.
+  const dropX = childBox.x + childBox.width / 2;
+  const dropY = childBox.y + childBox.height / 2;
+  const expectedX = dropX - canvasBox.x;
+  const expectedY = dropY - canvasBox.y;
+
+  // Start a native HTML5 drag on the source, then drop onto the child.
+  const source = page.getByText("native source", { exact: true });
+  await source.evaluate((node) => {
+    node.dispatchEvent(
+      new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }),
+    );
+  });
+  await dispatchNativeDropAt(child, { data: { "text/plain": "x" } }, dropX, dropY);
+
+  await expect(out).toHaveAttribute("data-set", "true", { timeout: 5_000 });
+  const got = await out.evaluate((n) => ({
+    x: Number.parseFloat(n.dataset.x),
+    y: Number.parseFloat(n.dataset.y),
+  }));
+
+  // Canvas-relative (~240, ~135), NOT child-relative (~40, ~15).
+  expect(Math.abs(got.x - expectedX)).toBeLessThan(2);
+  expect(Math.abs(got.y - expectedY)).toBeLessThan(2);
+  expect(got.x).toBeGreaterThan(150);
+  expect(got.y).toBeGreaterThan(90);
 });

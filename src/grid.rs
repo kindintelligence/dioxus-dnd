@@ -42,7 +42,7 @@ use crate::core::{
     platform, transition, DragInputMode, GestureEffect, GestureEvent, GesturePhase, Rect,
 };
 use crate::pointer::pointer_client;
-use crate::sortable::{ReorderMode, SortEvent};
+use crate::sortable::{list_bounds, ReorderMode, SortEvent};
 
 /// `(row, col)` of a flat index in a grid with `cols` columns.
 pub fn cell_of(index: usize, cols: usize) -> (usize, usize) {
@@ -163,15 +163,27 @@ pub fn SortableGrid(
                 over.set(next);
             }
         }
-        GestureEffect::Drop { .. } => {
-            if let (Some(from), Some(to)) = (*drag_from.peek(), *over.peek()) {
-                if from != to {
-                    on_sort.call(SortEvent { from, to });
-                }
-            }
+        GestureEffect::Drop { at } => {
+            // A release outside the grid's tile bounds commits no reorder,
+            // matching the native path (a drop off the tiles cancels). Inside,
+            // use the hovered tile.
+            let inside = list_bounds(&rects.peek())
+                .map(|b| b.contains(at))
+                .unwrap_or(false);
+            let pair = (*drag_from.peek(), *over.peek());
+            // Clear all drag state BEFORE notifying: `on_sort` mutates the
+            // caller's list and re-renders this component, and observing a
+            // still-active drag mid-apply is the hazard SortableList documents.
             press_from.set(None);
             drag_from.set(None);
             over.set(None);
+            if inside {
+                if let (Some(from), Some(to)) = pair {
+                    if from != to {
+                        on_sort.call(SortEvent { from, to });
+                    }
+                }
+            }
         }
         GestureEffect::Abort => {
             press_from.set(None);
@@ -273,6 +285,13 @@ pub fn SortableGrid(
                         );
                     },
                     onpointermove: move |evt: PointerEvent| {
+                        // Gate on the input mode like every other handler, so
+                        // Native/Hybrid-mouse drags don't run the synthetic
+                        // machine on each move (the container listener already
+                        // tracks the drag; this per-tile one is a fallback).
+                        if !input.uses_pointer(&evt.pointer_type()) {
+                            return;
+                        }
                         feed(
                             GestureEvent::Move { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                             Some(ix),

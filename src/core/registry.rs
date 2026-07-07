@@ -184,12 +184,25 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             .map(|z| z.id)
     }
 
-    /// Like [`Self::hit_test`], but when no zone contains the point, falls
-    /// back to the acceptable zone whose center is nearest - within
-    /// `max_distance` CSS px. Friendlier for imprecise (touch) drops that
-    /// land in the gutter between zones.
+    /// Like [`Self::hit_test`], but acceptance-aware: it returns the topmost
+    /// zone that both contains the point **and** accepts `payload`, and when no
+    /// such zone contains the point, falls back to the acceptable zone whose
+    /// center is nearest - within `max_distance` CSS px. Skipping zones that
+    /// reject the payload lets a drop land on an accepting zone sitting *under*
+    /// a rejecting (or decorative) one, and is friendlier for imprecise (touch)
+    /// drops that land in the gutter between zones.
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
-        if let Some(hit) = self.hit_test(point) {
+        if let Some(hit) = self
+            .zones
+            .peek()
+            .iter()
+            .rev()
+            .find(|z| {
+                z.accepts_payload(payload)
+                    && (*z.rect.peek()).map(|r| r.contains(point)).unwrap_or(false)
+            })
+            .map(|z| z.id)
+        {
             return Some(hit);
         }
         let mut best: Option<(ZoneId, f64)> = None;

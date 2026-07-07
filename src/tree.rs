@@ -105,6 +105,10 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     /// The node this row represents.
     node: NodeId,
     /// Height of the row in pixels, used for the before/into/after bands.
+    /// Keep this close to the actual rendered row height: keyboard drops resolve
+    /// their intent from the measured row center against this value, so a large
+    /// mismatch (e.g. wrapped/custom content taller than the default) can bias a
+    /// keyboard drop toward `After`/`Before` instead of `Into`.
     #[props(default = 28.0)]
     row_height: f64,
     /// Reject drops (typically: cycle prevention). Receives `(payload, intent)`.

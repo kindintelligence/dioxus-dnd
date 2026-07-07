@@ -14,11 +14,21 @@ use crate::core::{client_point, element_point, Point};
 
 /// Content the browser handed us from an external drag, best-effort decoded
 /// in order of specificity.
+///
+/// **Untrusted input.** These payloads come from outside your app and are
+/// fully attacker-controlled. Treat them like any other external data:
+/// - [`ExternalPayload::Html`] is arbitrary markup - sanitize it before
+///   rendering via `dangerous_inner_html` (raw insertion is stored/reflected
+///   XSS).
+/// - [`ExternalPayload::Url`] may carry a `javascript:` or `data:` scheme -
+///   scheme-check before navigating to it or building an anchor from it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExternalPayload {
     /// `text/uri-list` - links dragged from the URL bar, bookmarks, other tabs.
+    /// May use any scheme; validate before use.
     Url(String),
     /// `text/html` - rich content (e.g. a selection dragged from a page).
+    /// Arbitrary untrusted markup; sanitize before rendering.
     Html(String),
     /// `text/plain`.
     Text(String),

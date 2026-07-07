@@ -55,15 +55,26 @@ impl OutboundContent {
         match self {
             OutboundContent::Text(t) => vec![("text/plain".into(), t.clone())],
             OutboundContent::Url { url, title } => {
+                // `text/uri-list` / `text/plain` are plain-text formats, so the
+                // raw url is written verbatim. Only the `text/html` anchor is an
+                // injection surface: escape both fields for their context, and
+                // omit the `href` for dangerous schemes (javascript:/data:/…)
+                // so a hostile url can't carry an active link into the target.
                 let mut out = vec![
                     ("text/uri-list".into(), url.clone()),
                     ("text/plain".into(), url.clone()),
                 ];
                 if let Some(title) = title {
-                    out.push((
-                        "text/html".into(),
-                        format!(r#"<a href="{url}">{title}</a>"#),
-                    ));
+                    let anchor = if is_safe_href(url) {
+                        format!(
+                            r#"<a href="{}">{}</a>"#,
+                            escape_html_attr(url),
+                            escape_html_text(title)
+                        )
+                    } else {
+                        format!("<a>{}</a>", escape_html_text(title))
+                    };
+                    out.push(("text/html".into(), anchor));
                 }
                 out
             }
@@ -77,6 +88,35 @@ impl OutboundContent {
             OutboundContent::Custom(pairs) => pairs.clone(),
         }
     }
+}
+
+/// Escape a string for use inside a double-quoted HTML attribute value.
+fn escape_html_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Escape a string for use as HTML text content.
+fn escape_html_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Is this url safe to place in an anchor `href`? Rejects the schemes that can
+/// execute script when the dragged HTML lands in another app
+/// (`javascript:`, `data:`, `vbscript:`), matching leniently: leading ASCII
+/// whitespace and control characters are ignored and the scheme is
+/// case-insensitive, mirroring how browsers resolve a url.
+fn is_safe_href(url: &str) -> bool {
+    let trimmed = url.trim_start_matches(|c: char| c.is_ascii_whitespace() || c.is_control());
+    let lower = trimmed.to_ascii_lowercase();
+    !["javascript:", "data:", "vbscript:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
 }
 
 /// Makes its children draggable *out of the app*, populating the native
@@ -129,5 +169,41 @@ mod tests {
 
         // no title → no html entry
         assert_eq!(OutboundContent::url("https://x.y", None).entries().len(), 2);
+    }
+
+    #[test]
+    fn url_html_entry_escapes_attribute_and_text() {
+        // A url with a query string (`&`) and a title with markup must not
+        // break or inject into the generated anchor.
+        let c = OutboundContent::url(
+            "https://x.y/?a=1&b=\"2\"",
+            Some("A & B <img src=x>"),
+        );
+        let html = &c.entries()[2].1;
+        assert_eq!(
+            html,
+            r#"<a href="https://x.y/?a=1&amp;b=&quot;2&quot;">A &amp; B &lt;img src=x&gt;</a>"#
+        );
+        // Plain-text formats still carry the raw url.
+        assert_eq!(c.entries()[1].1, "https://x.y/?a=1&b=\"2\"");
+    }
+
+    #[test]
+    fn url_html_entry_drops_href_for_dangerous_schemes() {
+        for bad in [
+            "javascript:alert(1)",
+            "  JavaScript:alert(1)",
+            "data:text/html,<script>",
+            "vbscript:msgbox",
+        ] {
+            let c = OutboundContent::url(bad, Some("click"));
+            let html = &c.entries()[2].1;
+            assert!(!html.contains("href="), "{bad} kept an href: {html}");
+            assert_eq!(html, "<a>click</a>");
+        }
+        // Ordinary schemes keep the href.
+        assert!(OutboundContent::url("mailto:a@b.c", Some("mail")).entries()[2]
+            .1
+            .contains("href="));
     }
 }

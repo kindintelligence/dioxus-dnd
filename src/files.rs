@@ -49,6 +49,13 @@ pub enum FileRejection {
 }
 
 /// Declarative acceptance rules for dropped files.
+///
+/// **Advisory, not a security boundary.** These rules match on the browser-
+/// and OS-reported name, content type and size, all of which are
+/// attacker-controllable: a `.exe` can be renamed `photo.png` and report
+/// `content_type: "image/png"`, and `size` is self-reported. Use the filter
+/// for UX (rejecting obviously wrong drops early), but validate the actual
+/// bytes server-side or via content sniffing before trusting a file.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FileFilter {
     extensions: Vec<String>,
@@ -112,7 +119,11 @@ impl FileFilter {
     /// Check a single file against the rules (ignores `max_files`).
     pub fn check(&self, file: &FileData) -> Result<(), FileRejection> {
         if !self.extensions.is_empty() {
-            let name = file.name().to_lowercase();
+            // ASCII-lowercase to match `normalize_extension`; a full Unicode
+            // `to_lowercase()` here could case-fold a non-ASCII filename
+            // differently from the (ASCII-lowered) extension and spuriously
+            // mismatch. File extensions are ASCII in practice.
+            let name = file.name().to_ascii_lowercase();
             let ok = self
                 .extensions
                 .iter()
