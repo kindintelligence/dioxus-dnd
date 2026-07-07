@@ -339,7 +339,9 @@ boundary drags, such as files or external text dropped onto a canvas.
 Wrap any scrollable container in `AutoScroll` and drags hovering within
 `threshold` px of an edge (default 48) scroll it by up to `speed` px per
 event (default 24), ramped by proximity. Works for native drags and
-`PointerDraggable` pointer drags. Pure `MountedData`, no JavaScript eval.
+`PointerDraggable` pointer drags, including mouse pointer drags. Pass
+`active: Some(false)` when a parent tracks drag state and wants to suppress
+scrolling. Pure `MountedData`, no JavaScript eval.
 
 ```text
 AutoScroll { style: "max-height: 300px; overflow-y: auto;",

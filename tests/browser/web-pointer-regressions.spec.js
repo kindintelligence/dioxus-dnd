@@ -69,6 +69,23 @@ async function openCanvasExample(page) {
   });
 }
 
+async function openShowcaseSortable(page) {
+  await page.goto("http://127.0.0.1:8082/dioxus-dnd/#demo-2", {
+    waitUntil: "domcontentloaded",
+  });
+  await page.addStyleTag({
+    content: '[id^="__dx-toast"], .dx-toast { display: none !important; pointer-events: none !important; }',
+  });
+  await expect(page.getByRole("heading", { name: "PICK, DROP & SHIP" })).toBeVisible({
+    timeout: 60_000,
+  });
+  const demo = page.locator("#demo-2");
+  await expect(demo.getByRole("heading", { name: "Sort a list" })).toBeVisible({
+    timeout: 60_000,
+  });
+  return demo;
+}
+
 async function canvasNodeBox(canvas, text) {
   return canvas.evaluate((root, text) => {
     const node = Array.from(root.children).find((child) => {
@@ -204,6 +221,48 @@ test("sortable overlay matches the source row and cleans up after drop", async (
     await expect(rows.nth(index)).not.toHaveCSS("position", "fixed");
     await expect(rows.nth(index)).toHaveCSS("opacity", "1");
   }
+});
+
+test("autoscroll follows default mouse pointer drags near the edge", async ({ page }) => {
+  const demo = await openShowcaseSortable(page);
+  const scroll = demo.locator(".list-scroll");
+  await expect(scroll).toBeVisible();
+  await scroll.scrollIntoViewIfNeeded();
+
+  await scroll.evaluate((node) => {
+    node.scrollTop = 0;
+  });
+
+  const box = await scroll.boundingBox();
+  expect(box).not.toBeNull();
+  const edgeX = box.x + box.width / 2;
+  const edgeY = box.y + box.height - 3;
+
+  await page.mouse.move(edgeX, edgeY);
+  await page.waitForTimeout(150);
+  expect(await scroll.evaluate((node) => node.scrollTop)).toBe(0);
+
+  const handle = scroll.locator("[data-sort-handle]").first();
+  const handleBox = await handle.boundingBox();
+  expect(handleBox).not.toBeNull();
+
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2 + 24, handleBox.y + handleBox.height / 2 + 24, {
+    steps: 5,
+  });
+  await expect(scroll.locator('[data-dragging="true"]').filter({ hasText: "Unload the truck" }).first()).toBeVisible();
+
+  for (let i = 0; i < 12; i += 1) {
+    await page.mouse.move(edgeX, edgeY - (i % 2), { steps: 2 });
+    await page.waitForTimeout(25);
+  }
+
+  await expect
+    .poll(async () => scroll.evaluate((node) => node.scrollTop), { timeout: 5_000 })
+    .toBeGreaterThan(0);
+
+  await page.mouse.up();
 });
 
 test("canvas pointer drop uses the recorded grab offset", async ({ page }) => {
