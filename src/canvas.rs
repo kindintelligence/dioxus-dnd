@@ -53,6 +53,59 @@ impl Bounds {
     pub fn clamp(&self, p: Point) -> Point {
         Point::new(p.x.clamp(0.0, self.width), p.y.clamp(0.0, self.height))
     }
+
+    /// Clamp a top-left position so an item of `width` × `height` stays fully
+    /// inside these bounds. If the item is larger than the bounds on an axis,
+    /// that axis pins to zero.
+    pub fn clamp_item(&self, p: Point, width: f64, height: f64) -> Point {
+        Point::new(
+            clamp_axis(p.x, 0.0, self.width - width),
+            clamp_axis(p.y, 0.0, self.height - height),
+        )
+    }
+
+    /// Clamp a rectangle by moving its top-left corner so the whole rectangle
+    /// stays inside these bounds. The returned point is the corrected
+    /// top-left.
+    pub fn clamp_rect(&self, rect: Rect) -> Point {
+        self.clamp_item(Point::new(rect.x, rect.y), rect.width, rect.height)
+    }
+}
+
+/// Convert a viewport/client point to canvas-local coordinates.
+pub fn client_to_canvas(client: Point, canvas_rect: Rect) -> Point {
+    client - canvas_rect.origin()
+}
+
+/// Convert a canvas-local point to viewport/client coordinates.
+pub fn canvas_to_client(point: Point, canvas_rect: Rect) -> Point {
+    point + canvas_rect.origin()
+}
+
+/// Compute the corrected top-left canvas placement from a raw canvas-relative
+/// pointer position and grab offset, then apply optional snap and bounds.
+pub fn canvas_position(
+    pointer: Point,
+    grab: Point,
+    snap: Option<SnapGrid>,
+    bounds: Option<Bounds>,
+) -> Point {
+    let mut position = pointer - grab;
+    if let Some(g) = snap {
+        position = g.snap(position);
+    }
+    if let Some(b) = bounds {
+        position = b.clamp(position);
+    }
+    position
+}
+
+fn clamp_axis(v: f64, min: f64, max: f64) -> f64 {
+    if min > max {
+        min
+    } else {
+        v.clamp(min, max)
+    }
 }
 
 /// A canvas that reports drop positions.
@@ -100,13 +153,7 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
 
     // Turn a corrected drop at `pointer` (canvas-relative) into a CanvasDrop.
     let place = move |payload: T, pointer: Point, grab: Point| {
-        let mut position = pointer - grab;
-        if let Some(g) = *snap_now.peek() {
-            position = g.snap(position);
-        }
-        if let Some(b) = *bounds_now.peek() {
-            position = b.clamp(position);
-        }
+        let position = canvas_position(pointer, grab, *snap_now.peek(), *bounds_now.peek());
         on_drop.call(CanvasDrop {
             payload,
             position,
@@ -206,5 +253,81 @@ mod tests {
         let corrected = Point::new(107.0, 46.0) - Point::new(9.0, 8.0);
         let positioned = b.clamp(g.snap(corrected));
         assert_eq!(positioned, Point::new(100.0, 40.0));
+    }
+
+    #[test]
+    fn bounds_can_clamp_whole_items() {
+        let b = Bounds {
+            width: 100.0,
+            height: 50.0,
+        };
+
+        assert_eq!(
+            b.clamp_item(Point::new(90.0, 45.0), 20.0, 12.0),
+            Point::new(80.0, 38.0)
+        );
+        assert_eq!(
+            b.clamp_rect(Rect::new(-5.0, 60.0, 20.0, 10.0)),
+            Point::new(0.0, 40.0)
+        );
+        assert_eq!(
+            b.clamp_item(Point::new(20.0, 20.0), 150.0, 80.0),
+            Point::new(0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn coordinate_helpers_convert_between_client_and_canvas() {
+        let rect = Rect::new(40.0, 80.0, 320.0, 200.0);
+        let client = Point::new(64.0, 128.0);
+        let canvas = client_to_canvas(client, rect);
+
+        assert_eq!(canvas, Point::new(24.0, 48.0));
+        assert_eq!(canvas_to_client(canvas, rect), client);
+    }
+
+    #[test]
+    fn canvas_position_applies_grab_snap_then_bounds() {
+        let p = canvas_position(
+            Point::new(107.0, 46.0),
+            Point::new(9.0, 8.0),
+            Some(SnapGrid(10.0)),
+            Some(Bounds {
+                width: 100.0,
+                height: 50.0,
+            }),
+        );
+
+        assert_eq!(p, Point::new(100.0, 40.0));
+    }
+
+    #[test]
+    fn canvas_position_is_path_independent_for_same_geometry() {
+        let pointer = Point::new(81.0, 97.0);
+        let grab = Point::new(13.0, 19.0);
+        let snap = Some(SnapGrid(8.0));
+        let bounds = Some(Bounds {
+            width: 120.0,
+            height: 80.0,
+        });
+
+        let pointer_path = canvas_position(pointer, grab, snap, bounds);
+        let native_path = canvas_position(pointer, grab, snap, bounds);
+
+        assert_eq!(pointer_path, native_path);
+        assert_eq!(pointer_path, Point::new(72.0, 80.0));
+    }
+
+    #[test]
+    fn item_clamp_composes_after_canvas_position() {
+        let top_left = canvas_position(Point::new(156.0, 86.0), Point::new(4.0, 5.0), None, None);
+        let constrained = Bounds {
+            width: 160.0,
+            height: 90.0,
+        }
+        .clamp_item(top_left, 48.0, 32.0);
+
+        assert_eq!(top_left, Point::new(152.0, 81.0));
+        assert_eq!(constrained, Point::new(112.0, 58.0));
     }
 }

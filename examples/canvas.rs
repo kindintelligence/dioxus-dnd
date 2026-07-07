@@ -3,8 +3,9 @@
 //! Shows the intended split:
 //! - `CanvasDropZone` reports where the payload landed.
 //! - `PointerDraggable` moves existing app nodes and palette items.
-//! - `core::modifiers` applies app-owned placement rules such as snap and
-//!   item-aware bounds.
+//! - `Bounds::clamp_item` applies app-owned item-aware bounds.
+//! - Connection handles and edges are app state layered over the headless
+//!   canvas primitive.
 //!
 //! Run:
 //! ```sh
@@ -33,17 +34,25 @@ enum NodeKind {
 impl NodeKind {
     fn label(self) -> &'static str {
         match self {
-            Self::Source => "Source",
-            Self::Transform => "Transform",
-            Self::Output => "Output",
+            Self::Source => "Bad",
+            Self::Transform => "Find Comparable Products",
+            Self::Output => "Publish Results",
         }
     }
 
-    fn tone(self) -> &'static str {
+    fn category(self) -> &'static str {
         match self {
-            Self::Source => "border-emerald-300 bg-emerald-50 text-emerald-950",
-            Self::Transform => "border-blue-300 bg-blue-50 text-blue-950",
-            Self::Output => "border-rose-300 bg-rose-50 text-rose-950",
+            Self::Source => "Condition",
+            Self::Transform => "Database",
+            Self::Output => "Action",
+        }
+    }
+
+    fn palette_tone(self) -> &'static str {
+        match self {
+            Self::Source => "border-pink-400/40 bg-pink-400/10 text-pink-100",
+            Self::Transform => "border-sky-400/40 bg-sky-400/10 text-sky-100",
+            Self::Output => "border-emerald-400/40 bg-emerald-400/10 text-emerald-100",
         }
     }
 }
@@ -59,6 +68,13 @@ struct Node {
 }
 
 #[derive(Clone, PartialEq)]
+struct Edge {
+    id: u32,
+    from: u32,
+    to: u32,
+}
+
+#[derive(Clone, PartialEq)]
 enum NodeDrag {
     Existing(u32),
     New(NodeKind),
@@ -67,31 +83,47 @@ enum NodeDrag {
 #[component]
 fn App() -> Element {
     let mut next_id = use_signal(|| 4_u32);
+    let mut next_edge_id = use_signal(|| 3_u32);
+    let mut connecting_from = use_signal(|| None::<u32>);
     let mut nodes = use_signal(|| {
         vec![
             Node {
                 id: 1,
                 kind: NodeKind::Source,
                 x: 48.0,
-                y: 48.0,
-                width: 144.0,
-                height: 72.0,
+                y: 120.0,
+                width: 160.0,
+                height: 128.0,
             },
             Node {
                 id: 2,
                 kind: NodeKind::Transform,
-                x: 288.0,
-                y: 168.0,
-                width: 168.0,
-                height: 78.0,
+                x: 280.0,
+                y: 120.0,
+                width: 190.0,
+                height: 128.0,
             },
             Node {
                 id: 3,
                 kind: NodeKind::Output,
                 x: 528.0,
-                y: 312.0,
-                width: 132.0,
-                height: 66.0,
+                y: 120.0,
+                width: 150.0,
+                height: 128.0,
+            },
+        ]
+    });
+    let mut edges = use_signal(|| {
+        vec![
+            Edge {
+                id: 1,
+                from: 1,
+                to: 2,
+            },
+            Edge {
+                id: 2,
+                from: 2,
+                to: 3,
             },
         ]
     });
@@ -101,13 +133,16 @@ fn App() -> Element {
         let mut all = nodes.write();
         match drop.payload {
             NodeDrag::Existing(id) => {
-                if let Some(node) = all.iter_mut().find(|node| node.id == id) {
-                    let p = constrained(drop.position, node.width, node.height);
-                    node.x = p.x;
-                    node.y = p.y;
+                if let Some(ix) = all.iter().position(|node| node.id == id) {
+                    let kind = all[ix].kind;
+                    let p = constrained(drop.position, all[ix].width, all[ix].height);
+                    all[ix].x = p.x;
+                    all[ix].y = p.y;
+                    let moved = all.remove(ix);
+                    all.push(moved);
                     last_drop.set(format!(
                         "Moved {} to ({:.0}, {:.0})",
-                        node.kind.label(),
+                        kind.label(),
                         p.x,
                         p.y
                     ));
@@ -135,59 +170,124 @@ fn App() -> Element {
             }
         }
     };
+    let mut start_connection = move |from: u32| {
+        connecting_from.set(Some(from));
+        if let Some(node) = nodes.peek().iter().find(|node| node.id == from) {
+            last_drop.set(format!("Connect {} to another node.", node.kind.label()));
+        }
+    };
+    let mut finish_connection = move |to: u32| {
+        let Some(from) = connecting_from() else {
+            last_drop.set("Pick an output handle first.".to_string());
+            return;
+        };
+        connecting_from.set(None);
+        if from == to {
+            last_drop.set("A node cannot connect to itself.".to_string());
+            return;
+        }
+        if edges
+            .peek()
+            .iter()
+            .any(|edge| edge.from == from && edge.to == to)
+        {
+            last_drop.set("That connection already exists.".to_string());
+            return;
+        }
+        let id = next_edge_id();
+        next_edge_id.set(id + 1);
+        edges.write().push(Edge { id, from, to });
+        last_drop.set(format!("Connected node {from} to node {to}."));
+    };
 
     rsx! {
         document::Script { src: "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }
-        div { class: "min-h-screen bg-slate-100 text-slate-950 antialiased",
-            div { class: "mx-auto max-w-6xl px-6 py-10",
-                header { class: "mb-6 flex items-end justify-between gap-6",
+        div { class: "min-h-screen bg-neutral-950 text-neutral-50 antialiased",
+            div { class: "mx-auto max-w-7xl px-5 py-6",
+                header { class: "mb-5 flex items-center justify-between gap-6 border-b border-white/10 pb-5",
                     div {
-                        p { class: "text-sm font-medium text-slate-500", "dioxus-dnd" }
-                        h1 { class: "text-3xl font-semibold tracking-tight", "Canvas editor" }
+                        p { class: "text-xs font-medium uppercase text-neutral-500", "dioxus-dnd" }
+                        h1 { class: "text-2xl font-semibold tracking-tight", "Workflow canvas" }
                     }
-                    p { class: "max-w-md text-right text-sm text-slate-600",
-                        "Headless canvas drops with pointer drags, exact grab offsets, snap grid and item-aware bounds."
+                    div { class: "flex items-center gap-2 text-xs text-neutral-400",
+                        span { class: "rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2.5 py-1 text-emerald-100", "Live" }
+                        span { class: "rounded-full border border-white/10 px-2.5 py-1", "{GRID:.0}px grid" }
                     }
                 }
                 DndProvider::<NodeDrag> {
                     LiveRegion::<NodeDrag> {}
-                    div { class: "grid gap-4 lg:grid-cols-[220px_1fr]",
-                        aside { class: "rounded-lg border border-slate-200 bg-white p-4 shadow-sm",
-                            h2 { class: "mb-3 text-sm font-semibold text-slate-700", "Palette" }
+                    div { class: "grid min-h-[520px] gap-4 lg:grid-cols-[240px_minmax(0,1fr)_220px]",
+                        aside { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                            h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Blocks" }
                             div { class: "space-y-2",
                                 for kind in [NodeKind::Source, NodeKind::Transform, NodeKind::Output] {
                                     PointerDraggable::<NodeDrag> {
                                         payload: NodeDrag::New(kind),
                                         label: format!("New {}", kind.label()),
                                         class: format!(
-                                            "cursor-grab select-none rounded-md border px-3 py-2 text-sm shadow-sm transition data-dragging:opacity-50 {}",
-                                            kind.tone()
+                                            "cursor-grab select-none rounded-md border px-3 py-3 text-sm transition hover:border-white/30 data-dragging:opacity-50 {}",
+                                            kind.palette_tone()
                                         ),
                                         "{kind.label()}"
                                     }
                                 }
                             }
-                            p { class: "mt-4 text-xs leading-5 text-slate-500",
-                                "New and existing nodes use the same `CanvasDropZone` drop path."
+                            p { class: "mt-4 text-xs leading-5 text-neutral-500",
+                                "Palette drops use the same headless canvas path as moved nodes."
                             }
                         }
 
-                        section { class: "rounded-lg border border-slate-200 bg-white p-4 shadow-sm",
-                            div { class: "mb-3 flex items-center justify-between gap-3",
+                        section { class: "overflow-x-auto rounded-lg border border-white/10 bg-neutral-900 p-3 shadow-2xl shadow-black/30",
+                            div { class: "mb-3 flex items-center justify-between gap-3 px-1",
                                 div {
-                                    h2 { class: "text-sm font-semibold text-slate-700", "Workbench" }
-                                    p { class: "text-xs text-slate-500", "{last_drop}" }
+                                    h2 { class: "text-sm font-semibold text-neutral-200", "Builder" }
+                                    p { class: "text-xs text-neutral-500", "{last_drop}" }
                                 }
-                                p { class: "text-xs tabular-nums text-slate-500", "{GRID:.0}px grid" }
+                                div { class: "flex items-center gap-1 rounded-md border border-white/10 bg-black/30 p-1",
+                                    button { class: "rounded px-2 py-1 text-xs text-neutral-300 hover:bg-white/10", "Inspect" }
+                                    button { class: "rounded bg-white px-2 py-1 text-xs font-medium text-neutral-950", "Deploy" }
+                                }
                             }
                             CanvasDropZone::<NodeDrag> {
                                 id: CANVAS,
                                 label: "Workbench",
+                                snap: SnapGrid(GRID),
                                 on_drop: move |drop| place(drop),
-                                class: "relative overflow-hidden rounded-md border border-slate-300 bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:24px_24px] data-active:border-slate-900",
-                                style: format!("width: {CANVAS_W}px; height: {CANVAS_H}px; max-width: 100%;"),
+                                class: "relative overflow-hidden rounded-md border border-white/10 bg-[#080808] bg-[radial-gradient(rgba(255,255,255,0.15)_1px,transparent_1px)] [background-size:24px_24px] shadow-inner shadow-black data-active:border-white/40",
+                                style: format!("width: {CANVAS_W}px; height: {CANVAS_H}px;"),
+                                svg {
+                                    class: "pointer-events-none absolute inset-0 z-0 h-full w-full",
+                                    view_box: format!("0 0 {CANVAS_W} {CANVAS_H}"),
+                                    for edge in edges.read().clone() {
+                                        EdgePath { edge, nodes: nodes.read().clone() }
+                                    }
+                                }
                                 for node in nodes.read().clone() {
-                                    CanvasNode { node }
+                                    CanvasNode {
+                                        node,
+                                        connecting: connecting_from(),
+                                        on_start_connection: move |id| start_connection(id),
+                                        on_finish_connection: move |id| finish_connection(id),
+                                    }
+                                }
+                            }
+                        }
+                        aside { class: "rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                            h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Inspector" }
+                            dl { class: "space-y-3 text-xs",
+                                div {
+                                    dt { class: "text-neutral-500", "Nodes" }
+                                    dd { class: "mt-1 text-lg font-semibold text-neutral-100", "{nodes.read().len()}" }
+                                }
+                                div {
+                                    dt { class: "text-neutral-500", "Connections" }
+                                    dd { class: "mt-1 text-lg font-semibold text-neutral-100", "{edges.read().len()}" }
+                                }
+                                div {
+                                    dt { class: "text-neutral-500", "Model" }
+                                    dd { class: "mt-1 leading-5 text-neutral-300",
+                                        "Edges and handles are example state. The canvas primitive only reports drops."
+                                    }
                                 }
                             }
                         }
@@ -203,25 +303,147 @@ fn App() -> Element {
 }
 
 #[component]
-fn CanvasNode(node: Node) -> Element {
+fn CanvasNode(
+    node: Node,
+    connecting: Option<u32>,
+    on_start_connection: EventHandler<u32>,
+    on_finish_connection: EventHandler<u32>,
+) -> Element {
+    let armed = connecting == Some(node.id);
     rsx! {
         PointerDraggable::<NodeDrag> {
             payload: NodeDrag::Existing(node.id),
             zone: CANVAS,
             label: node.kind.label(),
             style: format!(
-                "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px;",
+                "position: absolute; z-index: 10; left: {}px; top: {}px; width: {}px; height: {}px;",
                 node.x,
                 node.y,
                 node.width,
                 node.height
             ),
-            class: format!(
-                "cursor-grab select-none rounded-md border px-3 py-2 text-sm shadow-sm transition data-dragging:opacity-40 {}",
-                node.kind.tone()
-            ),
-            div { class: "font-medium", "{node.kind.label()}" }
-            div { class: "mt-1 text-xs tabular-nums opacity-70", "x {node.x:.0}, y {node.y:.0}" }
+            class: "cursor-grab select-none rounded-lg border border-neutral-800 bg-black px-4 py-4 text-center shadow-2xl shadow-black/40 transition hover:border-neutral-700 data-dragging:opacity-40",
+            button {
+                class: if connecting.is_some() {
+                    "absolute -left-2 top-1/2 z-20 h-4 w-4 -translate-y-1/2 rounded-full border border-neutral-700 bg-white shadow-[0_0_0_3px_rgba(0,0,0,0.8)] hover:scale-110 focus-visible:outline-2 focus-visible:outline-white"
+                } else {
+                    "absolute -left-2 top-1/2 z-20 h-4 w-4 -translate-y-1/2 rounded-full border border-neutral-700 bg-white shadow-[0_0_0_3px_rgba(0,0,0,0.8)] hover:scale-110 focus-visible:outline-2 focus-visible:outline-white"
+                },
+                aria_label: format!("Connect into {}", node.kind.label()),
+                onpointerdown: move |evt| evt.stop_propagation(),
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_finish_connection.call(node.id);
+                },
+            }
+            div { class: "flex h-full flex-col items-center justify-center gap-2.5",
+                NodeIcon { kind: node.kind }
+                div {
+                    div { class: "mx-auto max-w-[150px] text-balance text-sm font-semibold leading-5 text-white", "{node.kind.label()}" }
+                    div { class: "mt-1 text-xs font-medium text-neutral-500", "{node.kind.category()}" }
+                }
+            }
+            button {
+                class: if armed {
+                    "absolute -right-2 top-1/2 z-20 h-4 w-4 -translate-y-1/2 rounded-full border border-neutral-700 bg-white shadow-[0_0_0_3px_rgba(0,0,0,0.8)] ring-4 ring-white/20 hover:scale-110 focus-visible:outline-2 focus-visible:outline-white"
+                } else {
+                    "absolute -right-2 top-1/2 z-20 h-4 w-4 -translate-y-1/2 rounded-full border border-neutral-700 bg-white shadow-[0_0_0_3px_rgba(0,0,0,0.8)] hover:scale-110 focus-visible:outline-2 focus-visible:outline-white"
+                },
+                aria_label: format!("Connect from {}", node.kind.label()),
+                onpointerdown: move |evt| evt.stop_propagation(),
+                onclick: move |evt| {
+                    evt.stop_propagation();
+                    on_start_connection.call(node.id);
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn NodeIcon(kind: NodeKind) -> Element {
+    match kind {
+        NodeKind::Source => rsx! {
+            svg {
+                class: "h-9 w-9 text-pink-300",
+                view_box: "0 0 64 64",
+                fill: "none",
+                path {
+                    d: "M18 12v28a8 8 0 1 0 8 8h11a8 8 0 1 0 8-8h-1V24",
+                    stroke: "currentColor",
+                    stroke_width: "4",
+                    stroke_linecap: "round",
+                    stroke_linejoin: "round",
+                }
+                circle { cx: "18", cy: "48", r: "7", stroke: "currentColor", stroke_width: "4" }
+                circle { cx: "45", cy: "24", r: "7", stroke: "currentColor", stroke_width: "4" }
+            }
+        },
+        NodeKind::Transform => rsx! {
+            svg {
+                class: "h-9 w-9 text-sky-300",
+                view_box: "0 0 64 64",
+                fill: "none",
+                ellipse { cx: "32", cy: "16", rx: "20", ry: "8", stroke: "currentColor", stroke_width: "4" }
+                path {
+                    d: "M12 16v30c0 4.5 9 8 20 8s20-3.5 20-8V16",
+                    stroke: "currentColor",
+                    stroke_width: "4",
+                    stroke_linejoin: "round",
+                }
+                path {
+                    d: "M12 31c0 4.5 9 8 20 8s20-3.5 20-8",
+                    stroke: "currentColor",
+                    stroke_width: "4",
+                    stroke_linecap: "round",
+                }
+            }
+        },
+        NodeKind::Output => rsx! {
+            svg {
+                class: "h-9 w-9 text-emerald-300",
+                view_box: "0 0 64 64",
+                fill: "none",
+                path {
+                    d: "M16 34l10 10 22-24",
+                    stroke: "currentColor",
+                    stroke_width: "5",
+                    stroke_linecap: "round",
+                    stroke_linejoin: "round",
+                }
+                circle { cx: "32", cy: "32", r: "24", stroke: "currentColor", stroke_width: "4" }
+            }
+        },
+    }
+}
+
+#[component]
+fn EdgePath(edge: Edge, nodes: Vec<Node>) -> Element {
+    let Some(from) = nodes.iter().find(|node| node.id == edge.from) else {
+        return rsx! {};
+    };
+    let Some(to) = nodes.iter().find(|node| node.id == edge.to) else {
+        return rsx! {};
+    };
+    let x1 = from.x + from.width;
+    let y1 = from.y + from.height / 2.0;
+    let x2 = to.x;
+    let y2 = to.y + to.height / 2.0;
+    let dx = ((x2 - x1).abs() * 0.5).clamp(36.0, 80.0);
+    let d = format!(
+        "M {x1:.1} {y1:.1} C {:.1} {y1:.1}, {:.1} {y2:.1}, {x2:.1} {y2:.1}",
+        x1 + dx,
+        x2 - dx
+    );
+    rsx! {
+        path {
+            d,
+            fill: "none",
+            stroke: "#52525b",
+            stroke_width: "2",
+            stroke_linecap: "round",
+            stroke_dasharray: "4 8",
+            opacity: "0.9",
         }
     }
 }
@@ -235,26 +457,22 @@ fn NodeGhost() -> Element {
         None => "",
     };
     rsx! {
-        div { class: "rounded-md border border-slate-400 bg-white px-3 py-2 text-sm shadow-xl", "{label}" }
+        div { class: "rounded-md border border-white/20 bg-neutral-900 px-3 py-2 text-sm text-neutral-50 shadow-2xl shadow-black/40", "{label}" }
     }
 }
 
 fn default_size(kind: NodeKind) -> (f64, f64) {
     match kind {
-        NodeKind::Source => (144.0, 72.0),
-        NodeKind::Transform => (168.0, 78.0),
-        NodeKind::Output => (132.0, 66.0),
+        NodeKind::Source => (160.0, 128.0),
+        NodeKind::Transform => (190.0, 128.0),
+        NodeKind::Output => (150.0, 128.0),
     }
 }
 
 fn constrained(position: Point, width: f64, height: f64) -> Point {
-    let chain = [
-        DragModifier::Snap { x: GRID, y: GRID },
-        DragModifier::KeepInside,
-    ];
-    let ctx = ModifierCtx {
-        container: Some(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H)),
-        element: Some(Rect::new(position.x, position.y, width, height)),
-    };
-    apply_modifiers(&chain, position, &ctx)
+    Bounds {
+        width: CANVAS_W,
+        height: CANVAS_H,
+    }
+    .clamp_item(position, width, height)
 }

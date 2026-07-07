@@ -25,7 +25,10 @@ pub mod prelude {
     pub use crate::board::{
         apply_move, BoardColumn, BoardItem, BoardPayload, BoardSlot, ContainerId, MoveEvent,
     };
-    pub use crate::canvas::{Bounds, CanvasDrop, CanvasDropZone, SnapGrid};
+    pub use crate::canvas::{
+        canvas_position, canvas_to_client, client_to_canvas, Bounds, CanvasDrop, CanvasDropZone,
+        SnapGrid,
+    };
     pub use crate::core::{
         apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point,
         effective_effect, element_point, transition, use_dnd, use_dnd_provider, use_zone_id,

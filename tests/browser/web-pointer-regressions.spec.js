@@ -59,6 +59,38 @@ async function openGallery(page) {
     .toBeLessThan(1100);
 }
 
+async function openCanvasExample(page) {
+  await page.goto("http://127.0.0.1:8081/dioxus-dnd/", { waitUntil: "domcontentloaded" });
+  await page.addStyleTag({
+    content: '[id^="__dx-toast"], .dx-toast { display: none !important; pointer-events: none !important; }',
+  });
+  await expect(page.getByRole("heading", { name: "Workflow canvas" })).toBeVisible({
+    timeout: 60_000,
+  });
+}
+
+async function canvasNodeBox(canvas, text) {
+  return canvas.evaluate((root, text) => {
+    const node = Array.from(root.children).find((child) => {
+      const style = window.getComputedStyle(child);
+      return style.position === "absolute" && child.textContent.includes(text);
+    });
+    if (!node) {
+      return null;
+    }
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    return {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      left: Number.parseFloat(style.left),
+      top: Number.parseFloat(style.top),
+    };
+  }, text);
+}
+
 async function dispatchNativeDrop(target, setup) {
   return target.evaluate((node, setup) => {
     const rect = node.getBoundingClientRect();
@@ -147,6 +179,81 @@ test("canvas pointer drop uses the recorded grab offset", async ({ page }) => {
   expect(after).not.toBeNull();
   expect(Math.abs(after.x - before.x)).toBeGreaterThan(40);
   expect(Math.abs(after.y - before.y)).toBeGreaterThan(30);
+});
+
+test("focused canvas example creates, connects, and keeps nodes inside bounds", async ({ page }) => {
+  await openCanvasExample(page);
+
+  const builder = page.locator("section", { has: page.getByRole("heading", { name: "Builder" }) });
+  const canvas = builder.locator(".relative").first();
+  const inspector = page.locator("aside", { has: page.getByRole("heading", { name: "Inspector" }) });
+  const canvasBox = await canvas.boundingBox();
+  expect(canvasBox).not.toBeNull();
+
+  await page.getByLabel("Connect from Bad").click();
+  await page.getByLabel("Connect into Publish Results").click();
+  await expect(page.getByText("Connected node 1 to node 3.", { exact: true })).toBeVisible();
+  await expect(inspector.locator("div", { hasText: "Connections" }).getByText("3", { exact: true })).toBeVisible();
+
+  const before = await canvasNodeBox(canvas, "Find Comparable Products");
+  expect(before).not.toBeNull();
+
+  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + canvasBox.width - 8, canvasBox.y + canvasBox.height - 8, {
+    steps: 36,
+  });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  const after = await canvasNodeBox(canvas, "Find Comparable Products");
+  expect(after).not.toBeNull();
+  expect(after.left).toBeGreaterThanOrEqual(0);
+  expect(after.top).toBeGreaterThanOrEqual(0);
+  expect(after.left + after.width).toBeLessThanOrEqual(canvasBox.width + 1);
+  expect(after.top + after.height).toBeLessThanOrEqual(canvasBox.height + 1);
+
+  const paletteNode = page
+    .locator("aside", { has: page.getByRole("heading", { name: "Blocks" }) })
+    .getByText("Publish Results", { exact: true });
+  const paletteBox = await paletteNode.boundingBox();
+  expect(paletteBox).not.toBeNull();
+  const createCanvasBox = await canvas.boundingBox();
+  expect(createCanvasBox).not.toBeNull();
+
+  await page.mouse.move(paletteBox.x + paletteBox.width / 2, paletteBox.y + paletteBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(paletteBox.x + paletteBox.width / 2 + 20, paletteBox.y + paletteBox.height / 2 + 20, {
+    steps: 5,
+  });
+  await page.mouse.move(createCanvasBox.x + 96, createCanvasBox.y + createCanvasBox.height - 48, {
+    steps: 28,
+  });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  await expect(page.getByText(/^Created Publish Results at /)).toBeVisible();
+  await expect(inspector.locator("div", { hasText: "Nodes" }).getByText("4", { exact: true })).toBeVisible();
+});
+
+test("focused canvas example keeps its coordinate plane scrollable on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await openCanvasExample(page);
+
+  const builder = page.locator("section", { has: page.getByRole("heading", { name: "Builder" }) });
+  const canvas = builder.locator(".relative").first();
+  const canvasBox = await canvas.boundingBox();
+  expect(canvasBox).not.toBeNull();
+  expect(Math.round(canvasBox.width)).toBe(720);
+
+  for (const label of ["Bad", "Find Comparable Products", "Publish Results"]) {
+    const node = await canvasNodeBox(canvas, label);
+    expect(node).not.toBeNull();
+    expect(node.left).toBeGreaterThanOrEqual(0);
+    expect(node.top).toBeGreaterThanOrEqual(0);
+    expect(node.left + node.width).toBeLessThanOrEqual(canvasBox.width + 1);
+    expect(node.top + node.height).toBeLessThanOrEqual(canvasBox.height + 1);
+  }
 });
 
 test("native DataTransfer paths handle files, external drops, and drag-out", async ({ page }) => {

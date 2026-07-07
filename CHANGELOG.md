@@ -111,10 +111,14 @@ elements. Existing `[data-…="true"]` selectors keep working.
   formats are checked through the Dioxus-served gallery.
 - `CanvasDropZone` now syncs label changes into the zone registry, matching
   `DropZone`, and the README documents canvas pointer/position semantics
-  plus the existing modifier chain for richer constraints.
+  plus helper APIs (`canvas_position`, `client_to_canvas`,
+  `canvas_to_client`, `Bounds::clamp_item`, `Bounds::clamp_rect`) and the
+  existing modifier chain for richer constraints.
 - New `examples/canvas.rs`: a focused node-editor style demo using
-  `CanvasDropZone`, `PointerDraggable` and `core::modifiers` for snap grid
-  and item-aware bounds while keeping the canvas API headless.
+  `CanvasDropZone`, `PointerDraggable`, `SnapGrid` and
+  `Bounds::clamp_item` for snap grid and item-aware bounds while keeping the
+  canvas API headless. Handles and edges are example state layered on top of
+  the drop primitive.
 
 ## 1.0.0
 
