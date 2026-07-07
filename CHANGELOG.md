@@ -114,6 +114,9 @@ elements. Existing `[data-…="true"]` selectors keep working.
   plus helper APIs (`canvas_position`, `client_to_canvas`,
   `canvas_to_client`, `Bounds::clamp_item`, `Bounds::clamp_rect`) and the
   existing modifier chain for richer constraints.
+- Keyboard drops now deliver zone-relative `DropOutcome::element` from the
+  selected target's center instead of always reporting `(0, 0)`, so keyboard
+  drops into `CanvasDropZone` land in the canvas rather than at origin.
 - New `examples/canvas.rs`: a focused node-editor style demo using
   `CanvasDropZone`, `PointerDraggable`, `SnapGrid` and
   `Bounds::clamp_item` for snap grid and item-aware bounds while keeping the

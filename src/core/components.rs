@@ -36,7 +36,7 @@ enum NavKey {
     Descend,
     Ascend,
 }
-use super::types::{effective_effect, DragMode, DropEffect, DropOutcome, Point, ZoneId};
+use super::types::{effective_effect, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId};
 
 /// Pull a user-provided `style` out of forwarded attributes and append it to
 /// a functional inline style. Spread attributes land after static ones and
@@ -52,6 +52,16 @@ pub(crate) fn merge_style(attributes: &mut Vec<Attribute>, functional: &str) -> 
     match user.map(|a| a.value) {
         Some(dioxus::core::AttributeValue::Text(s)) => format!("{functional} {s}"),
         _ => functional.to_string(),
+    }
+}
+
+fn keyboard_drop_points(rect: Option<Rect>) -> (Point, Point) {
+    match rect {
+        Some(r) => {
+            let client = r.center();
+            (client, client - r.origin())
+        }
+        None => (Point::default(), Point::default()),
     }
 }
 
@@ -263,16 +273,14 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     };
                     if let Some(record) = registry.get(target) {
                         if let Some((p, from)) = dnd.take() {
-                            let center = (*record.rect.peek())
-                                .map(|r| r.center())
-                                .unwrap_or_default();
+                            let (client, element) = keyboard_drop_points(*record.rect.peek());
                             record.on_drop.call(DropOutcome {
                                 payload: p,
                                 from,
                                 to: target,
                                 effect,
-                                client: center,
-                                element: Point::default(),
+                                client,
+                                element,
                                 grab: Point::default(),
                             });
                             let name = record
@@ -494,5 +502,27 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
             ..attributes,
             {children}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyboard_drop_points_use_zone_center_and_element_offset() {
+        let rect = Rect::new(40.0, 80.0, 200.0, 100.0);
+        let (client, element) = keyboard_drop_points(Some(rect));
+
+        assert_eq!(client, Point::new(140.0, 130.0));
+        assert_eq!(element, Point::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn keyboard_drop_points_fall_back_to_origin_without_rect() {
+        let (client, element) = keyboard_drop_points(None);
+
+        assert_eq!(client, Point::default());
+        assert_eq!(element, Point::default());
     }
 }
