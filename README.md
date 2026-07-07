@@ -303,6 +303,9 @@ and the corrected top-left position:
   element's own width or height; use `Bounds::clamp_item` or
   `Bounds::clamp_rect` when you want the whole item inside.
 
+Keyboard drops use the selected target's measured center. If the target has
+not been measured yet, the drop falls back to origin.
+
 ```text
 CanvasDropZone::<Node> {
     snap: SnapGrid(16.0),
@@ -495,9 +498,11 @@ npm install
 npm run test:web
 ```
 
-The spec checks that the sortable overlay matches the source row and
-cleans up after drop, and that pointer-driven canvas drops move the node
-using the recorded grab offset.
+The spec checks sortable overlay cleanup, pointer canvas grab-offset
+placement, the focused canvas workflow (connect handles, move a node, create
+a node from the palette, keep nodes inside bounds), focused canvas pan/zoom
+movement, keyboard canvas placement, and native boundary paths for file
+drops, external text/link drops and drag-out payload formats.
 
 ## Feature flags
 

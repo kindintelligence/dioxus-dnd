@@ -79,6 +79,14 @@ struct Edge {
 }
 
 #[derive(Clone, PartialEq)]
+struct BoundaryItem {
+    id: u32,
+    label: String,
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, PartialEq)]
 enum NodeDrag {
     Existing(u32),
     New(NodeKind),
@@ -88,7 +96,9 @@ enum NodeDrag {
 fn App() -> Element {
     let mut next_id = use_signal(|| 4_u32);
     let mut next_edge_id = use_signal(|| 3_u32);
+    let mut next_boundary_id = use_signal(|| 1_u32);
     let mut connecting_from = use_signal(|| None::<u32>);
+    let mut boundary_items = use_signal(Vec::<BoundaryItem>::new);
     let mut nodes = use_signal(|| {
         vec![
             Node {
@@ -217,6 +227,22 @@ fn App() -> Element {
         viewport.set(CanvasViewport::new(view.pan + delta, view.zoom));
     };
     let reset_view = move |_| viewport.set(CanvasViewport::default());
+    let mut receive_boundary = move |drop: ExternalDrop| {
+        let label = boundary_label(&drop);
+        let point = drop.element;
+        let id = next_boundary_id();
+        next_boundary_id.set(id + 1);
+        boundary_items.write().push(BoundaryItem {
+            id,
+            label: label.clone(),
+            x: point.x,
+            y: point.y,
+        });
+        last_drop.set(format!(
+            "Native drop: {label} at ({:.0}, {:.0})",
+            point.x, point.y
+        ));
+    };
 
     rsx! {
         document::Script { src: "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }
@@ -361,6 +387,40 @@ fn App() -> Element {
                                     dt { class: "text-neutral-500", "Model" }
                                     dd { class: "mt-1 leading-5 text-neutral-300",
                                         "Edges and handles are example state. The canvas primitive only reports drops."
+                                    }
+                                }
+                            }
+                        }
+                        section { class: "lg:col-span-3 rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-2xl shadow-black/30",
+                            div { class: "mb-3 flex items-center justify-between gap-3",
+                                div {
+                                    h2 { class: "text-sm font-semibold text-neutral-200", "Native boundary" }
+                                    p { class: "text-xs text-neutral-500",
+                                        "This separate surface uses browser DataTransfer for files, links and text from outside the app."
+                                    }
+                                }
+                                span { class: "rounded-full border border-white/10 px-2.5 py-1 text-xs text-neutral-400",
+                                    "{boundary_items.read().len()} received"
+                                }
+                            }
+                            ExternalDropZone {
+                                on_drop: move |drop| receive_boundary(drop),
+                                class: "relative min-h-40 overflow-hidden rounded-md border border-dashed border-white/15 bg-[#080808] bg-[radial-gradient(rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:24px_24px] p-4 data-over:border-emerald-300/70",
+                                if boundary_items.read().is_empty() {
+                                    div { class: "flex h-32 items-center justify-center text-center text-sm text-neutral-500",
+                                        "Drop a file, link or text selection here"
+                                    }
+                                }
+                                for item in boundary_items.read().clone() {
+                                    div {
+                                        key: "{item.id}",
+                                        class: "absolute max-w-56 -translate-x-1/2 -translate-y-1/2 rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-xs text-emerald-50 shadow-lg shadow-black/30",
+                                        style: format!(
+                                            "left: {}px; top: {}px;",
+                                            item.x.clamp(24.0, CANVAS_W - 24.0),
+                                            item.y.clamp(24.0, 136.0)
+                                        ),
+                                        "{item.label}"
                                     }
                                 }
                             }
@@ -556,4 +616,35 @@ fn constrained(position: Point, width: f64, height: f64) -> Point {
         height: CANVAS_H,
     }
     .clamp_item(position, width, height)
+}
+
+fn boundary_label(drop: &ExternalDrop) -> String {
+    if let Some(file) = drop.files.first() {
+        if drop.files.len() == 1 {
+            return format!("File {}", compact(&file.name(), 42));
+        }
+        return format!(
+            "{} files, first {}",
+            drop.files.len(),
+            compact(&file.name(), 32)
+        );
+    }
+    if let Some(url) = drop.url() {
+        return format!("Link {}", compact(url, 42));
+    }
+    if let Some(text) = drop.text() {
+        return format!("Text {}", compact(text, 42));
+    }
+    if let Some(ExternalPayload::Html(html)) = drop.best() {
+        return format!("HTML {}", compact(html, 42));
+    }
+    "Native payload".to_string()
+}
+
+fn compact(value: &str, max: usize) -> String {
+    let mut out = value.chars().take(max).collect::<String>();
+    if value.chars().count() > max {
+        out.push_str("...");
+    }
+    out
 }
