@@ -130,6 +130,37 @@ elements. Existing `[data-…="true"]` selectors keep working.
   `Bounds::clamp_item` for snap grid and item-aware bounds while keeping the
   canvas API headless. Handles and edges are example state layered on top of
   the drop primitive.
+- `BoardSlot` now registers as a real zone, so precise board insertion slots
+  work through the pointer and keyboard paths, not just native HTML drag.
+  Slots also expose `data-over` while hovered and default to an "Insert at
+  position N" registry label for keyboard announcements.
+- `apply_move` now adjusts same-column forward insertions after removing the
+  source item. Moving a card from index 0 to slot 3 now lands in the intended
+  slot instead of one position too far down.
+- `AutoScroll` now works for default mouse pointer drags by using held-button
+  pointer state, while passive mouse hover near an edge stays inert. An
+  optional `active` prop lets callers explicitly force or suppress
+  pointer-move scrolling when they track drag state themselves.
+- Browser regressions now serve the showcase example and cover autoscroll in
+  the real sortable demo: passive hover does not scroll, and dragging the
+  sortable handle near the edge increases `scrollTop`.
+- `TreeNodeTarget` now keeps its one-time zone registry callback current
+  across rerenders. Updated `node`, `label`, `accepts`, `row_height` and
+  `on_drop` props are mirrored through signals, so pointer and keyboard
+  registry drops report the current target, current intent bands and current
+  acceptance rules.
+- Tree coverage now locks down the pure helpers and registry behavior:
+  `NodeId::from`, intent quarter boundaries, out-of-range offsets, parent-map
+  cycle safety, dynamic tree target props, and exact-intent rechecking after
+  the registry-level "any intent accepts" filter.
+- `FileFilter::content_types` now has a real MIME matcher instead of prefix
+  matching. It supports exact types, `type/*`, `*/*`,
+  `application/*+json` and `*/*+json`, with case-insensitive comparison and
+  file-side MIME parameters ignored. Malformed media types, accidental
+  subtype-only wildcards such as `*/json`, and bogus prefixes such as
+  `imageevil/png` are rejected.
+- `FileFilter::extensions` now trims whitespace and accepts a leading dot, so
+  `.png`, `png` and mixed-case extensions normalize to the same rule.
 
 ## 1.0.0
 

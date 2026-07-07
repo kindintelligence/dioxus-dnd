@@ -882,6 +882,88 @@ fn tree_targets_register_as_zones() {
 }
 
 #[derive(Clone, Props)]
+struct TreeIntentAcceptsProps {
+    drops: Shared<Vec<TreeDropEvent<&'static str>>>,
+}
+
+impl PartialEq for TreeIntentAcceptsProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.drops, &other.drops)
+    }
+}
+
+fn tree_intent_accepts_app(props: TreeIntentAcceptsProps) -> Element {
+    let drops = props.drops.clone();
+    rsx! {
+        DndProvider::<&'static str> {
+            TreeNodeTarget::<&'static str> {
+                node: NodeId(12),
+                row_height: 100.0,
+                accepts: move |(_, intent): (&'static str, DropIntent)| intent == DropIntent::Into,
+                on_drop: move |ev| drops.lock().unwrap().push(ev),
+                "node"
+            }
+            TreeIntentAcceptsProbe {}
+        }
+    }
+}
+
+#[component]
+fn TreeIntentAcceptsProbe() -> Element {
+    let registry = use_zone_registry::<&'static str>();
+    let zones = registry.children_of(None, &"payload");
+    assert_eq!(
+        zones.len(),
+        1,
+        "registry should keep a target reachable when any intent accepts"
+    );
+
+    zones[0].on_drop.call(DropOutcome {
+        payload: "before",
+        from: None,
+        to: zones[0].id,
+        effect: DropEffect::Move,
+        mode: DragMode::Keyboard,
+        client: Point::default(),
+        element: Point::new(0.0, 10.0),
+        grab: Point::default(),
+    });
+    zones[0].on_drop.call(DropOutcome {
+        payload: "into",
+        from: None,
+        to: zones[0].id,
+        effect: DropEffect::Move,
+        mode: DragMode::Keyboard,
+        client: Point::default(),
+        element: Point::new(0.0, 50.0),
+        grab: Point::default(),
+    });
+
+    rsx! { div {} }
+}
+
+#[test]
+fn tree_target_registry_filter_is_permissive_but_drop_rechecks_exact_intent() {
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        tree_intent_accepts_app,
+        TreeIntentAcceptsProps {
+            drops: drops.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+
+    assert_eq!(
+        *drops.lock().unwrap(),
+        vec![TreeDropEvent {
+            payload: "into",
+            target: NodeId(12),
+            intent: DropIntent::Into,
+        }]
+    );
+}
+
+#[derive(Clone, Props)]
 struct DynamicTreeTargetProps {
     phase: Shared<u8>,
     drops: Shared<Vec<(u8, TreeDropEvent<&'static str>)>>,
