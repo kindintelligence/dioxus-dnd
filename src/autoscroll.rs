@@ -2,7 +2,7 @@
 //! scroll it - the missing piece for long lists and tall boards.
 //!
 //! Implemented entirely through Dioxus's `MountedData` (no JS eval):
-//! `dragover` (native drags) and `pointermove` with contact (pointer drags
+//! `dragover` (native drags) and active `pointermove` events (pointer drags
 //! via [`crate::pointer::PointerDraggable`]) feed pointer positions; when the
 //! pointer sits within `threshold` px of an edge, the container is scrolled
 //! by up to `speed` px per event, scaled by proximity.
@@ -68,6 +68,23 @@ pub fn edge_delta(
     (dx, dy)
 }
 
+/// Whether a pointer move should drive auto-scroll.
+///
+/// Mouse pointer drags report contact through held buttons. Touch and pen
+/// paths commonly report pressure during contact, and some platforms also
+/// expose held buttons for them.
+fn pointer_move_should_scroll(
+    pointer_type: &str,
+    pressure: f32,
+    has_held_button: bool,
+    active: Option<bool>,
+) -> bool {
+    match active {
+        Some(active) => active,
+        None => has_held_button || (pointer_type != "mouse" && pressure > 0.0),
+    }
+}
+
 /// A scrollable container that scrolls itself while a drag hovers near its
 /// edges. Give it the `overflow` CSS yourself (via `style`/`class`).
 #[component]
@@ -81,6 +98,11 @@ pub fn AutoScroll(
     /// Axes to scroll.
     #[props(default)]
     axis: ScrollAxis,
+    /// Optional external drag-state gate. `Some(true)` scrolls on pointer
+    /// movement, `Some(false)` suppresses it, and `None` uses the built-in
+    /// pointer contact heuristic.
+    #[props(default)]
+    active: Option<bool>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
@@ -129,10 +151,15 @@ pub fn AutoScroll(
                 let c = evt.client_coordinates();
                 scroll_for(Point::new(c.x, c.y));
             },
-            // Pointer-driven drags (touch/pen via PointerDraggable): moves
-            // with contact pressure count as dragging.
+            // Pointer-driven drags: mouse uses held buttons, while touch and
+            // pen commonly report pressure during contact.
             onpointermove: move |evt: PointerEvent| {
-                if evt.pointer_type() != "mouse" && evt.pressure() > 0.0 {
+                if pointer_move_should_scroll(
+                    &evt.pointer_type(),
+                    evt.pressure(),
+                    !evt.held_buttons().is_empty(),
+                    active,
+                ) {
                     let c = evt.client_coordinates();
                     scroll_for(Point::new(c.x, c.y));
                 }
@@ -164,5 +191,33 @@ mod tests {
         // axis filtering: Y-only ignores horizontal proximity
         let (dx, _) = edge_delta(Point::new(1.0, 200.0), rect, 48.0, 24.0, ScrollAxis::Y);
         assert_eq!(dx, 0.0);
+    }
+
+    #[test]
+    fn pointer_scroll_predicate_matches_active_pointer_drags() {
+        assert!(
+            pointer_move_should_scroll("mouse", 0.0, true, None),
+            "default mouse pointer drags keep a held button during movement"
+        );
+        assert!(
+            !pointer_move_should_scroll("mouse", 0.0, false, None),
+            "passive mouse hover must not scroll"
+        );
+        assert!(
+            pointer_move_should_scroll("touch", 0.5, false, None),
+            "touch contact can report pressure instead of held buttons"
+        );
+        assert!(
+            pointer_move_should_scroll("pen", 0.0, true, None),
+            "pen contact can also surface as held buttons"
+        );
+        assert!(
+            !pointer_move_should_scroll("touch", 0.5, false, Some(false)),
+            "callers that track drag state can explicitly gate scrolling off"
+        );
+        assert!(
+            pointer_move_should_scroll("mouse", 0.0, false, Some(true)),
+            "callers that track drag state can explicitly gate scrolling on"
+        );
     }
 }

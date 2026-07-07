@@ -24,5 +24,13 @@ module.exports = defineConfig({
       reuseExistingServer: !process.env.CI,
       stdout: "pipe",
     },
+    {
+      command:
+        "dx serve --example showcase --platform web --features web --interactive false --open false --hot-patch false --port 8082",
+      url: "http://127.0.0.1:8082/dioxus-dnd/",
+      timeout: 10 * 60 * 1000,
+      reuseExistingServer: !process.env.CI,
+      stdout: "pipe",
+    },
   ],
 });
