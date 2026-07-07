@@ -279,6 +279,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                                 from,
                                 to: target,
                                 effect,
+                                mode: DragMode::Keyboard,
                                 client,
                                 element,
                                 grab: Point::default(),
@@ -437,6 +438,7 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                 let client = client_point(&evt);
                 let element = element_point(&evt);
                 let effect = effective_effect(dnd.effect(), evt.modifiers());
+                let mode = dnd.mode();
                 let grab = dnd.grab();
                 if let Some((payload, from)) = dnd.take() {
                     on_drop.call(DropOutcome {
@@ -444,6 +446,7 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                         from,
                         to: zone_id,
                         effect,
+                        mode,
                         client,
                         element,
                         grab,

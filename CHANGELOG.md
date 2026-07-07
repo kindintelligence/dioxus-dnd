@@ -79,12 +79,12 @@ elements. Existing `[data-…="true"]` selectors keep working.
   now registers as a drop zone so `PointerDraggable` (touch, pen, and mouse
   under `web`) can drop onto it - previously canvas accepted native HTML5
   drags only. Native and pointer drops place the element identically.
-- `DropOutcome` gained a `grab` field (pointer offset within the dragged
-  element at pickup); `element - grab` is the element's landing top-left.
-  `PointerDraggable` now records the real grab offset (from the press point
-  within the element) instead of the bare threshold travel, so the
-  `DragOverlay` ghost is held at the grab point - matching the native path -
-  and canvas drops land exactly.
+- Breaking: `DropOutcome` gained a `grab` field (pointer offset within the
+  dragged element at pickup); `element - grab` is the element's landing
+  top-left. `PointerDraggable` now records the real grab offset (from the
+  press point within the element) instead of the bare threshold travel, so
+  the `DragOverlay` ghost is held at the grab point - matching the native
+  path - and canvas drops land exactly.
 - New `SortableList::overlay` prop: callers can render a lightweight,
   fixed-position ghost that follows the pointer while the in-flow source row
   becomes the live gap. The overlay wrapper is sized from the measured source
@@ -117,6 +117,14 @@ elements. Existing `[data-…="true"]` selectors keep working.
 - Keyboard drops now deliver zone-relative `DropOutcome::element` from the
   selected target's center instead of always reporting `(0, 0)`, so keyboard
   drops into `CanvasDropZone` land in the canvas rather than at origin.
+- Breaking: `DropOutcome` now carries `mode: DragMode`, so drop handlers can
+  tell whether a completed drop came from pointer, native or keyboard input.
+  Manual `DropOutcome` literals must add the appropriate mode, for example
+  `mode: DragMode::Pointer` in pointer-drop tests.
+- `CanvasDropZone` now has `keyboard: CanvasKeyboardPlacement` for explicit
+  keyboard placement. The default `Center` policy preserves the current
+  selected-target center behavior; `Origin` and `Fixed(Point)` are available
+  for apps that want deterministic keyboard placement.
 - New `examples/canvas.rs`: a focused node-editor style demo using
   `CanvasDropZone`, `PointerDraggable`, `SnapGrid` and
   `Bounds::clamp_item` for snap grid and item-aware bounds while keeping the

@@ -301,13 +301,18 @@ and the corrected top-left position:
   element's own width or height; use `Bounds::clamp_item` or
   `Bounds::clamp_rect` when you want the whole item inside.
 
-Keyboard drops use the selected target's measured center. If the target has
-not been measured yet, the drop falls back to origin.
+Keyboard drops use the selected target's measured center by default. Set
+`keyboard: CanvasKeyboardPlacement::Origin` or
+`CanvasKeyboardPlacement::Fixed(point)` when keyboard placement should be
+explicit. Pointer and native drops still use pointer geometry and grab
+offset. If the selected target has no measured rect, the default `Center`
+policy receives origin from core keyboard geometry.
 
 ```text
 CanvasDropZone::<Node> {
     snap: SnapGrid(16.0),
     bounds: Bounds { width: 640.0, height: 360.0 },
+    keyboard: CanvasKeyboardPlacement::Center,
     on_drop: move |drop: CanvasDrop<Node>| {
         place_node(drop.payload.id, drop.position);
     },

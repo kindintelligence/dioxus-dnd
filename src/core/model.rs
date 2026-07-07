@@ -96,7 +96,7 @@ pub fn apply_list_clone_or_move<T, K>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Point;
+    use crate::core::{DragMode, Point};
 
     #[derive(Debug, Clone, PartialEq)]
     struct Card {
@@ -115,6 +115,7 @@ mod tests {
             from,
             to,
             effect,
+            mode: DragMode::Pointer,
             client: Point::default(),
             element: Point::default(),
             grab: Point::default(),

@@ -86,8 +86,9 @@ The test suite should lock the new defaults down.
 - Runtime tests should prove `DragInputMode::Native` and `Hybrid` still opt
   back into native `draggable`.
 - Browser tests should keep covering the web pointer path through `dx serve`.
-- Browser tests should stay small and behavior-focused: sortable overlay,
-  canvas drop position, and any future pointer capture regressions.
+- Browser tests should stay behavior-focused: sortable overlay, canvas drop
+  position, focused canvas workflows, keyboard placement policy and native
+  boundary interop.
 
 ## Later
 
@@ -95,8 +96,9 @@ These are useful, but not first.
 
 - A small native interop demo that shows file drop, external drop and drag-out
   side by side.
-- Canvas polish: design a better keyboard placement policy than the default
-  origin drop.
+- Canvas polish: evaluate whether advanced keyboard placement policies such
+  as last-pointer or payload-based callbacks are needed after the initial
+  `CanvasKeyboardPlacement` API.
 - More keyboard examples for sortable and board flows.
 - A migration note for users who depended on native mouse as the default.
 - A tighter public docs page for choosing between pointer, native and hybrid.

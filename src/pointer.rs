@@ -123,6 +123,7 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
             .map(|r| r.origin())
             .unwrap_or_default();
         // Read the grab offset before `take` resets the drag state.
+        let mode = dnd.mode();
         let grab = dnd.grab();
         if let Some((p, from)) = dnd.take() {
             record.on_drop.call(DropOutcome {
@@ -130,6 +131,7 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                 from,
                 to: target,
                 effect,
+                mode,
                 client: point,
                 element: point - origin,
                 grab,
