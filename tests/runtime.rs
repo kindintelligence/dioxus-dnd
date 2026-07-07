@@ -742,6 +742,105 @@ fn canvas_dropzone_registered_callback_reads_latest_keyboard_policy() {
     );
 }
 
+// --- Board slots join the zone registry ----------------------------------
+
+#[derive(Clone, Props)]
+struct BoardSlotRegistryProps {
+    moves: Shared<Vec<MoveEvent<&'static str>>>,
+}
+
+impl PartialEq for BoardSlotRegistryProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.moves, &other.moves)
+    }
+}
+
+fn board_slot_registry_app(props: BoardSlotRegistryProps) -> Element {
+    let moves = props.moves.clone();
+    rsx! {
+        DndProvider::<BoardPayload<&'static str>> {
+            BoardColumn::<&'static str> {
+                id: ZoneId(90),
+                on_move: move |_| {},
+                BoardSlot::<&'static str> {
+                    column: ZoneId(90),
+                    index: 1,
+                    on_move: move |mv| moves.lock().unwrap().push(mv),
+                    "slot"
+                }
+                BoardSlotProbe {}
+            }
+        }
+    }
+}
+
+#[component]
+fn BoardSlotProbe() -> Element {
+    let registry = use_zone_registry::<BoardPayload<&'static str>>();
+    let pointer_payload = BoardPayload {
+        item: "pointer-card",
+        from: ZoneId(10),
+        index: 0,
+    };
+    let keyboard_payload = BoardPayload {
+        item: "keyboard-card",
+        from: ZoneId(11),
+        index: 2,
+    };
+    let slots = registry.children_of(Some(ZoneId(90)), &pointer_payload);
+    assert_eq!(slots.len(), 1, "board slot should register as column child");
+    assert_eq!(slots[0].label.as_deref(), Some("Insert at position 1"));
+    slots[0].on_drop.call(DropOutcome {
+        payload: pointer_payload,
+        from: Some(ZoneId(10)),
+        to: slots[0].id,
+        effect: DropEffect::Move,
+        mode: DragMode::Pointer,
+        client: Point::new(8.0, 12.0),
+        element: Point::new(8.0, 12.0),
+        grab: Point::default(),
+    });
+    slots[0].on_drop.call(DropOutcome {
+        payload: keyboard_payload,
+        from: Some(ZoneId(11)),
+        to: slots[0].id,
+        effect: DropEffect::Move,
+        mode: DragMode::Keyboard,
+        client: Point::default(),
+        element: Point::default(),
+        grab: Point::default(),
+    });
+    rsx! { div {} }
+}
+
+#[test]
+fn board_slot_registers_for_pointer_and_keyboard_paths() {
+    let moves = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        board_slot_registry_app,
+        BoardSlotRegistryProps {
+            moves: moves.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+
+    assert_eq!(
+        *moves.lock().unwrap(),
+        vec![
+            MoveEvent {
+                item: "pointer-card",
+                from: (ZoneId(10), 0),
+                to: (ZoneId(90), Some(1)),
+            },
+            MoveEvent {
+                item: "keyboard-card",
+                from: (ZoneId(11), 2),
+                to: (ZoneId(90), Some(1)),
+            },
+        ]
+    );
+}
+
 // --- Tree targets join the zone registry ---------------------------------
 
 /// TreeNodeTargets register themselves as zones (that's what makes them
