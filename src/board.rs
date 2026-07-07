@@ -25,10 +25,15 @@
 //! ```
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
+use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, DragInputMode, DropOutcome, DropZone, ZoneId};
+use crate::core::{
+    use_dnd, use_zone_id, use_zone_registry, DragInputMode, DropEffect, DropOutcome, DropZone,
+    ParentZone, ZoneId, ZoneRecord,
+};
 use crate::pointer::PointerDraggable;
 
 /// Columns are just zones.
@@ -59,14 +64,20 @@ pub struct MoveEvent<T> {
 /// drifted) and inserts at the target position.
 pub fn apply_move<T>(board: &mut HashMap<ContainerId, Vec<T>>, mv: MoveEvent<T>) {
     let (from_col, from_ix) = mv.from;
+    let mut removed = false;
     if let Some(src) = board.get_mut(&from_col) {
         if from_ix < src.len() {
             src.remove(from_ix);
+            removed = true;
         }
     }
     let (to_col, to_ix) = mv.to;
+    let adjusted_to_ix = match to_ix {
+        Some(ix) if removed && from_col == to_col && from_ix < ix => Some(ix - 1),
+        other => other,
+    };
     let dst = board.entry(to_col).or_default();
-    match to_ix {
+    match adjusted_to_ix {
         Some(ix) if ix <= dst.len() => dst.insert(ix, mv.item),
         _ => dst.push(mv.item),
     }
@@ -153,18 +164,60 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     column: ContainerId,
     /// The index an item dropped here should be inserted at.
     index: usize,
+    /// Human label for screen-reader announcements.
+    #[props(default)]
+    label: Option<String>,
     on_move: EventHandler<MoveEvent<T>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
     let dnd = use_dnd::<BoardPayload<T>>();
+    let mut registry = use_zone_registry::<BoardPayload<T>>();
+    let zone_id = use_zone_id();
+    let parent = try_use_context::<ParentZone>().map(|p| p.0);
+    let mounted = use_signal(|| None::<Rc<MountedData>>);
+    let rect = use_signal(|| None);
+    let slot_label = label
+        .clone()
+        .or_else(|| Some(format!("Insert at position {index}")));
+
+    let registered_drop = Callback::new(move |outcome: DropOutcome<BoardPayload<T>>| {
+        let p = outcome.payload;
+        on_move.call(MoveEvent {
+            item: p.item,
+            from: (p.from, p.index),
+            to: (column, Some(index)),
+        });
+    });
+    let registered_label = slot_label.clone();
+    use_hook(move || {
+        registry.register(ZoneRecord {
+            id: zone_id,
+            parent,
+            label: registered_label.clone(),
+            on_drop: registered_drop,
+            accepts: None,
+            mounted,
+            rect,
+        });
+    });
+    use_drop(move || {
+        registry.unregister(zone_id);
+    });
+    registry.sync_label(zone_id, slot_label);
 
     rsx! {
         div {
             "data-active": if dnd.dragging() { "true" },
+            "data-over": if dnd.over() == Some(zone_id) { "true" },
+            onmounted: move |evt: Event<MountedData>| {
+                let mut mounted = mounted;
+                mounted.set(Some(evt.data()));
+            },
             ondragover: move |evt: DragEvent| {
                 if dnd.dragging() {
                     evt.prevent_default();
+                    evt.data_transfer().set_drop_effect(DropEffect::Move.as_str());
                 }
             },
             ondrop: {
@@ -223,5 +276,59 @@ mod tests {
         );
         assert!(board[&a].is_empty());
         assert_eq!(board[&c], vec!["x"]);
+    }
+
+    #[test]
+    fn move_within_column_adjusts_forward_insert_after_removal() {
+        let a = crate::core::ZoneId(1);
+        let mut board: HashMap<ContainerId, Vec<&str>> = HashMap::new();
+        board.insert(a, vec!["a", "b", "c", "d"]);
+
+        apply_move(
+            &mut board,
+            MoveEvent {
+                item: "a",
+                from: (a, 0),
+                to: (a, Some(3)),
+            },
+        );
+
+        assert_eq!(board[&a], vec!["b", "c", "a", "d"]);
+    }
+
+    #[test]
+    fn move_within_column_keeps_backward_insert_index() {
+        let a = crate::core::ZoneId(1);
+        let mut board: HashMap<ContainerId, Vec<&str>> = HashMap::new();
+        board.insert(a, vec!["a", "b", "c", "d"]);
+
+        apply_move(
+            &mut board,
+            MoveEvent {
+                item: "d",
+                from: (a, 3),
+                to: (a, Some(1)),
+            },
+        );
+
+        assert_eq!(board[&a], vec!["a", "d", "b", "c"]);
+    }
+
+    #[test]
+    fn move_within_column_appends_after_removal() {
+        let a = crate::core::ZoneId(1);
+        let mut board: HashMap<ContainerId, Vec<&str>> = HashMap::new();
+        board.insert(a, vec!["a", "b", "c"]);
+
+        apply_move(
+            &mut board,
+            MoveEvent {
+                item: "a",
+                from: (a, 0),
+                to: (a, None),
+            },
+        );
+
+        assert_eq!(board[&a], vec!["b", "c", "a"]);
     }
 }
