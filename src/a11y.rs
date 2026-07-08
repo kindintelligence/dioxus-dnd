@@ -140,8 +140,13 @@ pub(crate) struct MotionCssProvided;
 /// One `<style>` with [`REDUCED_MOTION_CSS`] per subtree: the outermost
 /// animated component renders it and marks the context; anything below
 /// gets `None`. (Sibling subtrees each render one - duplicate CSS rules
-/// are idempotent, so that's harmless.) `<style>` generates no box, so it
-/// is layout-neutral even inside grids and flex rows.
+/// are idempotent, so that's harmless.)
+///
+/// The element carries an inline `display: none`. The UA stylesheet hides
+/// `<style>` anyway, but at zero specificity: an app rule like
+/// `.list > * { display: flex }` would override it and paint the CSS
+/// source as visible text inside the list. An inline declaration outranks
+/// any selector, so the sheet stays invisible whatever the page styles.
 pub(crate) fn use_reduced_motion_css() -> Option<Element> {
     let first = use_hook(|| {
         if try_consume_context::<MotionCssProvided>().is_some() {
@@ -153,7 +158,7 @@ pub(crate) fn use_reduced_motion_css() -> Option<Element> {
     });
     first.then(|| {
         rsx! {
-            style { {REDUCED_MOTION_CSS} }
+            style { style: "display: none;", {REDUCED_MOTION_CSS} }
         }
     })
 }
