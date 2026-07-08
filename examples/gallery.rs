@@ -19,49 +19,67 @@ fn main() {
     dioxus::launch(App);
 }
 
-// shadcn-ish tokens, reused everywhere.
-const ITEM: &str = "flex items-center gap-2 cursor-grab select-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition data-dragging:opacity-50 data-dragging:ring-2 data-dragging:ring-slate-300";
-const ZONE: &str = "rounded-lg border-2 border-dashed border-slate-200 p-3 min-h-24 transition space-y-2 data-active:border-slate-300 data-over:border-slate-900 data-over:bg-slate-100/60";
+// Shared tokens, reused everywhere - warm neutrals, hairline borders, soft shadows.
+const ITEM: &str = "flex items-center gap-2 cursor-grab select-none rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition data-dragging:opacity-50 data-dragging:ring-2 data-dragging:ring-stone-200 hover:border-stone-300";
+const ZONE: &str = "rounded-xl border border-dashed border-stone-300 p-3.5 min-h-24 transition space-y-2.5 data-active:border-stone-300 data-active:bg-stone-50/60 data-over:border-stone-900 data-over:bg-stone-50";
 
-// A reusable "just dropped" confirmation: a ring + lifted shadow that pulse
-// and settle, so a completed drop reads clearly even when the layout barely
-// moves. Add the `drop-flash` class to an element when its drop lands.
-const EFFECTS_CSS: &str = r#"
-@keyframes drop-flash {
-  0%   { box-shadow: 0 0 0 3px rgba(15,23,42,0.20), 0 12px 26px -6px rgba(15,23,42,0.35); }
-  100% { box-shadow: 0 0 0 0 rgba(15,23,42,0),   0 1px 3px 0 rgba(15,23,42,0); }
+// Base typography plus a reusable "just dropped" confirmation: a ring + lifted
+// shadow that pulse and settle, so a completed drop reads clearly even when the
+// layout barely moves. Add the `drop-flash` class to an element when its drop
+// lands. Shadow-only (no transform) so it composes with FLIP transforms.
+const BASE_CSS: &str = r#"
+html {
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-.drop-flash { animation: drop-flash 550ms cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes drop-flash {
+  0%   { box-shadow: 0 0 0 3px rgba(28,25,23,0.16), 0 14px 28px -8px rgba(28,25,23,0.30); }
+  100% { box-shadow: 0 0 0 0 rgba(28,25,23,0),    0 1px 2px 0 rgba(28,25,23,0); }
+}
+.drop-flash { animation: drop-flash 600ms cubic-bezier(0.22, 1, 0.36, 1); }
 "#;
 
 #[component]
 fn App() -> Element {
     rsx! {
         document::Script { src: "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }
-        style { {EFFECTS_CSS} }
-        div { class: "min-h-screen bg-slate-50 text-slate-900 antialiased",
-            div { class: "mx-auto max-w-5xl px-6 py-14 space-y-8",
-                header { class: "space-y-1",
-                    p { class: "text-sm font-medium text-slate-500", "dioxus-dnd" }
-                    h1 { class: "text-3xl font-semibold tracking-tight", "Drag & drop gallery" }
-                    p { class: "text-sm text-slate-500",
-                        "Every pattern, on the web pointer path. Clean, standard behaviour - grab, drag, drop."
+        document::Link { rel: "preconnect", href: "https://fonts.googleapis.com" }
+        document::Link { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" }
+        document::Link {
+            rel: "stylesheet",
+            href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
+        }
+        style { {BASE_CSS} }
+        div { class: "min-h-screen bg-[#f6f5f1] text-stone-900 antialiased selection:bg-stone-900 selection:text-white",
+            div { class: "mx-auto max-w-4xl px-6 py-16 sm:py-24",
+                header { class: "mb-12 sm:mb-16",
+                    p { class: "text-[11px] font-semibold uppercase tracking-[0.22em] text-stone-400",
+                        "Dioxus · DnD"
+                    }
+                    h1 { class: "mt-3 text-4xl font-semibold tracking-tight text-stone-900 sm:text-5xl",
+                        "Drag & drop gallery"
+                    }
+                    p { class: "mt-4 max-w-xl text-[15px] leading-relaxed text-stone-500",
+                        "Every pattern in the library, on the web pointer path. Clean, standard behaviour — grab, drag, drop."
                     }
                 }
-                CardsDemo {}
-                CopyMoveDemo {}
-                SortableDemo {}
-                AccessibleReorderDemo {}
-                GridDemo {}
-                FlipDemo {}
-                FilterFlipDemo {}
-                BoardDemo {}
-                AutoScrollDemo {}
-                TreeDemo {}
-                CanvasDemo {}
-                MultiSelectDemo {}
-                FilesDemo {}
-                ExternalDemo {}
+                div { class: "space-y-5",
+                    CardsDemo {}
+                    CopyMoveDemo {}
+                    SortableDemo {}
+                    AccessibleReorderDemo {}
+                    GridDemo {}
+                    FlipDemo {}
+                    FilterFlipDemo {}
+                    BoardDemo {}
+                    AutoScrollDemo {}
+                    TreeDemo {}
+                    CanvasDemo {}
+                    MultiSelectDemo {}
+                    FilesDemo {}
+                    ExternalDemo {}
+                }
             }
         }
     }
@@ -70,10 +88,10 @@ fn App() -> Element {
 #[component]
 fn Section(title: String, note: String, children: Element) -> Element {
     rsx! {
-        section { class: "rounded-xl border border-slate-200 bg-white p-6 shadow-sm",
-            div { class: "mb-4",
-                h2 { class: "text-base font-semibold", "{title}" }
-                p { class: "mt-0.5 text-sm text-slate-500", "{note}" }
+        section { class: "rounded-2xl border border-stone-200/70 bg-white p-6 shadow-[0_1px_2px_rgba(28,25,23,0.04)] sm:p-8",
+            div { class: "mb-6",
+                h2 { class: "text-[15px] font-semibold tracking-tight text-stone-900", "{title}" }
+                p { class: "mt-1 text-[13px] leading-relaxed text-stone-500", "{note}" }
             }
             {children}
         }
@@ -139,7 +157,7 @@ fn CardsDemo() -> Element {
                             label: name,
                             on_drop: move_card,
                             class: ZONE,
-                            p { class: "text-xs font-medium uppercase tracking-wide text-slate-400", "{name}" }
+                            p { class: "text-xs font-medium uppercase tracking-wide text-stone-400", "{name}" }
                             for card in bins.read().get(&zone).cloned().unwrap_or_default() {
                                 PointerDraggable::<Card> {
                                     payload: card.clone(),
@@ -157,7 +175,7 @@ fn CardsDemo() -> Element {
                     }
                 }
                 DragOverlay::<Card> {
-                    class: "pointer-events-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-lg",
+                    class: "pointer-events-none rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm shadow-lg",
                     CardGhost {}
                 }
             }
@@ -187,7 +205,7 @@ fn SortableDemo() -> Element {
                 len: items.read().len(),
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "relative overflow-hidden [&>*]:mb-2 [&>*]:flex [&>*]:items-center [&>*]:rounded-lg [&>*]:border [&>*]:border-slate-200 [&>*]:bg-white [&>*]:px-3 [&>*]:py-2 [&>*]:text-sm [&>*]:cursor-grab [&>*]:select-none [&>*]:shadow-sm [&>*]:transition [&>[data-dragging]]:opacity-35 [&>[data-drop-target]]:border-slate-300 [&>[data-drop-target]]:bg-slate-50",
+                class: "relative overflow-hidden [&>*]:mb-2 [&>*]:flex [&>*]:items-center [&>*]:rounded-lg [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3 [&>*]:py-2 [&>*]:text-sm [&>*]:cursor-grab [&>*]:select-none [&>*]:shadow-sm [&>*]:transition [&>[data-dragging]]:opacity-35 [&>[data-drop-target]]:border-stone-300 [&>[data-drop-target]]:bg-stone-50",
                 overlay: move |ix: usize| rsx! { "{items.read()[ix]}" },
                 render: move |ix: usize| rsx! { "{items.read()[ix]}" },
             }
@@ -208,7 +226,7 @@ fn GridDemo() -> Element {
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut tiles.write(), ev),
                 class: "gap-2",
-                item_class: "flex items-center justify-center rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-700 cursor-grab select-none shadow-sm transition data-dragging:opacity-50 data-drop-target:border-slate-900 data-drop-target:ring-2 data-drop-target:ring-slate-900".to_string(),
+                item_class: "flex items-center justify-center rounded-lg border border-stone-200 bg-white p-6 text-sm text-stone-700 cursor-grab select-none shadow-sm transition data-dragging:opacity-50 data-drop-target:border-stone-900 data-drop-target:ring-2 data-drop-target:ring-stone-900".to_string(),
                 render: move |ix: usize| rsx! { "{tiles.read()[ix]}" },
             }
         }
@@ -257,8 +275,8 @@ fn BoardDemo() -> Element {
                             id: col,
                             label: name,
                             on_move: move |mv: MoveEvent<Card>| apply_move(&mut board.write(), mv),
-                            class: "rounded-lg border border-slate-200 bg-slate-50 p-3 min-h-32 space-y-2 data-active:bg-slate-100/70",
-                            p { class: "text-xs font-medium uppercase tracking-wide text-slate-400", "{name}" }
+                            class: "rounded-lg border border-stone-200 bg-stone-50 p-3 min-h-32 space-y-2 data-active:bg-stone-100/70",
+                            p { class: "text-xs font-medium uppercase tracking-wide text-stone-400", "{name}" }
                             for (ix, card) in board.read().get(&col).cloned().unwrap_or_default().into_iter().enumerate() {
                                 BoardItem::<Card> {
                                     item: card.clone(),
@@ -293,7 +311,7 @@ fn TreeDemo() -> Element {
                     class: "mb-3 inline-flex {ITEM}",
                     "Drag me onto the rows"
                 }
-                div { class: "rounded-lg border border-slate-200 overflow-hidden",
+                div { class: "rounded-lg border border-stone-200 overflow-hidden",
                     for (n, name) in [(1u64, "Documents"), (2, "Pictures"), (3, "Projects")] {
                         TreeNodeTarget::<String> {
                             node: NodeId(n),
@@ -301,16 +319,16 @@ fn TreeDemo() -> Element {
                             on_drop: move |ev: TreeDropEvent<String>| {
                                 msg.set(format!("{} → {:?} {}", ev.payload, ev.intent, ev.target.0));
                             },
-                            class: "border-b border-slate-100 px-3 py-2 text-sm text-slate-700 transition
+                            class: "border-b border-stone-100 px-3 py-2 text-sm text-stone-700 transition
                                     data-[intent=before]:shadow-[inset_0_2px_0_0_#0f172a]
                                     data-[intent=after]:shadow-[inset_0_-2px_0_0_#0f172a]
-                                    data-[intent=into]:bg-slate-100",
+                                    data-[intent=into]:bg-stone-100",
                             "{name}"
                         }
                     }
                 }
                 if !msg.read().is_empty() {
-                    p { class: "mt-2 text-xs text-slate-500", "{msg}" }
+                    p { class: "mt-2 text-xs text-stone-500", "{msg}" }
                 }
             }
         }
@@ -363,14 +381,14 @@ fn CanvasDemo() -> Element {
                             n.y = d.position.y;
                         }
                     },
-                    class: "relative h-56 rounded-lg border border-slate-200 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px] data-active:border-slate-300",
+                    class: "relative h-56 rounded-lg border border-stone-200 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px] data-active:border-stone-300",
                     for node in nodes.read().clone() {
                         PointerDraggable::<Node> {
                             payload: node.clone(),
                             input: DragInputMode::Pointer,
                             label: node.label.clone(),
                             style: "position: absolute; left: {node.x}px; top: {node.y}px;",
-                            class: "cursor-grab select-none rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm data-dragging:opacity-50",
+                            class: "cursor-grab select-none rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm shadow-sm data-dragging:opacity-50",
                             "{node.label}"
                         }
                     }
@@ -403,7 +421,7 @@ fn MultiSelectDemo() -> Element {
                                 selection,
                                 input: DragInputMode::Pointer,
                                 label: name,
-                                class: "flex cursor-grab select-none items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm transition data-selected:border-slate-900 data-selected:bg-slate-100 data-dragging:opacity-50",
+                                class: "flex cursor-grab select-none items-center rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition data-selected:border-stone-900 data-selected:bg-stone-100 data-dragging:opacity-50",
                                 "{name}"
                             }
                         }
@@ -414,16 +432,16 @@ fn MultiSelectDemo() -> Element {
                             trashed.write().extend(names);
                         },
                         class: ZONE,
-                        p { class: "text-xs font-medium uppercase tracking-wide text-slate-400", "Trash" }
+                        p { class: "text-xs font-medium uppercase tracking-wide text-stone-400", "Trash" }
                         if trashed.read().is_empty() {
-                            p { class: "text-sm text-slate-400", "Drop selected files here" }
+                            p { class: "text-sm text-stone-400", "Drop selected files here" }
                         } else {
-                            p { class: "text-sm text-slate-600", "{trashed.read().join(\", \")}" }
+                            p { class: "text-sm text-stone-600", "{trashed.read().join(\", \")}" }
                         }
                     }
                 }
                 DragOverlay::<Vec<u32>> {
-                    class: "pointer-events-none rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-lg",
+                    class: "pointer-events-none rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm shadow-lg",
                     SelectionCount::<u32> {}
                 }
             }
@@ -442,7 +460,7 @@ fn FilesDemo() -> Element {
                 on_files: move |drop: FileDrop| {
                     names.write().extend(drop.files.iter().map(|f| f.name()));
                 },
-                class: "flex min-h-24 items-center justify-center rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 transition data-over:border-slate-900 data-over:bg-slate-100/60 data-over:text-slate-600",
+                class: "flex min-h-24 items-center justify-center rounded-lg border-2 border-dashed border-stone-200 text-sm text-stone-400 transition data-over:border-stone-900 data-over:bg-stone-100/60 data-over:text-stone-600",
                 if names.read().is_empty() {
                     "Drop files from your desktop here"
                 } else {
@@ -463,14 +481,14 @@ fn ExternalDemo() -> Element {
             div { class: "grid grid-cols-2 gap-4",
                 ExternalDragSource {
                     content: OutboundContent::url("https://dioxuslabs.com", Some("Dioxus")),
-                    class: "flex cursor-grab items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-6 text-sm text-slate-700 shadow-sm",
+                    class: "flex cursor-grab items-center justify-center rounded-xl border border-stone-200 bg-white px-3 py-6 text-[13px] text-stone-700 shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition hover:border-stone-300",
                     "Drag this link out ↗"
                 }
                 ExternalDropZone {
                     on_drop: move |d: ExternalDrop| {
                         dropped.set(format!("{} payload(s), {} file(s)", d.payloads.len(), d.files.len()));
                     },
-                    class: "flex min-h-24 items-center justify-center rounded-lg border-2 border-dashed border-slate-200 text-sm text-slate-400 transition data-over:border-slate-900 data-over:bg-slate-100/60",
+                    class: "flex min-h-24 items-center justify-center rounded-lg border-2 border-dashed border-stone-200 text-sm text-stone-400 transition data-over:border-stone-900 data-over:bg-stone-100/60",
                     if dropped.read().is_empty() {
                         "Drop text or a link here"
                     } else {
@@ -526,7 +544,7 @@ fn CopyMoveDemo() -> Element {
                             label: name,
                             on_drop,
                             class: ZONE,
-                            p { class: "text-xs font-medium uppercase tracking-wide text-slate-400", "{name}" }
+                            p { class: "text-xs font-medium uppercase tracking-wide text-stone-400", "{name}" }
                             for card in zones.read().get(&zone).cloned().unwrap_or_default() {
                                 PointerDraggable::<Card> {
                                     payload: card.clone(),
@@ -560,7 +578,7 @@ fn AccessibleReorderDemo() -> Element {
                 len: items.read().len(),
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:rounded-lg [&>*]:border [&>*]:border-slate-200 [&>*]:bg-white [&>*]:px-3 [&>*]:py-2 [&>*]:text-sm [&>[data-dragging]]:opacity-50 [&>[data-drop-target]]:border-slate-900",
+                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:rounded-lg [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3 [&>*]:py-2 [&>*]:text-sm [&>[data-dragging]]:opacity-50 [&>[data-drop-target]]:border-stone-900",
                 render: move |ix: usize| rsx! {
                     span { "{items.read()[ix]}" }
                     ReorderButtons {
@@ -568,7 +586,7 @@ fn AccessibleReorderDemo() -> Element {
                         total: items.read().len(),
                         label: items.read()[ix].clone(),
                         on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                        class: "flex gap-1 [&_button]:rounded [&_button]:border [&_button]:border-slate-200 [&_button]:px-1.5 [&_button]:leading-none [&_button]:text-slate-600 [&_button:not(:disabled)]:hover:bg-slate-100 [&_button:disabled]:opacity-30",
+                        class: "flex gap-1 [&_button]:grid [&_button]:h-6 [&_button]:w-6 [&_button]:place-items-center [&_button]:rounded-md [&_button]:border [&_button]:border-stone-200 [&_button]:text-stone-500 [&_button]:transition [&_button:not(:disabled)]:hover:border-stone-300 [&_button:not(:disabled)]:hover:text-stone-900 [&_button:disabled]:opacity-30",
                     }
                 },
             }
@@ -590,7 +608,7 @@ fn FlipDemo() -> Element {
         Section { title: "FLIP animation", note: "Change the order and each tile glides from its old slot to the new one. (Experimental - depends on browser paint timing.)",
             div { class: "space-y-3",
                 button {
-                    class: "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50",
+                    class: "rounded-lg bg-stone-900 px-3.5 py-1.5 text-[13px] font-medium text-white shadow-[0_1px_2px_rgba(28,25,23,0.12)] transition hover:bg-stone-800",
                     onclick: shuffle,
                     "Shuffle"
                 }
@@ -601,7 +619,7 @@ fn FlipDemo() -> Element {
                         FlipItem {
                             key: "{n}",
                             epoch: epoch(),
-                            class: "flex items-center justify-center rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm",
+                            class: "flex items-center justify-center rounded-lg border border-stone-200 bg-white p-4 text-sm text-stone-700 shadow-sm",
                             "{n}"
                         }
                     }
@@ -649,9 +667,9 @@ fn FilterFlipDemo() -> Element {
                     for t in ["All", "Citrus", "Berry", "Stone"] {
                         button {
                             class: if filter() == t {
-                                "rounded-lg border border-slate-900 bg-slate-900 px-3 py-1 text-sm text-white"
+                                "rounded-full border border-stone-900 bg-stone-900 px-3.5 py-1.5 text-[13px] font-medium text-white transition"
                             } else {
-                                "rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm text-slate-700 transition hover:bg-slate-50"
+                                "rounded-full border border-stone-200 bg-white px-3.5 py-1.5 text-[13px] font-medium text-stone-600 transition hover:border-stone-300 hover:text-stone-900"
                             },
                             onclick: move |_| {
                                 if filter() != t {
@@ -670,7 +688,7 @@ fn FilterFlipDemo() -> Element {
                         FlipItem {
                             key: "{f.id}",
                             epoch: epoch(),
-                            class: "flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm",
+                            class: "flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] text-stone-700 shadow-[0_1px_2px_rgba(28,25,23,0.04)]",
                             span { class: "inline-block h-2 w-2 shrink-0 rounded-full {dot(f.tag)}" }
                             "{f.name}"
                         }
@@ -691,7 +709,7 @@ fn AutoScrollDemo() -> Element {
     rsx! {
         Section { title: "Auto-scroll", note: "Reorder a long list; drag toward the top or bottom edge and the container scrolls itself. The row flashes where it lands so the drop is obvious.",
             AutoScroll {
-                class: "max-h-44 overflow-y-auto rounded-lg border border-slate-200 p-2",
+                class: "max-h-44 overflow-y-auto rounded-lg border border-stone-200 p-2",
                 SortableList {
                     len: rows.read().len(),
                     input: DragInputMode::Pointer,
@@ -704,7 +722,7 @@ fn AutoScrollDemo() -> Element {
                         let flash = if dropped() == Some(ix) { "drop-flash" } else { "" };
                         rsx! {
                             div {
-                                class: "rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm {flash}",
+                                class: "rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.04)] {flash}",
                                 // Reset once the flash finishes so the same row
                                 // can flash again on its next drop.
                                 onanimationend: move |_| {
