@@ -45,7 +45,7 @@ cargo add dioxus-dnd
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 2.1 – 2.2 | **0.7** (verified against `0.7.9`) | 1.85+ |
+| 2.1 – 2.3 | **0.7** (verified against `0.7.9`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
 
 The crate depends on `dioxus` with `default-features = false, features =
