@@ -675,3 +675,33 @@ test("drop-settle glides the ghost into the zone then unmounts it", async ({ pag
   await expect(ghost).toHaveCount(0, { timeout: 1000 });
   await expect(status).toHaveAttribute("data-landed", "landed:5");
 });
+
+// Closest edge (DropZone { edge }): data-edge follows the pointer live within
+// the hovered zone, restricted to the allowed edge set, and the drop outcome
+// delivers the edge held at release. The attribute leaves with the drag.
+test("data-edge tracks the pointer and the drop carries the edge", async ({ page }) => {
+  await openFixtures(page);
+
+  const sec = await section(page, "Closest edge");
+  await sec.scrollIntoViewIfNeeded();
+  const zone = sec.locator(".edge-zone");
+  const status = sec.locator("#edge-status");
+
+  const from = await sec.locator("#edge-drag").boundingBox();
+  const to = await zone.boundingBox();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  // Upper half reads top - even at the far left, where an unrestricted
+  // nearest-of-four would say "left".
+  await page.mouse.move(to.x + 10, to.y + to.height * 0.25, { steps: 15 });
+  await expect(zone).toHaveAttribute("data-edge", "top");
+  // Crossing the midline flips it to bottom, live.
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height * 0.8, { steps: 8 });
+  await expect(zone).toHaveAttribute("data-edge", "bottom");
+  await page.mouse.up();
+
+  // The handler received the edge held at release, and the attribute left
+  // with the drag.
+  await expect(status).toHaveAttribute("data-landed", "edge:bottom");
+  await expect(zone).not.toHaveAttribute("data-edge", /.+/);
+});

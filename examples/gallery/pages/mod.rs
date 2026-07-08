@@ -1,3 +1,4 @@
+pub mod itinerary;
 pub mod mailbox;
 pub mod menu;
 pub mod moodboard;
@@ -14,6 +15,7 @@ pub mod standup;
 pub mod upload;
 pub mod weekly_focus;
 
+pub use itinerary::*;
 pub use mailbox::*;
 pub use menu::*;
 pub use moodboard::*;

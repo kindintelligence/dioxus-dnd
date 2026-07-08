@@ -32,6 +32,7 @@ fn App() -> Element {
         BridgeFixture {}
         StaleRectsFixture {}
         SettleFixture {}
+        EdgeFixture {}
     }
 }
 
@@ -511,6 +512,46 @@ fn SettleFixture() -> Element {
                     "parcel #5"
                 }
                 div { id: "settle-status", "data-landed": landed(), "landed: {landed}" }
+            }
+        }
+    }
+}
+
+// --- closest edge: data-edge tracks the pointer, the outcome carries it ------
+// DropZone { edge: EdgeSet::Vertical }: while an acceptable pointer drag
+// hovers the zone, data-edge reads the nearest allowed edge live on every
+// move; the delivered DropOutcome records the edge at release; the attribute
+// leaves with the drag.
+
+#[component]
+fn EdgeFixture() -> Element {
+    let mut landed = use_signal(|| "none".to_string());
+    rsx! {
+        section {
+            h2 { "Closest edge" }
+            DndProvider::<u32> {
+                Draggable::<u32> {
+                    payload: 9u32,
+                    label: "chip",
+                    id: "edge-drag",
+                    style: "width:120px; padding:10px; border:1px solid #333; \
+                            background:#fff; cursor:grab; user-select:none;",
+                    "chip #9"
+                }
+                DropZone::<u32> {
+                    edge: EdgeSet::Vertical,
+                    on_drop: move |o: DropOutcome<u32>| {
+                        landed.set(match o.edge {
+                            Some(e) => format!("edge:{}", e.as_str()),
+                            None => "edge:none".to_string(),
+                        });
+                    },
+                    class: "edge-zone",
+                    style: "margin-top:40px; width:300px; height:120px; \
+                            border:2px dashed #999; padding:8px;",
+                    "vertical edges"
+                }
+                div { id: "edge-status", "data-landed": landed(), "landed: {landed}" }
             }
         }
     }

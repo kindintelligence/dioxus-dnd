@@ -119,6 +119,7 @@ mod tests {
             client: Point::default(),
             element: Point::default(),
             grab: Point::default(),
+            edge: None,
         }
     }
 

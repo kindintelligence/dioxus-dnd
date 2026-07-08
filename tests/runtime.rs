@@ -560,6 +560,7 @@ fn DynamicCanvasProbe(phase: u8) -> Element {
                 client: Point::new(107.0, 46.0),
                 element: Point::new(107.0, 46.0),
                 grab: Point::new(9.0, 8.0),
+                edge: None,
             });
     }
 
@@ -643,6 +644,8 @@ fn KeyboardPolicyProbe(mode: DragMode) -> Element {
             client: Point::new(100.0, 80.0),
             element: Point::new(80.0, 60.0),
             grab: Point::default(),
+
+            edge: None,
         });
     rsx! { div {} }
 }
@@ -746,6 +749,8 @@ fn DynamicKeyboardPolicyProbe(phase: u8) -> Element {
                 client: Point::new(100.0, 80.0),
                 element: Point::new(80.0, 60.0),
                 grab: Point::default(),
+
+                edge: None,
             });
     }
     rsx! { div {} }
@@ -841,6 +846,8 @@ fn BoardSlotProbe() -> Element {
         client: Point::new(8.0, 12.0),
         element: Point::new(8.0, 12.0),
         grab: Point::default(),
+
+        edge: None,
     });
     slots[0].on_drop.call(DropOutcome {
         payload: keyboard_payload,
@@ -851,6 +858,8 @@ fn BoardSlotProbe() -> Element {
         client: Point::default(),
         element: Point::default(),
         grab: Point::default(),
+
+        edge: None,
     });
     rsx! { div {} }
 }
@@ -949,6 +958,8 @@ fn board_slot_inherits_column_accepts() {
                 client: Point::default(),
                 element: Point::default(),
                 grab: Point::default(),
+
+                edge: None,
             });
         }
         rsx! { div {} }
@@ -1090,6 +1101,8 @@ fn DynamicBoardSlotProbe(phase: u8) -> Element {
             client: Point::default(),
             element: Point::default(),
             grab: Point::default(),
+
+            edge: None,
         });
     }
     rsx! { div {} }
@@ -1217,6 +1230,8 @@ fn TreeIntentAcceptsProbe() -> Element {
         client: Point::default(),
         element: Point::new(0.0, 10.0),
         grab: Point::default(),
+
+        edge: None,
     });
     zones[0].on_drop.call(DropOutcome {
         payload: "into",
@@ -1227,6 +1242,8 @@ fn TreeIntentAcceptsProbe() -> Element {
         client: Point::default(),
         element: Point::new(0.0, 50.0),
         grab: Point::default(),
+
+        edge: None,
     });
 
     rsx! { div {} }
@@ -1330,6 +1347,8 @@ fn DynamicTreeTargetProbe(props: DynamicTreeTargetProbeProps) -> Element {
                 client: Point::default(),
                 element: Point::new(0.0, 120.0),
                 grab: Point::default(),
+
+                edge: None,
             });
         }
         1 => {
@@ -1349,6 +1368,8 @@ fn DynamicTreeTargetProbe(props: DynamicTreeTargetProbeProps) -> Element {
                 client: Point::default(),
                 element: Point::new(0.0, 120.0),
                 grab: Point::default(),
+
+                edge: None,
             });
             zones[0].on_drop.call(DropOutcome {
                 payload: "allowed",
@@ -1359,6 +1380,8 @@ fn DynamicTreeTargetProbe(props: DynamicTreeTargetProbeProps) -> Element {
                 client: Point::default(),
                 element: Point::new(0.0, 120.0),
                 grab: Point::default(),
+
+                edge: None,
             });
         }
         other => panic!("unexpected phase {other}"),
@@ -1988,6 +2011,8 @@ fn BridgeProbe() -> Element {
         client: p,
         element: p,
         grab: Point::default(),
+
+        edge: None,
     };
     reg_a.get(id).unwrap().on_drop.call(outcome_a);
     let outcome_b = DropOutcome {
@@ -1999,6 +2024,8 @@ fn BridgeProbe() -> Element {
         client: p,
         element: p,
         grab: Point::default(),
+
+        edge: None,
     };
     reg_b.get(id).unwrap().on_drop.call(outcome_b);
 
@@ -2088,6 +2115,8 @@ fn BridgeComponentProbe() -> Element {
         client: p,
         element: p,
         grab: Point::default(),
+
+        edge: None,
     });
     rec_b.on_drop.call(DropOutcome {
         payload: 7u32,
@@ -2098,6 +2127,8 @@ fn BridgeComponentProbe() -> Element {
         client: p,
         element: p,
         grab: Point::default(),
+
+        edge: None,
     });
 
     rsx! { div {} }
@@ -2127,6 +2158,109 @@ fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
     assert!(
         !html.contains("data-over"),
         "idle zone must not be over: {html}"
+    );
+}
+
+// --- Closest edge: data-edge + DropOutcome::edge ---------------------------
+
+/// A `DropZone` that opted into `edge` enriches delivered outcomes with the
+/// nearest zone edge, computed against its registered rect - but only for
+/// pointer drops, and only when opted in.
+#[test]
+fn drop_zone_edge_prop_enriches_pointer_outcomes() {
+    static RECEIVED: Mutex<Vec<Option<Edge>>> = Mutex::new(Vec::new());
+
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                DropZone::<u32> {
+                    id: ZoneId(41),
+                    edge: EdgeSet::Vertical,
+                    on_drop: move |o: DropOutcome<u32>| RECEIVED.lock().unwrap().push(o.edge),
+                    "tracked"
+                }
+                DropZone::<u32> {
+                    id: ZoneId(42),
+                    on_drop: move |o: DropOutcome<u32>| RECEIVED.lock().unwrap().push(o.edge),
+                    "plain"
+                }
+                EdgeProbe {}
+            }
+        }
+    }
+
+    #[component]
+    fn EdgeProbe() -> Element {
+        let reg = use_zone_registry::<u32>();
+        let outcome = |to: ZoneId, client: Point, mode: DragMode| DropOutcome {
+            payload: 1u32,
+            from: None,
+            to,
+            effect: DropEffect::Move,
+            mode,
+            client,
+            element: client,
+            grab: Point::default(),
+            edge: None,
+        };
+
+        let tracked = reg.get(ZoneId(41)).expect("tracked zone registered");
+        let mut rect = tracked.rect;
+        rect.set(Some(Rect::new(0.0, 0.0, 300.0, 40.0)));
+        // Pointer drop low in the row: nearest allowed edge is Bottom.
+        tracked.on_drop.call(outcome(
+            ZoneId(41),
+            Point::new(150.0, 31.0),
+            DragMode::Pointer,
+        ));
+        // Keyboard drop: no meaningful release point, edge stays None.
+        tracked.on_drop.call(outcome(
+            ZoneId(41),
+            Point::new(150.0, 20.0),
+            DragMode::Keyboard,
+        ));
+
+        // A zone without the prop never fills it in.
+        let plain = reg.get(ZoneId(42)).expect("plain zone registered");
+        let mut rect = plain.rect;
+        rect.set(Some(Rect::new(0.0, 100.0, 300.0, 40.0)));
+        plain.on_drop.call(outcome(
+            ZoneId(42),
+            Point::new(150.0, 131.0),
+            DragMode::Pointer,
+        ));
+
+        rsx! {
+            div {}
+        }
+    }
+
+    RECEIVED.lock().unwrap().clear();
+    run(app);
+    assert_eq!(
+        *RECEIVED.lock().unwrap(),
+        vec![Some(Edge::Bottom), None, None]
+    );
+}
+
+/// `data-edge` never renders while idle, even with the prop set.
+#[test]
+fn edge_attribute_absent_when_idle() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                DropZone::<u32> {
+                    edge: EdgeSet::All,
+                    on_drop: move |_: DropOutcome<u32>| {},
+                    "zone"
+                }
+            }
+        }
+    }
+    let html = run(app);
+    assert!(
+        !html.contains("data-edge"),
+        "idle zone shows no edge: {html}"
     );
 }
 

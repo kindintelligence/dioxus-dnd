@@ -113,6 +113,92 @@ impl Rect {
     }
 }
 
+/// One side of a drop zone's rectangle - which edge the pointer is nearest.
+/// The vocabulary for insertion indicators on a bare drop zone: "drop
+/// *above* this row" is `Top`, "append after it" is `Bottom`. Edges are
+/// physical (styling targets a screen side), not logical, so they don't
+/// mirror under RTL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+impl Edge {
+    /// The attribute value [`crate::core::components::DropZone`] renders in
+    /// `data-edge`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Edge::Top => "top",
+            Edge::Right => "right",
+            Edge::Bottom => "bottom",
+            Edge::Left => "left",
+        }
+    }
+}
+
+/// Which edges compete in [`edge_of`]. Named by stacking direction, like
+/// [`crate::sortable::Axis`]: a `Vertical` list stacks items top to bottom,
+/// so its insertion candidates are the top and bottom edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EdgeSet {
+    /// All four edges.
+    #[default]
+    All,
+    /// Top and bottom only - items stacked vertically.
+    Vertical,
+    /// Left and right only - items flowing horizontally.
+    Horizontal,
+}
+
+impl EdgeSet {
+    fn allows(self, edge: Edge) -> bool {
+        match self {
+            EdgeSet::All => true,
+            EdgeSet::Vertical => matches!(edge, Edge::Top | Edge::Bottom),
+            EdgeSet::Horizontal => matches!(edge, Edge::Left | Edge::Right),
+        }
+    }
+}
+
+/// The zone edge nearest to `point` - the generic closest-edge primitive
+/// for insertion indicators (drop above/below, insert left/right).
+///
+/// The point is clamped into the rect first, so out-of-range coordinates
+/// (a touch drop snapped from outside, a degenerate rect) still resolve.
+/// Ties prefer `Top`, then `Bottom`, then `Left`, then `Right`, so a dead
+/// center point over `EdgeSet::All` reads `Top`.
+///
+/// [`crate::core::components::DropZone`]'s opt-in `edge` prop renders this
+/// as a live `data-edge` attribute and delivers it in [`DropOutcome::edge`];
+/// call it directly for custom zones (e.g. against
+/// [`DropOutcome::element`] with the zone rect at the origin).
+pub fn edge_of(point: Point, rect: Rect, edges: EdgeSet) -> Edge {
+    let w = rect.width.max(0.0);
+    let h = rect.height.max(0.0);
+    let x = (point.x - rect.x).clamp(0.0, w);
+    let y = (point.y - rect.y).clamp(0.0, h);
+    let candidates = [
+        (Edge::Top, y),
+        (Edge::Bottom, h - y),
+        (Edge::Left, x),
+        (Edge::Right, w - x),
+    ];
+    let mut best: Option<(Edge, f64)> = None;
+    for (edge, distance) in candidates {
+        if !edges.allows(edge) {
+            continue;
+        }
+        if best.is_none_or(|(_, d)| distance < d) {
+            best = Some((edge, distance));
+        }
+    }
+    // Every EdgeSet variant allows at least two edges.
+    best.expect("EdgeSet allows at least one edge").0
+}
+
 /// Horizontal layout direction. Keyboard navigation mirrors under RTL:
 /// ArrowRight ascends instead of descending (the WAI-ARIA tree convention)
 /// and spatial zone ordering runs right-to-left within a row. Set it on
@@ -200,6 +286,12 @@ pub struct DropOutcome<T> {
     /// [`crate::canvas::CanvasDropZone`] uses for exact free-position drops.
     /// Zero for keyboard drops (no pointer offset).
     pub grab: Point,
+    /// The zone edge nearest the release point (see [`edge_of`]) - `Some`
+    /// only when the receiving `DropZone` opted in via its `edge` prop and
+    /// the drop was pointer-driven. Keyboard drops carry `None` (their
+    /// "release point" is the zone center, which names no edge); treat it
+    /// as your neutral intent, e.g. append.
+    pub edge: Option<Edge>,
 }
 
 #[cfg(test)]
@@ -235,6 +327,81 @@ mod tests {
             effective_effect(DropEffect::None, Modifiers::CONTROL),
             DropEffect::None
         );
+    }
+
+    #[test]
+    fn edge_of_picks_the_nearest_allowed_edge() {
+        let r = Rect::new(100.0, 50.0, 200.0, 40.0);
+        assert_eq!(edge_of(Point::new(200.0, 55.0), r, EdgeSet::All), Edge::Top);
+        assert_eq!(
+            edge_of(Point::new(200.0, 85.0), r, EdgeSet::All),
+            Edge::Bottom
+        );
+        assert_eq!(
+            edge_of(Point::new(103.0, 70.0), r, EdgeSet::All),
+            Edge::Left
+        );
+        assert_eq!(
+            edge_of(Point::new(297.0, 70.0), r, EdgeSet::All),
+            Edge::Right
+        );
+    }
+
+    /// A wide list row would read Left/Right in its end strips under `All`;
+    /// restricting to the stacking axis keeps insertion indicators sane.
+    #[test]
+    fn edge_of_respects_the_edge_set() {
+        let r = Rect::new(0.0, 0.0, 300.0, 40.0);
+        assert_eq!(edge_of(Point::new(4.0, 15.0), r, EdgeSet::All), Edge::Left);
+        assert_eq!(
+            edge_of(Point::new(4.0, 15.0), r, EdgeSet::Vertical),
+            Edge::Top
+        );
+        assert_eq!(
+            edge_of(Point::new(4.0, 25.0), r, EdgeSet::Vertical),
+            Edge::Bottom
+        );
+        assert_eq!(
+            edge_of(Point::new(100.0, 39.0), r, EdgeSet::Horizontal),
+            Edge::Left
+        );
+    }
+
+    #[test]
+    fn edge_of_clamps_and_breaks_ties_toward_top_then_left() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        // Dead center: everything ties; documented order wins.
+        assert_eq!(edge_of(Point::new(50.0, 50.0), r, EdgeSet::All), Edge::Top);
+        assert_eq!(
+            edge_of(Point::new(50.0, 50.0), r, EdgeSet::Horizontal),
+            Edge::Left
+        );
+        // Out-of-rect points clamp in before comparing.
+        assert_eq!(
+            edge_of(Point::new(-30.0, 50.0), r, EdgeSet::All),
+            Edge::Left
+        );
+        assert_eq!(
+            edge_of(Point::new(50.0, 500.0), r, EdgeSet::Vertical),
+            Edge::Bottom
+        );
+        // A degenerate rect resolves instead of panicking.
+        assert_eq!(
+            edge_of(
+                Point::new(0.0, 0.0),
+                Rect::new(0.0, 0.0, -5.0, 0.0),
+                EdgeSet::All
+            ),
+            Edge::Top
+        );
+    }
+
+    #[test]
+    fn edge_strings_match_the_attribute_contract() {
+        assert_eq!(Edge::Top.as_str(), "top");
+        assert_eq!(Edge::Right.as_str(), "right");
+        assert_eq!(Edge::Bottom.as_str(), "bottom");
+        assert_eq!(Edge::Left.as_str(), "left");
     }
 
     #[test]
