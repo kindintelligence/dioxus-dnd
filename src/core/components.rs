@@ -18,7 +18,8 @@ use dioxus::prelude::*;
 use std::rc::Rc;
 
 use super::hooks::{use_dnd, use_dnd_provider, use_zone_id, use_zone_registry, SettleFlag};
-use super::registry::ZoneRecord;
+use super::registry::{ZoneRecord, ZoneRegistry};
+use super::state::DndContext;
 use super::strings::use_dnd_strings;
 use super::{platform, transition, GestureEffect, GestureEvent, GesturePhase};
 
@@ -109,6 +110,62 @@ fn pointer_client(evt: &PointerEvent) -> Point {
     Point::new(c.x, c.y)
 }
 
+/// Deliver the in-flight payload to `target`: acceptance check, settle
+/// routing, outcome construction, the zone's callback. THE drop path - the
+/// `Draggable` pointer gesture and [`crate::test::DragSim`] both end here,
+/// so headless tests exercise exactly what production drops run.
+pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
+    registry: ZoneRegistry<T>,
+    dnd: &mut DndContext<T>,
+    settle_flag: Option<SettleFlag<T>>,
+    target: ZoneId,
+    point: Point,
+    effect: DropEffect,
+) -> bool {
+    let Some(record) = registry.get(target) else {
+        return false;
+    };
+    let Some(p) = dnd.payload() else {
+        return false;
+    };
+    if !record.accepts_payload(&p) {
+        return false;
+    }
+    let origin = (*record.rect.peek())
+        .map(|r| r.origin())
+        .unwrap_or_default();
+    let mode = dnd.mode();
+    let grab = dnd.grab();
+    // A settle-enabled overlay glides the ghost into the target zone:
+    // route the drop through the settling take so the payload stays
+    // readable while it animates. Pointer drops only - a keyboard drag
+    // renders no positioned ghost to glide.
+    let settle_to = match settle_flag {
+        Some(f) if mode == DragMode::Pointer && *f.armed.peek() => *record.rect.peek(),
+        _ => None,
+    };
+    let taken = match settle_to {
+        Some(to) => dnd.take_settling(to),
+        None => dnd.take(),
+    };
+    if let Some((p, from)) = taken {
+        record.on_drop.call(DropOutcome {
+            payload: p,
+            from,
+            to: target,
+            effect,
+            mode,
+            client: point,
+            element: point - origin,
+            grab,
+            // The receiving zone fills this in when it opted in.
+            edge: None,
+        });
+        return true;
+    }
+    false
+}
+
 /// Wraps its children in a focusable pointer/keyboard drag source and pushes
 /// `payload` into the shared context on drag start.
 ///
@@ -172,48 +229,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     let style = merge_style(&mut attributes, "touch-action: none;");
 
     let mut deliver_to = move |target: ZoneId, point: Point, effect: DropEffect| -> bool {
-        let Some(record) = registry.get(target) else {
-            return false;
-        };
-        let Some(p) = dnd.payload() else {
-            return false;
-        };
-        if !record.accepts_payload(&p) {
-            return false;
-        }
-        let origin = (*record.rect.peek())
-            .map(|r| r.origin())
-            .unwrap_or_default();
-        let mode = dnd.mode();
-        let grab = dnd.grab();
-        // A settle-enabled overlay glides the ghost into the target zone:
-        // route the drop through the settling take so the payload stays
-        // readable while it animates. Pointer drops only - a keyboard drag
-        // renders no positioned ghost to glide.
-        let settle_to = match settle_flag {
-            Some(f) if mode == DragMode::Pointer && *f.armed.peek() => *record.rect.peek(),
-            _ => None,
-        };
-        let taken = match settle_to {
-            Some(to) => dnd.take_settling(to),
-            None => dnd.take(),
-        };
-        if let Some((p, from)) = taken {
-            record.on_drop.call(DropOutcome {
-                payload: p,
-                from,
-                to: target,
-                effect,
-                mode,
-                client: point,
-                element: point - origin,
-                grab,
-                // The receiving zone fills this in when it opted in.
-                edge: None,
-            });
-            return true;
-        }
-        false
+        deliver_drop(registry, &mut dnd, settle_flag, target, point, effect)
     };
 
     let mut finish_drop = move |point: Point| {
