@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![Dioxus 0.7](https://img.shields.io/badge/dioxus-0.7-0E6B63)](https://dioxuslabs.com)
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
-[![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-156%20passing-brightgreen.svg)](CHANGELOG.md)
 
 **Pick it up. Put it anywhere.** Modular, accessible drag and drop for
 [Dioxus](https://dioxuslabs.com): one small core, one module per drop
@@ -45,7 +45,7 @@ cargo add dioxus-dnd
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 2.1 – 2.3 | **0.7** (verified against `0.7.9`) | 1.85+ |
+| 2.1 – 2.4 | **0.7** (verified against `0.7.9`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
 
 The crate depends on `dioxus` with `default-features = false, features =
