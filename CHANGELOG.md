@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.2.0 - 2026-07-08
 
 Cross-type drops, documented and de-trapped. Providers stay monomorphic -
 that's the crate's core guarantee - but two things now make living next to
