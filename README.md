@@ -1,5 +1,3 @@
-Refector in progress due to bug. version v0.2.0 will be stable release. 
-
 # dioxus-dnd
 
 [![Crates.io](https://img.shields.io/crates/v/dioxus-dnd.svg)]([https://crates.io/crates/dioxus-dnd](https://docs.rs/dioxus-dnd/1.0.0/dioxus_dnd/))
