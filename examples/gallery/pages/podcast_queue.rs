@@ -11,40 +11,76 @@ pub fn PodcastQueuePage() -> Element {
         PageIntro {
             kicker: "Reorder",
             title: "Podcast queue",
-            lead: "Two long-list problems, solved together: AutoScroll drives the container when a drag nears its edge, and touch_handle confines touch drags to a grip so the rows themselves keep scrolling under a finger.",
+            lead: "Long lists have two problems at once: a drag can't reach rows that are scrolled out of view, and a touch drag surface stops the list from finger-scrolling at all. AutoScroll solves the first, touch_handle the second.",
         }
         QueueDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "Wrap any scrollable container in AutoScroll and drags hovering within threshold pixels of an edge (default 48) scroll it by up to speed pixels per event (default 24), ramped by proximity. It works for in-app pointer drags and native boundary drags (OS files, external content) alike, using held-button state so passive mouse hover never scrolls."
-                }
-                p {
-                    "A touch drag surface must set touch-action: none, which would stop the browser from scrolling the list by finger. touch_handle: true claims only a leading grip for the gesture; style it via the data-sort-handle attribute."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "Wrap the scroller.",
+                        "AutoScroll renders a div; you give it the overflow CSS. While a drag hovers within threshold pixels of an edge (48 by default), the container scrolls itself by up to speed pixels per event (24 by default), ramped by how deep into the edge band the pointer sits.",
+                    ),
+                    (
+                        "It scrolls for both worlds.",
+                        "In-app pointer drags and native boundary drags (an OS file hovering on the way to a drop zone) both drive it. Held-button state gates the pointer path, so passively mousing around never scrolls anything.",
+                    ),
+                    (
+                        "Touch drags move to a grip.",
+                        "A touch drag surface must set touch-action: none, which would stop the browser from finger-scrolling the rows. touch_handle: true claims only a small leading grip for the drag gesture; the rest of each row scrolls normally under a finger.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "The two features compose but don't require each other: AutoScroll accepts any children (a board, a tree, a grid), and touch_handle is useful in any scrollable list even without auto-scroll."
+                }
+            }
+            DioxusNote {
+                p {
+                    "The grip is styled through a data attribute selector rather than a prop: the class string targets descendants with data-sort-handle. Attribute selectors are how headless components stay styleable without inventing a styling API."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "AutoScroll props",
+                rows: vec![
+                    ("threshold", "f64 = 48.0", "Size of the edge band in pixels. Enter it and scrolling begins."),
+                    ("speed", "f64 = 24.0", "Maximum scroll per event, reached at the very edge."),
+                    ("axis", "ScrollAxis = Y", "Y for lists, X for strips, Both for 2D panes."),
+                    ("active", "Option<bool>", "External gate: Some(true) forces scrolling on pointer movement, Some(false) suppresses it, None uses the built-in contact heuristic."),
+                ],
+            }
+            PropsTable {
+                title: "SortableList touch props",
+                rows: vec![
+                    ("touch_handle", "bool = false", "Confine drags to a leading grip so rows keep finger-scrolling. The grip carries data-sort-handle."),
+                    ("handle", "Callback<usize, Element>", "Replace the default braille-dots glyph with your own grip content, per row."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
                 notes: vec![
                     (
                         "No long-press timers, ever:",
-                        "a movement threshold plus an explicit handle is predictable and works the same for pens.",
+                        "a movement threshold plus an explicit handle is predictable and works identically for pens.",
                     ),
                     (
-                        "active: Some(false)",
-                        "suppresses scrolling when a parent tracks drag state and wants control.",
-                    ),
-                    (
-                        "The handle prop",
-                        "replaces the default braille-dots grip with your own rsx, keyed by row index.",
+                        "edge_delta is public and pure,",
+                        "so you can unit-test scroll ramps or drive a custom scroller with the same math.",
                     ),
                     (
                         "Pure MountedData:",
                         "no JavaScript eval; the same code works in web and desktop webviews.",
+                    ),
+                    (
+                        "The pointer must stay inside the container",
+                        "to scroll it; wandering off the edge stops the scroll rather than pinning it at full speed.",
                     ),
                 ],
             }
@@ -92,7 +128,7 @@ fn QueueDemo() -> Element {
             tag: "AutoScroll",
             // The scroll container *is* the well: flat rows, hairline
             // dividers, and the grabbed row lifts out of the surface.
-            AutoScroll { class: "max-h-52 overflow-y-auto rounded-xl bg-white/[0.03] ring-1 ring-white/5",
+            AutoScroll { class: "max-h-52 overflow-y-auto rounded-xl bg-[#EEEADF] ring-1 ring-[#E8E5D9]",
                 SortableList {
                     len: rows.read().len(),
                     // Inside a scroll container, claim only the grip for touch
@@ -102,12 +138,12 @@ fn QueueDemo() -> Element {
                         apply_sort(&mut rows.write(), ev);
                         dropped.set(Some(ev.to));
                     },
-                    class: "[&>*]:px-1.5 [&>*]:transition [&>*+*]:border-t [&>*+*]:border-white/5 [&>*:hover]:bg-white/[0.04] [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:bg-[#3d352a] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.04),0_12px_26px_-10px_rgba(0,0,0,0.65)] [&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:shrink-0 [&_[data-sort-handle]]:cursor-grab [&_[data-sort-handle]]:text-[13px] [&_[data-sort-handle]]:text-[#6d6150] [&_[data-sort-handle]]:transition [&_[data-sort-handle]:hover]:text-[#D97D55]",
+                    class: "[&>*]:px-1.5 [&>*]:transition [&>*+*]:border-t [&>*+*]:border-[#E8E5D9] [&>*:hover]:bg-[#E1DDCE]/50 [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:bg-[#FBFAF6] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_12px_26px_-10px_rgba(26,24,21,0.14)] [&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:shrink-0 [&_[data-sort-handle]]:cursor-grab [&_[data-sort-handle]]:text-[13px] [&_[data-sort-handle]]:text-[#BBB8AE] [&_[data-sort-handle]]:transition [&_[data-sort-handle]:hover]:text-[#1C4A38]",
                     render: move |ix: usize| {
                         let flash = if dropped() == Some(ix) { "drop-flash" } else { "" };
                         rsx! {
                             div {
-                                class: "cursor-grab select-none rounded-md px-2 py-2.5 text-[13px] text-[#d9cfbc] transition {flash}",
+                                class: "cursor-grab select-none rounded-md px-2 py-2.5 text-[13px] text-[#2C2A25] transition {flash}",
                                 // Reset once the flash finishes so the same row
                                 // can flash again on its next drop.
                                 onanimationend: move |_| {

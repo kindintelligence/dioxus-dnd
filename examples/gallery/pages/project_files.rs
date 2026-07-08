@@ -11,40 +11,79 @@ pub fn ProjectFilesPage() -> Element {
         PageIntro {
             kicker: "Structure",
             title: "Project files",
-            lead: "Every row is both a drag source and a target with three drop bands: the top edge places before, the middle nests inside, the bottom places after. A cycle guard keeps folders out of their own subtrees.",
+            lead: "The classic tree problem: dropping on a node can mean three different things. dioxus-dnd splits each row into three bands - top edge places before, middle nests inside, bottom edge places after - and a cycle guard keeps folders out of their own subtrees.",
         }
         FilesTreeDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "TreeNodeTarget resolves the pointer's vertical position against row_height into a DropIntent and exposes it live as a data-intent attribute valued before, into or after for styling. The completed TreeDropEvent hands you the payload, the target NodeId and the intent; what a move means is entirely your model's business."
-                }
-                p {
-                    "With a parent-pointer model, a subtree move is one field write: children keep pointing at the dragged node. would_create_cycle walks the target's ancestors and refuses when the dragged node appears, which covers dropping a folder into itself or any of its descendants."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "Three meanings per row.",
+                        "TreeNodeTarget resolves the pointer's vertical position against row_height into a DropIntent: the top quarter is Before, the bottom quarter After, the middle half Into. While hovered it exposes the live value as a data-intent attribute for styling insertion indicators.",
+                    ),
+                    (
+                        "The drop is yours to interpret.",
+                        "A completed drop hands you a TreeDropEvent: the payload, the target NodeId and the intent. With a parent-pointer model like this demo's, a whole subtree moves with one field write, because children keep pointing at the dragged node.",
+                    ),
+                    (
+                        "The tree stays a tree.",
+                        "The accepts callback receives the payload and the intent together, so rules like \"files refuse Into\" are one comparison. would_create_cycle walks the target's ancestors and refuses when the dragged node appears, which covers dropping a folder into itself or any descendant.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "Each row is both a target (TreeNodeTarget) and a source (the Draggable inside it). The payload here is just the node's id: the drop handler looks the node up in the model, so the tree structure lives in exactly one place."
+                }
+            }
+            DioxusNote {
+                p {
+                    "The accepts closure captures per-row data by wrapping the move closure in a block that first copies what it needs (the target id, whether it's a folder). That block-then-closure shape is the standard Rust answer whenever each row of a loop needs its own captured values."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "TreeNodeTarget props",
+                rows: vec![
+                    ("node", "NodeId, required", "The node this row represents; handed back in the drop event."),
+                    ("row_height", "f64 = 28.0", "Height used for the three bands. Keep it close to the rendered height; keyboard drops resolve their intent against it."),
+                    ("accepts", "Callback<(T, DropIntent), bool>", "Refuse combinations: cycle prevention, files rejecting Into, permission rules."),
+                    ("on_drop", "EventHandler<TreeDropEvent<T>>, required", "The completed drop with payload, target and intent."),
+                    ("label", "Option<String>", "Screen-reader name announced during keyboard navigation."),
+                ],
+            }
+            PropsTable {
+                title: "Types and helpers",
+                rows: vec![
+                    ("DropIntent", "Before | After | Into", "Where, relative to the target, the payload should land."),
+                    ("TreeDropEvent<T>", "payload, target, intent", "Everything your model needs to perform the move."),
+                    ("intent_from_offset(y, row_height)", "-> DropIntent", "The public band math, for custom tree interactions."),
+                    ("would_create_cycle(parent_of, dragged, target)", "-> bool", "Walks ancestors via your lookup closure; true when the drop would make a node its own ancestor."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
                 notes: vec![
                     (
-                        "accepts receives the intent too,",
-                        "so \"files refuse Into but allow Before and After\" is one comparison.",
-                    ),
-                    (
-                        "Keep row_height honest:",
-                        "keyboard drops resolve their intent from the measured row center against it.",
-                    ),
-                    (
                         "Value selectors style the bands:",
-                        "data-[intent=before]:shadow-[inset_0_2px_0_0_...] draws the insertion edge with no extra state.",
+                        "data-[intent=before] draws a top edge, data-[intent=into] tints the row, data-[intent=after] draws a bottom edge, all with no extra state.",
                     ),
                     (
-                        "intent_from_offset is public",
-                        "for building custom tree interactions on the same band math.",
+                        "Keyboard drops land in the middle band,",
+                        "resolving to Into, which is what nesting into the focused row should mean.",
+                    ),
+                    (
+                        "The chevron trick is free:",
+                        "this demo's folder chevrons swing open on data-intent=into via pure CSS, signalling \"this will go inside\" with zero wiring.",
+                    ),
+                    (
+                        "would_create_cycle is defensive",
+                        "about broken parent maps too: a cycle in your own data reads as unsafe rather than looping forever.",
                     ),
                 ],
             }
@@ -95,7 +134,7 @@ fn flatten_tree(
 fn Chevron() -> Element {
     rsx! {
         svg {
-            class: "h-3 w-3 shrink-0 text-[#6d6150] transition-transform duration-150 in-data-[intent=into]:rotate-90 in-data-[intent=into]:text-[#D97D55]",
+            class: "h-3 w-3 shrink-0 text-[#BBB8AE] transition-transform duration-150 in-data-[intent=into]:rotate-90 in-data-[intent=into]:text-[#1C4A38]",
             "viewBox": "0 0 12 12",
             fill: "none",
             stroke: "currentColor",
@@ -173,7 +212,7 @@ fn FilesTreeDemo() -> Element {
             tag: "would_create_cycle",
             DndProvider::<u64> {
                 LiveRegion::<u64> {}
-                div { class: "overflow-hidden rounded-xl bg-white/[0.03] ring-1 ring-white/5",
+                div { class: "overflow-hidden rounded-xl bg-[#EEEADF] ring-1 ring-[#E8E5D9]",
                     for (depth, n) in flat {
                         TreeNodeTarget::<u64> {
                             key: "{n.id}",
@@ -231,17 +270,17 @@ fn FilesTreeDemo() -> Element {
                                     msg.set(format!("Moved {name} {verb} {target_name}"));
                                 }
                             },
-                            class: "border-b border-white/6 transition last:border-0
-                                    data-[intent=before]:shadow-[inset_0_2px_0_0_#D97D55]
-                                    data-[intent=after]:shadow-[inset_0_-2px_0_0_#D97D55]
-                                    data-[intent=into]:bg-[#B8C4A9]/18",
+                            class: "border-b border-[#E8E5D9] transition last:border-0
+                                    data-[intent=before]:shadow-[inset_0_2px_0_0_#1C4A38]
+                                    data-[intent=after]:shadow-[inset_0_-2px_0_0_#1C4A38]
+                                    data-[intent=into]:bg-[#6C9984]/18",
                             Draggable::<u64> {
                                 payload: n.id,
                                 label: n.name,
-                                class: "block cursor-grab select-none transition hover:bg-white/[0.04] active:cursor-grabbing data-dragging:opacity-40",
-                                div { class: "flex items-center gap-2 py-2.5 pl-3 pr-3.5 text-[13px] font-medium text-[#d9cfbc]",
+                                class: "block cursor-grab select-none transition hover:bg-[#E1DDCE]/50 active:cursor-grabbing data-dragging:opacity-40",
+                                div { class: "flex items-center gap-2 py-2.5 pl-3 pr-3.5 text-[13px] font-medium text-[#2C2A25]",
                                     for _ in 0..depth {
-                                        span { class: "ml-1 h-5 w-3.5 shrink-0 border-l border-white/10" }
+                                        span { class: "ml-1 h-5 w-3.5 shrink-0 border-l border-[#D7D4C9]" }
                                     }
                                     if n.folder {
                                         Chevron {}
@@ -249,7 +288,7 @@ fn FilesTreeDemo() -> Element {
                                         span { class: "font-mono text-[12px]", "{n.name}/" }
                                     } else {
                                         span { class: "w-3 shrink-0" }
-                                        span { class: "text-[#B8A98C]", DocGlyph {} }
+                                        span { class: "text-[#B88B2F]", DocGlyph {} }
                                         span { class: "font-mono text-[12px]", "{n.name}" }
                                     }
                                 }
@@ -258,7 +297,7 @@ fn FilesTreeDemo() -> Element {
                     }
                 }
                 if !msg.read().is_empty() {
-                    p { class: "mt-2 text-xs text-[#b8ab93]", "{msg}" }
+                    p { class: "mt-2 text-xs text-[#45423B]", "{msg}" }
                 }
             }
         }

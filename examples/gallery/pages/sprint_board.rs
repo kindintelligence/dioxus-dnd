@@ -13,24 +13,69 @@ pub fn SprintBoardPage() -> Element {
         PageIntro {
             kicker: "Structure",
             title: "Sprint board",
-            lead: "BoardColumn appends, BoardSlot inserts at an exact index, and one accepts closure on the column becomes a WIP limit that both the column and its slots enforce, on every input path.",
+            lead: "The kanban pattern: cards travel between columns, thin slots between cards catch precise inserts, and a single accepts closure on a column becomes a WIP limit that every input path respects.",
         }
         SprintDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "Cards are BoardItems carrying a BoardPayload (the item, its source column and its index) through context. Dropping on a column produces a MoveEvent whose target index is None, meaning append; dropping on a slot produces Some(index) for a precise insert. apply_move applies either to a HashMap board model, adjusting same-column moves correctly."
-                }
-                p {
-                    "The column's accepts closure inherits to its slots via context. Here it returns false when In progress is full unless the card already lives there, so the column stops lighting up and the drop is refused outright."
-                }
-                p {
-                    "One rule worth internalizing: keep slot geometry constant mid-drag. The pointer path hit-tests rects cached at drag start, so a slot that grows in the layout shifts everything below it. Show the open state with a transform or an indicator line, never with reflow. The invisible hit band here is a taller element pulled back by negative margins with pointer-events: none."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "Cards carry their origin.",
+                        "BoardItem is a thin wrapper over Draggable whose payload is a BoardPayload: your item plus the column and index it was picked up from. The provider's type is DndProvider::<BoardPayload<Card>>.",
+                    ),
+                    (
+                        "Columns append, slots insert.",
+                        "Dropping on a BoardColumn emits a MoveEvent whose target index is None, meaning append to the end. Dropping on a BoardSlot emits Some(index) for that exact position. apply_move applies either to a HashMap board model, adjusting indices correctly when a card moves within its own column.",
+                    ),
+                    (
+                        "One filter rules them all.",
+                        "A column's accepts closure inherits to every slot inside it through context. Here it refuses new cards when In progress is full, so neither the column nor its slots light up, and the drop bounces on pointer, touch and keyboard alike.",
+                    ),
+                    (
+                        "Slots must not reflow.",
+                        "The pointer path hit-tests rects cached at drag start, so a slot that grows mid-drag would shift every card below it and strand the highlight. Show the open state with a transform or an indicator line; this demo scales in a clay line and widens the hit area with an invisible band.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "The rhythm is slot, card, slot, card, slot: one insertion point before each card and one at the end. Both zone kinds share the same on_move handler, so the model code neither knows nor cares whether a drop was an append or a precise insert."
+                }
+            }
+            DioxusNote {
+                p {
+                    "Context flows downward: BoardColumn provides its acceptance filter and the slots inside discover it automatically, the same mechanism DndProvider uses to reach every draggable. That is also why the demo keeps its columns in a child component: use_dnd must be called inside the provider, not beside it."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "BoardColumn props",
+                rows: vec![
+                    ("id", "ContainerId, required", "The column's identity (a ZoneId). Use explicit u32-range ids so handlers can name columns."),
+                    ("on_move", "EventHandler<MoveEvent<T>>, required", "Receives every completed move targeting this column."),
+                    ("accepts", "Callback<BoardPayload<T>, bool>", "Refuse payloads (WIP limits, type rules). Inherited by nested slots."),
+                    ("label", "Option<String>", "Screen-reader name for keyboard navigation."),
+                ],
+            }
+            PropsTable {
+                title: "BoardSlot and BoardItem props",
+                rows: vec![
+                    ("BoardSlot: column, index", "ContainerId, usize", "Which column this insertion point belongs to and the index a drop should insert at. Carries data-active and data-over for styling."),
+                    ("BoardItem: item, column, index", "T, ContainerId, usize", "The card and where it currently lives; packed into the BoardPayload on pickup."),
+                ],
+            }
+            PropsTable {
+                title: "The move model",
+                rows: vec![
+                    ("BoardPayload<T>", "item, from, index", "What travels through context while a card is in flight."),
+                    ("MoveEvent<T>", "item, from: (col, ix), to: (col, Option<ix>)", "A completed move. A None target index means append."),
+                    ("apply_move(&mut board, mv)", "", "Applies a MoveEvent to a HashMap of ContainerId to Vec, handling same-column index shifts and creating unknown target columns."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
@@ -41,15 +86,15 @@ pub fn SprintBoardPage() -> Element {
                     ),
                     (
                         "Same-column no-ops are detectable:",
-                        "compare the drag payload's from and index against a slot to suppress its indicator.",
+                        "compare the drag payload's from and index against a slot to suppress its indicator, as this demo does for the two slots hugging the dragged card.",
                     ),
                     (
                         "Auto ids start at 2^32,",
-                        "so explicit column ids in the u32 range can never collide with a slot's auto id.",
+                        "so explicit column ids in the u32 range can never collide with a slot's auto-generated id.",
                     ),
                     (
-                        "Boards nest:",
-                        "inner drag scopes stop propagation, so a board inside a board owns its own gestures.",
+                        "Moves within a column stay allowed",
+                        "under a WIP limit when the filter checks the payload's origin: the count does not change, so reordering full columns still works.",
                     ),
                 ],
             }
@@ -154,7 +199,7 @@ fn SprintColumns(board: Signal<HashMap<ContainerId, Vec<Card>>>) -> Element {
     // resolves to the slot. pointer-events-none keeps that invisible overlap
     // from stealing pointerdown on the cards themselves.
     const SLOT: &str = "pointer-events-none relative -my-2.5 flex h-8 items-center px-1 [&[data-over]>span]:scale-x-100 [&[data-over]>span]:opacity-100";
-    const SLOT_LINE: &str = "h-[3px] w-full origin-center scale-x-50 rounded-full bg-[#D97D55] opacity-0 shadow-[0_0_12px_rgba(217,125,85,0.7)] transition-all duration-150";
+    const SLOT_LINE: &str = "h-[3px] w-full origin-center scale-x-50 rounded-full bg-[#1C4A38] opacity-0 transition-all duration-150";
 
     rsx! {
         div { class: "grid grid-cols-1 gap-3 sm:grid-cols-3",
@@ -164,17 +209,17 @@ fn SprintColumns(board: Signal<HashMap<ContainerId, Vec<Card>>>) -> Element {
                     label: name,
                     on_move,
                     accepts: move |p: BoardPayload<Card>| wip_gate(col, p),
-                    class: "rounded-xl bg-[#26211a] p-2.5 min-h-36 shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] transition data-active:ring-1 data-active:ring-[#B8C4A9]/60 data-active:bg-[#B8C4A9]/12",
+                    class: "rounded-xl bg-[#EEEADF] p-2.5 min-h-36 shadow-[inset_0_1px_2px_rgba(26,24,21,0.07)] transition data-active:ring-1 data-active:ring-[#6C9984]/60 data-active:bg-[#6C9984]/12",
                     div { class: "mb-1 flex items-center justify-between px-1",
-                        p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]",
+                        p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7A776C]",
                             "{name}"
                         }
                         if col == DOING {
-                            span { class: if count(DOING) >= WIP { "rounded-full bg-[#D97D55] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white" } else { "rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#b8ab93] ring-1 ring-white/10" },
+                            span { class: if count(DOING) >= WIP { "rounded-full bg-[#7A3E25] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white" } else { "rounded-full bg-[#E4ECDD] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#1C4A38] ring-1 ring-[#CFDDCF]" },
                                 "{count(DOING)}/{WIP}"
                             }
                         } else {
-                            span { class: "min-w-5 rounded-full bg-white/10 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums text-[#b8ab93] ring-1 ring-white/10",
+                            span { class: "min-w-5 rounded-full bg-[#E4ECDD] px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums text-[#1C4A38] ring-1 ring-[#CFDDCF]",
                                 "{count(col)}"
                             }
                         }
@@ -198,14 +243,14 @@ fn SprintColumns(board: Signal<HashMap<ContainerId, Vec<Card>>>) -> Element {
                             div { class: ROW,
                                 span { class: "h-7 w-1 shrink-0 rounded-full {swatch(card.id)}" }
                                 div { class: "min-w-0 flex-1",
-                                    div { class: "truncate font-medium text-[#f4e9d7]",
+                                    div { class: "truncate font-medium text-[#1A1815]",
                                         "{card.title}"
                                     }
-                                    div { class: "truncate text-[11px] text-[#9c8f77]",
+                                    div { class: "truncate text-[11px] text-[#7A776C]",
                                         "{card.sub}"
                                     }
                                 }
-                                span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/10 text-[9px] font-bold uppercase text-[#e0a37f] ring-1 ring-white/10",
+                                span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#7A776C]/10 text-[9px] font-bold uppercase text-[#12362A] ring-1 ring-[#D7D4C9]",
                                     "{initials(&card.sub)}"
                                 }
                             }

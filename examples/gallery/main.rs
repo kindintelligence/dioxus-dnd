@@ -12,6 +12,7 @@ mod pages;
 mod ui;
 
 use dioxus::prelude::*;
+use dioxus_dnd::prelude::*;
 use pages::*;
 use ui::*;
 
@@ -182,35 +183,43 @@ fn App() -> Element {
         }
         document::Link {
             rel: "stylesheet",
-            href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
+            href: "https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap",
+        }
+        document::Link {
+            rel: "stylesheet",
+            href: "https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&display=swap",
         }
         style { {BASE_CSS} }
         Router::<Route> {}
     }
 }
 
-/// The persistent frame around every page: detached sidebar (drawer on
-/// mobile), the double-chevron toggle, and the routed content column.
+/// The frame around every page. The landing page stands alone, full-bleed;
+/// the sidebar (a drawer on mobile, with the double-chevron toggle) appears
+/// once you step into a pattern page.
 #[component]
 fn Shell() -> Element {
     let mut nav_open = use_signal(|| false);
+    let on_home = use_route::<Route>() == (Route::Home {});
     rsx! {
-        div { class: "min-h-screen bg-[#211c15] text-[#f4e9d7] antialiased selection:bg-[#D97D55] selection:text-white lg:pl-64",
-            Sidebar { open: nav_open }
-            button {
-                class: "fixed left-4 top-4 z-50 grid h-10 w-10 place-items-center rounded-xl bg-[#2b2620]/90 text-[#e0a37f] shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_20px_-6px_rgba(0,0,0,0.6)] ring-1 ring-white/10 backdrop-blur transition active:scale-95 lg:hidden",
-                aria_label: if nav_open() { "Close navigation" } else { "Open navigation" },
-                onclick: move |_| {
-                    let v = nav_open();
-                    nav_open.set(!v);
-                },
-                DoubleChevron { open: nav_open() }
+        div { class: if on_home { "min-h-screen bg-[#FBFAF6] text-[#1A1815] antialiased selection:bg-[#1C4A38] selection:text-white" } else { "min-h-screen bg-[#FBFAF6] text-[#1A1815] antialiased selection:bg-[#1C4A38] selection:text-white lg:pl-72" },
+            if !on_home {
+                Sidebar { open: nav_open }
+                button {
+                    class: "fixed left-4 top-4 z-50 grid h-10 w-10 place-items-center rounded-xl bg-[#F6F3EC]/90 text-[#12362A] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_8px_20px_-6px_rgba(26,24,21,0.14)] ring-1 ring-[#D7D4C9] backdrop-blur transition active:scale-95 lg:hidden",
+                    aria_label: if nav_open() { "Close navigation" } else { "Open navigation" },
+                    onclick: move |_| {
+                        let v = nav_open();
+                        nav_open.set(!v);
+                    },
+                    DoubleChevron { open: nav_open() }
+                }
             }
             div { class: "mx-auto max-w-3xl px-5 py-14 sm:px-6 sm:py-16",
                 Outlet::<Route> {}
-                footer { class: "mt-14 border-t border-white/8 pt-7 text-[12px] text-[#8d8069]",
+                footer { class: "mt-14 border-t border-[#E8E5D9] pt-7 text-[12px] text-[#9B988D]",
                     "Built with "
-                    span { class: "font-medium text-[#b8ab93]", "dioxus-dnd" }
+                    span { class: "font-medium text-[#45423B]", "dioxus-dnd" }
                     ". Every page is a screenful of code, styled by you."
                 }
             }
@@ -219,12 +228,31 @@ fn Shell() -> Element {
 }
 
 /// Site navigation: a detached floating card pinned on the left from lg up,
-/// an off-canvas drawer below that. Links close the drawer and highlight the
-/// current page.
+/// an off-canvas drawer below that. A brand lockup with a drag-handle mark,
+/// hairline-ruled group labels, entries numbered in the mono gutter with a
+/// forest indicator on the active page, and a version footer. Links close
+/// the drawer.
 #[component]
 fn Sidebar(open: Signal<bool>) -> Element {
     let mut open = open;
     let current = use_route::<Route>();
+    // Number the patterns 01..14 across all groups for the mono gutter.
+    let mut n = 0usize;
+    let groups: Vec<(&'static str, Vec<(usize, NavItem)>)> = nav()
+        .into_iter()
+        .map(|(group, _tagline, items)| {
+            (
+                group,
+                items
+                    .into_iter()
+                    .map(|item| {
+                        n += 1;
+                        (n, item)
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
     let shell = if open() {
         "translate-x-0"
     } else {
@@ -233,88 +261,300 @@ fn Sidebar(open: Signal<bool>) -> Element {
     rsx! {
         if open() {
             div {
-                class: "fixed inset-0 z-30 bg-black/60 backdrop-blur-[2px] lg:hidden",
+                class: "fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px] lg:hidden",
                 onclick: move |_| open.set(false),
             }
         }
-        aside { class: "fixed bottom-4 left-4 top-16 z-40 flex w-64 flex-col overflow-y-auto rounded-2xl bg-[#26211a]/95 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_60px_-24px_rgba(0,0,0,0.8)] ring-1 ring-white/8 backdrop-blur transition-transform duration-300 lg:bottom-5 lg:left-5 lg:top-5 lg:w-56 {shell}",
+        aside { class: "fixed bottom-4 left-4 top-16 z-40 flex w-64 flex-col overflow-y-auto rounded-2xl bg-[#F6F3EC]/95 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_2px_0_rgba(26,24,21,0.03),0_24px_60px_-24px_rgba(26,24,21,0.16)] ring-1 ring-[#E8E5D9] backdrop-blur transition-transform duration-300 lg:bottom-5 lg:left-5 lg:top-5 lg:w-60 {shell}",
             Link {
                 to: Route::Home {},
                 onclick: move |_| open.set(false),
-                class: "mb-2 flex items-center gap-2 rounded-lg px-2.5 pt-1 transition hover:bg-white/5",
-                span { class: "h-2 w-2 shrink-0 rounded-full bg-[#D97D55] shadow-[0_0_10px_rgba(217,125,85,0.6)]" }
-                span { class: "text-[14px] font-semibold tracking-tight text-[#f4e9d7]",
-                    "dioxus-dnd"
+                class: "flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors duration-200 hover:bg-[#EEEADF]/70",
+                span { class: "grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#1C4A38] text-[13px] leading-none text-[#F0F2E3] shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]",
+                    "⠿"
                 }
-                span { class: "ml-auto rounded-full bg-white/8 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#8d8069]",
-                    "14"
+                div { class: "min-w-0",
+                    p { class: "text-[13.5px] font-semibold leading-tight tracking-tight text-[#1A1815]",
+                        "dioxus-dnd"
+                    }
+                    p { class: "text-[9.5px] font-medium uppercase tracking-[0.1em] text-[#9B988D]",
+                        "Drag & drop for Dioxus"
+                    }
                 }
             }
+            div { class: "mx-2 mb-1 mt-2.5 h-px bg-[#E8E5D9]" }
             nav { aria_label: "Patterns", class: "flex-1",
-                for (group, _tagline, items) in nav() {
-                    p { class: "px-2.5 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#6FA4AF]",
-                        "{group}"
+                for (group, items) in groups {
+                    div { class: "flex items-center gap-2.5 px-2.5 pb-1.5 pt-5",
+                        p { class: "text-[10px] font-medium uppercase tracking-[0.14em] text-[#9B988D]",
+                            "{group}"
+                        }
+                        span { class: "h-px flex-1 bg-[#E8E5D9]" }
                     }
-                    for item in items {
-                        Link {
-                            to: item.route.clone(),
-                            onclick: move |_| open.set(false),
-                            class: if current == item.route { "block rounded-lg bg-white/8 px-2.5 py-1.5 text-[13px] font-medium text-[#f4e9d7]" } else { "block rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[#9c8f77] transition hover:bg-white/5 hover:text-[#f4e9d7]" },
-                            "{item.title}"
+                    for (n, item) in items {
+                        {
+                            let active = current == item.route;
+                            rsx! {
+                                Link {
+                                    to: item.route.clone(),
+                                    onclick: move |_| open.set(false),
+                                    class: if active { "relative flex items-center gap-2.5 rounded-md bg-[#E4ECDD] px-2.5 py-1.5 text-[13px] font-medium text-[#12362A]" } else { "relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-[#5E5B52] transition-colors duration-200 hover:bg-[#EEEADF]/70 hover:text-[#1A1815]" },
+                                    if active {
+                                        span { class: "absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-[#1C4A38]" }
+                                    }
+                                    code { class: if active { "text-[10px] tabular-nums text-[#3E7558]" } else { "text-[10px] tabular-nums text-[#BBB8AE]" },
+                                        {format!("{n:02}")}
+                                    }
+                                    span { class: "truncate", "{item.title}" }
+                                }
+                            }
                         }
                     }
                 }
             }
-            p { class: "px-2.5 pb-1 pt-3 text-[11px] leading-relaxed text-[#6d6150]",
-                "Every pattern, one library."
+            div { class: "mt-3 border-t border-[#E8E5D9] px-2 pb-1 pt-3",
+                p { class: "text-[11px] leading-relaxed text-[#BBB8AE]",
+                    "Every pattern, one library."
+                }
+                div { class: "mt-2 flex items-center gap-2.5",
+                    code { class: "rounded bg-[#EEEADF] px-1.5 py-0.5 text-[10px] text-[#7A776C]",
+                        "v1.0.0"
+                    }
+                    a {
+                        href: "https://github.com/kindintelligence/dioxus-dnd",
+                        target: "_blank",
+                        class: "text-[11px] font-medium text-[#1C4A38] transition-colors duration-200 hover:text-[#12362A]",
+                        "GitHub ↗"
+                    }
+                    a {
+                        href: "https://crates.io/crates/dioxus-dnd",
+                        target: "_blank",
+                        class: "text-[11px] font-medium text-[#1C4A38] transition-colors duration-200 hover:text-[#12362A]",
+                        "crates.io ↗"
+                    }
+                }
             }
         }
     }
 }
 
-/// The landing page: hero plus a linked card per pattern, grouped like the
-/// sidebar.
+/// One paper scrap on the hero board: a label pinned at a jaunty angle,
+/// draggable for real.
+#[derive(Clone, PartialEq)]
+struct Scrap {
+    id: u32,
+    label: &'static str,
+    x: f64,
+    y: f64,
+    rot: &'static str,
+    tone: &'static str,
+}
+
+/// The hero's proof-of-work: a dot-grid board where every scrap is a real
+/// `Draggable` on a real `CanvasDropZone`. The landing page runs on the
+/// library it advertises.
 #[component]
-fn Home() -> Element {
+fn HeroBoard() -> Element {
+    let mut scraps = use_signal(|| {
+        vec![
+            Scrap {
+                id: 1,
+                label: "sortable",
+                x: 26.0,
+                y: 22.0,
+                rot: "-rotate-2",
+                tone: "bg-[#E4ECDD] text-[#1C4A38]",
+            },
+            Scrap {
+                id: 2,
+                label: "kanban",
+                x: 132.0,
+                y: 96.0,
+                rot: "rotate-1",
+                tone: "bg-[#E8D4BE] text-[#7A3E25]",
+            },
+            Scrap {
+                id: 3,
+                label: "tree",
+                x: 240.0,
+                y: 34.0,
+                rot: "rotate-2",
+                tone: "bg-[#E9DDB8] text-[#8A6A1F]",
+            },
+            Scrap {
+                id: 4,
+                label: "canvas",
+                x: 318.0,
+                y: 108.0,
+                rot: "-rotate-1",
+                tone: "bg-[#D9E4EC] text-[#2D4F6B]",
+            },
+            Scrap {
+                id: 5,
+                label: "multi-select",
+                x: 420.0,
+                y: 44.0,
+                rot: "rotate-3",
+                tone: "bg-[#F0F2E3] text-[#2A5E48]",
+            },
+            Scrap {
+                id: 6,
+                label: "files",
+                x: 60.0,
+                y: 132.0,
+                rot: "rotate-1",
+                tone: "bg-[#F1D9D1] text-[#8B3A2E]",
+            },
+        ]
+    });
     rsx! {
-        header { class: "mb-10",
-            p { class: "text-[12px] font-semibold uppercase tracking-[0.18em] text-[#D97D55]",
-                "Dioxus · Drag & Drop"
-            }
-            h1 { class: "mt-3 text-3xl font-semibold tracking-tight text-[#f4e9d7] sm:text-4xl",
-                "Pick it up, put it anywhere."
-            }
-            p { class: "mt-3 max-w-xl text-[14px] leading-relaxed text-[#b8ab93]",
-                "Fourteen drag and drop patterns, each on its own page: a live interface you can grab, how it works underneath, and the API that drives it."
-            }
-            div { class: "mt-5 flex flex-wrap gap-2",
-                for chip in ["Pointer-native", "Keyboard-accessible", "Bring your own styles"] {
-                    span { class: "rounded-full bg-white/8 px-2.5 py-1 text-[11px] font-medium text-[#b8ab93]",
-                        "{chip}"
+        DndProvider::<Scrap> {
+            LiveRegion::<Scrap> {}
+            CanvasDropZone::<Scrap> {
+                bounds: Bounds {
+                    width: 640.0,
+                    height: 150.0,
+                },
+                label: "Hero board",
+                on_drop: move |d: CanvasDrop<Scrap>| {
+                    let mut s = scraps.write();
+                    if let Some(scrap) = s.iter_mut().find(|s| s.id == d.payload.id) {
+                        scrap.x = d.position.x;
+                        scrap.y = d.position.y;
+                    }
+                },
+                class: "relative h-52 overflow-hidden rounded-2xl bg-[#F6F3EC] bg-[radial-gradient(#E1DDCE_1px,transparent_1px)] [background-size:18px_18px] ring-1 ring-[#E8E5D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_1px_2px_rgba(26,24,21,0.04)] transition data-active:ring-[#A6C1B0]",
+                for scrap in scraps.read().clone() {
+                    Draggable::<Scrap> {
+                        payload: scrap.clone(),
+                        label: scrap.label,
+                        style: "position: absolute; left: {scrap.x}px; top: {scrap.y}px;",
+                        class: "cursor-grab select-none rounded-md px-2.5 py-1.5 font-mono text-[11.5px] font-medium ring-1 ring-[#1A1815]/10 shadow-[0_1px_2px_rgba(26,24,21,0.08),0_6px_14px_-6px_rgba(26,24,21,0.16)] transition hover:-translate-y-px active:cursor-grabbing data-dragging:opacity-40 {scrap.rot} {scrap.tone}",
+                        "{scrap.label}"
                     }
                 }
             }
+            p { class: "mt-3 text-[12.5px] leading-relaxed text-[#7A776C]",
+                "Every scrap up there is a "
+                span { class: "font-mono text-[11.5px] text-[#1C4A38]", "Draggable" }
+                " on a "
+                span { class: "font-mono text-[11.5px] text-[#1C4A38]", "CanvasDropZone" }
+                ". Go on, rearrange them."
+            }
         }
-        for (group, tagline, items) in nav() {
-            GroupLabel { kicker: group, title: tagline }
+    }
+}
+
+/// The landing page: a two-tone display headline, the live hero board, a
+/// mono stat strip, numbered group sections matching the sidebar, and a
+/// closing statement band.
+#[component]
+fn Home() -> Element {
+    // Continue the sidebar's 01..14 numbering onto the cards.
+    let mut n = 0usize;
+    let groups: Vec<(usize, &'static str, &'static str, Vec<(usize, NavItem)>)> = nav()
+        .into_iter()
+        .enumerate()
+        .map(|(gi, (group, tagline, items))| {
+            (
+                gi + 1,
+                group,
+                tagline,
+                items
+                    .into_iter()
+                    .map(|item| {
+                        n += 1;
+                        (n, item)
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    rsx! {
+        header { class: "mb-8",
+            p { class: "text-[11px] font-medium uppercase tracking-[0.12em] text-[#1C4A38]",
+                "Dioxus · Drag & Drop"
+            }
+            h1 { class: "mt-3 text-4xl font-semibold leading-[1.05] tracking-[-0.03em] sm:text-5xl",
+                span { class: "block text-[#1A1815]", "Pick it up." }
+                span { class: "block text-[#BBB8AE]", "Put it anywhere." }
+            }
+            p { class: "mt-5 max-w-xl text-[15px] leading-relaxed text-[#45423B]",
+                "Fourteen drag and drop patterns for Dioxus, each on its own page: a live interface you can grab, how it works underneath, and the API that drives it."
+            }
+            div { class: "mt-6 flex flex-wrap items-center gap-3",
+                Link {
+                    to: Route::ReadingListPage {},
+                    class: "rounded-lg bg-[#1C4A38] px-4 py-2 text-[13px] font-medium text-[#F0F2E3] shadow-[0_1px_0_rgba(26,24,21,0.04),0_2px_6px_rgba(26,24,21,0.10)] transition-colors duration-200 hover:bg-[#12362A]",
+                    "Start with the basics"
+                }
+                a {
+                    href: "https://github.com/kindintelligence/dioxus-dnd",
+                    target: "_blank",
+                    class: "rounded-lg px-4 py-2 text-[13px] font-medium text-[#45423B] ring-1 ring-[#D7D4C9] transition-colors duration-200 hover:bg-[#EEEADF]/70 hover:text-[#1A1815]",
+                    "GitHub ↗"
+                }
+                a {
+                    href: "https://crates.io/crates/dioxus-dnd",
+                    target: "_blank",
+                    class: "rounded-lg px-4 py-2 text-[13px] font-medium text-[#45423B] ring-1 ring-[#D7D4C9] transition-colors duration-200 hover:bg-[#EEEADF]/70 hover:text-[#1A1815]",
+                    "crates.io ↗"
+                }
+            }
+        }
+        HeroBoard {}
+        div { class: "mt-8 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-[#E8E5D9] ring-1 ring-[#E8E5D9] shadow-[0_1px_0_rgba(26,24,21,0.04),0_1px_2px_rgba(26,24,21,0.04)] sm:grid-cols-4",
+            for (value, label) in [
+                ("14", "patterns, each its own page"),
+                ("3", "inputs: mouse, touch, keyboard"),
+                ("0", "JavaScript dependencies"),
+                ("MIT", "licensed, on crates.io"),
+            ] {
+                div { class: "bg-[#FBFAF6] px-4 py-3",
+                    p { class: "text-[16px] font-semibold tracking-tight text-[#1A1815]",
+                        "{value}"
+                    }
+                    p { class: "mt-0.5 text-[11px] leading-snug text-[#7A776C]", "{label}" }
+                }
+            }
+        }
+        for (gi, group, tagline, items) in groups {
+            div { class: "mb-4 mt-12 flex items-baseline justify-between gap-4 border-b border-[#E8E5D9] pb-2.5",
+                div { class: "flex items-baseline gap-3",
+                    code { class: "text-[13px] text-[#BBB8AE]", {format!("{gi:02}")} }
+                    h2 { class: "text-[16px] font-semibold tracking-tight text-[#1A1815]",
+                        "{group}"
+                    }
+                }
+                p { class: "hidden text-[12px] text-[#9B988D] sm:block", "{tagline}" }
+            }
             div { class: "grid grid-cols-1 gap-3 sm:grid-cols-2",
-                for item in items {
+                for (num, item) in items {
                     Link {
                         to: item.route.clone(),
-                        class: "group rounded-xl bg-gradient-to-b from-[#3d352a] to-[#332c23] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),inset_0_0_0_1px_rgba(255,255,255,0.03),0_1px_2px_rgba(0,0,0,0.5),0_4px_12px_-4px_rgba(0,0,0,0.4)] transition hover:-translate-y-px hover:brightness-[1.06]",
-                        div { class: "flex items-center justify-between gap-3",
-                            span { class: "text-[14px] font-semibold text-[#f4e9d7]",
-                                "{item.title}"
+                        class: "group rounded-xl bg-[#F6F3EC] p-4 ring-1 ring-[#E8E5D9] shadow-[0_1px_0_rgba(26,24,21,0.04),0_1px_2px_rgba(26,24,21,0.04)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_2px_0_rgba(26,24,21,0.03),0_8px_20px_rgba(26,24,21,0.08)]",
+                        div { class: "flex items-center justify-between",
+                            code { class: "text-[10px] tabular-nums text-[#BBB8AE] transition-colors duration-200 group-hover:text-[#3E7558]",
+                                {format!("{num:02}")}
                             }
-                            span { class: "text-[#6d6150] transition group-hover:translate-x-0.5 group-hover:text-[#e0a37f]",
+                            span { class: "text-[#BBB8AE] transition duration-200 group-hover:translate-x-0.5 group-hover:text-[#1C4A38]",
                                 "→"
                             }
                         }
-                        p { class: "mt-1.5 text-[12.5px] leading-relaxed text-[#9c8f77]",
+                        p { class: "mt-2 text-[14px] font-semibold tracking-tight text-[#1A1815]",
+                            "{item.title}"
+                        }
+                        p { class: "mt-1 text-[12.5px] leading-relaxed text-[#7A776C]",
                             "{item.blurb}"
                         }
                     }
                 }
+            }
+        }
+        div { class: "mt-16 border-y border-[#E8E5D9] py-9 text-center",
+            p { class: "mx-auto max-w-md text-[17px] font-light leading-relaxed text-[#45423B]",
+                "The library moves the payload. "
+                span { class: "font-medium text-[#1C4A38]", "What it means is yours." }
             }
         }
     }

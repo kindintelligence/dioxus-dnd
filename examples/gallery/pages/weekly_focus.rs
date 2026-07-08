@@ -11,40 +11,76 @@ pub fn WeeklyFocusPage() -> Element {
         PageIntro {
             kicker: "Reorder",
             title: "Weekly focus",
-            lead: "The most robust accessibility fallback is no drag at all: ReorderButtons renders headless move-up and move-down buttons that emit the same SortEvent as the drag path, so one on_sort serves both inputs.",
+            lead: "The most robust accessibility fallback is no drag at all. ReorderButtons renders plain move-up and move-down buttons that emit the same SortEvent as the drag gesture, so supporting every user costs one extra component, not a second code path.",
         }
         PriorityDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "ReorderButtons takes the row's index, the total, and an optional accessible label; it renders two buttons with aria-labels like Move-item-up and Move-item-down, disables them at the list edges, and stops pointer propagation so a tap on the button never starts the row's drag gesture."
-                }
-                p {
-                    "Because both inputs produce identical events, your model code cannot drift: there is no second code path to forget when the list logic changes."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "Same event, second input.",
+                        "ReorderButtons takes the row's index, the list total, and an optional accessible label. Pressing up emits SortEvent from ix to ix - 1; pressing down, to ix + 1. Your on_sort handler cannot tell (and does not care) whether a drag or a button produced the event.",
+                    ),
+                    (
+                        "Edges handle themselves.",
+                        "The first row's up button and the last row's down button render disabled, so an out-of-range event can never be emitted and the affordance honestly reflects what is possible.",
+                    ),
+                    (
+                        "Buttons never fight the drag.",
+                        "The wrapper stops pointer propagation, so a tap on a button stays a tap: it will not start the enclosing row's drag gesture or steal its pointer capture.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "Both on_sort props point at the same handler. That is the whole point: when the list logic changes, there is no second code path to forget, and testing the buttons tests the drag semantics too."
+                }
+            }
+            DioxusNote {
+                p {
+                    "Passing the same closure to two components is idiomatic Dioxus: event handlers are cheap handles, and each call site captures the items signal by copy. Cloning items.read()[ix] out of the read guard keeps the borrow short."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "ReorderButtons props",
+                rows: vec![
+                    ("index", "usize, required", "This row's position."),
+                    ("total", "usize, required", "The list length, for edge detection."),
+                    ("label", "Option<String>", "Accessible name: buttons announce as \"Move label up / down\". Falls back to \"item N\"."),
+                    ("on_sort", "EventHandler<SortEvent>, required", "Receives the same event shape as drag reordering."),
+                ],
+            }
+            PropsTable {
+                title: "Styling hooks",
+                rows: vec![
+                    ("data-reorder", "\"up\" | \"down\"", "On each button, so the two directions can be styled or iconed independently."),
+                    ("class / attributes", "forwarded", "Land on the wrapper span; style the buttons themselves with descendant selectors, as this page does."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
                 notes: vec![
                     (
-                        "Style hooks:",
-                        "the buttons carry data-reorder=\"up\" and \"down\", and the wrapper span forwards class and attributes.",
-                    ),
-                    (
-                        "Edge handling is built in:",
-                        "index 0 disables up, the last row disables down; you never emit an out-of-range event.",
-                    ),
-                    (
                         "Keyboard drag still works too.",
-                        "Buttons are the fallback; focusing the row itself and pressing Space starts a full keyboard drag.",
+                        "Buttons are the fallback, not the ceiling: focusing the row itself and pressing Space starts a full keyboard drag.",
                     ),
                     (
-                        "Screen readers get real names",
-                        "when you pass label; otherwise buttons fall back to \"item N\".",
+                        "Headless by design:",
+                        "the component ships two unstyled buttons and the behavior; the arrows, sizing and hover states here are all page CSS.",
+                    ),
+                    (
+                        "Works anywhere SortEvent works.",
+                        "Pair it with SortableGrid or your own list; nothing about it assumes SortableList.",
+                    ),
+                    (
+                        "Announce results with LiveRegion",
+                        "when the reorder matters to screen-reader users beyond focus staying put.",
                     ),
                 ],
             }
@@ -88,20 +124,20 @@ fn PriorityDemo() -> Element {
             SortableList {
                 len: items.read().len(),
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "rounded-xl bg-white/[0.03] ring-1 ring-white/5 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:gap-3 [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:transition [&>*+*]:border-t [&>*+*]:border-white/5 [&>*:first-child]:rounded-t-xl [&>*:last-child]:rounded-b-xl [&>*:hover]:bg-white/[0.04] [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:rounded-lg [&>[data-dragging]]:bg-[#3d352a] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.04),0_16px_34px_-12px_rgba(0,0,0,0.65)]",
+                class: "rounded-xl bg-[#EEEADF] ring-1 ring-[#E8E5D9] [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:gap-3 [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:transition [&>*+*]:border-t [&>*+*]:border-[#E8E5D9] [&>*:first-child]:rounded-t-xl [&>*:last-child]:rounded-b-xl [&>*:hover]:bg-[#E1DDCE]/50 [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:rounded-lg [&>[data-dragging]]:bg-[#FBFAF6] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_16px_34px_-12px_rgba(26,24,21,0.14)]",
                 render: move |ix: usize| rsx! {
                     div { class: "flex min-w-0 items-center gap-2.5",
-                        span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[#D97D55] text-[11px] font-semibold tabular-nums text-white",
+                        span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[#E4ECDD] text-[11px] font-semibold tabular-nums text-[#1C4A38] ring-1 ring-[#A6C1B0]",
                             "{ix + 1}"
                         }
-                        span { class: "truncate font-medium text-[#f4e9d7]", "{items.read()[ix]}" }
+                        span { class: "truncate font-medium text-[#1A1815]", "{items.read()[ix]}" }
                     }
                     ReorderButtons {
                         index: ix,
                         total: items.read().len(),
                         label: items.read()[ix].clone(),
                         on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                        class: "flex shrink-0 gap-1 [&_button]:grid [&_button]:h-6 [&_button]:w-6 [&_button]:place-items-center [&_button]:rounded-md [&_button]:bg-white/8 [&_button]:text-[#9c8f77] [&_button]:transition [&_button:not(:disabled)]:hover:bg-white/15 [&_button:not(:disabled)]:hover:text-[#D97D55] [&_button:disabled]:opacity-30",
+                        class: "flex shrink-0 gap-1 [&_button]:grid [&_button]:h-6 [&_button]:w-6 [&_button]:place-items-center [&_button]:rounded-md [&_button]:bg-[#7A776C]/10 [&_button]:text-[#7A776C] [&_button]:transition [&_button:not(:disabled)]:hover:bg-[#7A776C]/20 [&_button:not(:disabled)]:hover:text-[#1C4A38] [&_button:disabled]:opacity-30",
                     }
                 },
             }
