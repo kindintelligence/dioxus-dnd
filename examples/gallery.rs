@@ -52,6 +52,8 @@ html {
      the browser render native scrollbars and controls in their dark forms. */
   background: #211c15;
   color-scheme: dark;
+  /* Sidebar anchor navigation glides instead of jumping. */
+  scroll-behavior: smooth;
 }
 *:focus:not(:focus-visible) { outline: none; }
 @keyframes drop-flash {
@@ -72,6 +74,9 @@ html {
 
 #[component]
 fn App() -> Element {
+    // Off-canvas drawer state for the mobile sidebar. On lg+ screens the
+    // sidebar is pinned open and this signal is ignored.
+    let mut nav_open = use_signal(|| false);
     rsx! {
         document::Script { src: "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }
         document::Link { rel: "preconnect", href: "https://fonts.googleapis.com" }
@@ -85,7 +90,19 @@ fn App() -> Element {
             href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
         }
         style { {BASE_CSS} }
-        div { class: "min-h-screen bg-[#211c15] text-[#f4e9d7] antialiased selection:bg-[#D97D55] selection:text-white",
+        div { class: "min-h-screen bg-[#211c15] text-[#f4e9d7] antialiased selection:bg-[#D97D55] selection:text-white lg:pl-64",
+            Sidebar { open: nav_open }
+            // The mobile drawer toggle: double chevrons pointing the way the
+            // drawer will move. Hidden on lg+, where the sidebar is pinned.
+            button {
+                class: "fixed left-4 top-4 z-50 grid h-10 w-10 place-items-center rounded-xl bg-[#2b2620]/90 text-[#e0a37f] shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_20px_-6px_rgba(0,0,0,0.6)] ring-1 ring-white/10 backdrop-blur transition active:scale-95 lg:hidden",
+                aria_label: if nav_open() { "Close navigation" } else { "Open navigation" },
+                onclick: move |_| {
+                    let v = nav_open();
+                    nav_open.set(!v);
+                },
+                DoubleChevron { open: nav_open() }
+            }
             div { class: "mx-auto max-w-3xl px-5 py-14 sm:px-6 sm:py-20",
                 Header {}
 
@@ -144,6 +161,96 @@ fn App() -> Element {
 
 // --- scaffolding -------------------------------------------------------------
 
+/// Kebab-case anchor id derived from a title ("Weekly focus" -> "weekly-focus").
+/// `GroupLabel` and `Section` derive their ids with this, so sidebar links
+/// need nothing but the visible title.
+fn slug(s: &str) -> String {
+    s.to_lowercase().replace(' ', "-")
+}
+
+/// A double chevron that points into the drawer's direction of travel:
+/// >> to open, << (rotated) to close.
+#[component]
+fn DoubleChevron(open: bool) -> Element {
+    rsx! {
+        svg {
+            class: if open { "h-4 w-4 rotate-180 transition-transform duration-300" } else { "h-4 w-4 transition-transform duration-300" },
+            "viewBox": "0 0 16 16",
+            fill: "none",
+            stroke: "currentColor",
+            "stroke-width": "1.8",
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
+            "aria-hidden": "true",
+            path { d: "M3.5 3.5 8 8l-4.5 4.5" }
+            path { d: "M8.5 3.5 13 8l-4.5 4.5" }
+        }
+    }
+}
+
+/// Site navigation: a detached floating card pinned on the left from lg up,
+/// and an off-canvas drawer below that, opened by the double-chevron button
+/// in `App` and dismissed by the scrim, the flipped chevrons, or any link.
+#[component]
+fn Sidebar(open: Signal<bool>) -> Element {
+    let mut open = open;
+    // Mirrors the page: group kickers and demo titles. Hrefs are derived
+    // from the titles with `slug`, matching the ids `Section` renders.
+    const NAV: &[(&str, &[&str])] = &[
+        ("Organize", &["Reading list", "Newsletter builder", "Mailbox"]),
+        ("Reorder", &["Playlist", "Weekly focus", "Photo album", "Podcast queue"]),
+        ("Structure", &["Sprint board", "Project files", "Moodboard"]),
+        ("Motion", &["Shuffle", "Menu"]),
+        ("Beyond the window", &["Upload", "Share"]),
+    ];
+    // Mobile: slide fully off-canvas (including shadow) when closed; the
+    // drawer starts below the fixed toggle button. Desktop: always pinned,
+    // full height, detached from every edge.
+    let shell = if open() {
+        "translate-x-0"
+    } else {
+        "-translate-x-[120%] lg:translate-x-0"
+    };
+    rsx! {
+        // Scrim: tap anywhere off the drawer to close it. Mobile only.
+        if open() {
+            div {
+                class: "fixed inset-0 z-30 bg-black/60 backdrop-blur-[2px] lg:hidden",
+                onclick: move |_| open.set(false),
+            }
+        }
+        aside { class: "fixed bottom-4 left-4 top-16 z-40 flex w-64 flex-col overflow-y-auto rounded-2xl bg-[#26211a]/95 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_60px_-24px_rgba(0,0,0,0.8)] ring-1 ring-white/8 backdrop-blur transition-transform duration-300 lg:bottom-5 lg:left-5 lg:top-5 lg:w-56 {shell}",
+            div { class: "mb-2 flex items-center gap-2 px-2.5 pt-1",
+                span { class: "h-2 w-2 shrink-0 rounded-full bg-[#D97D55] shadow-[0_0_10px_rgba(217,125,85,0.6)]" }
+                span { class: "text-[14px] font-semibold tracking-tight text-[#f4e9d7]",
+                    "dioxus-dnd"
+                }
+                span { class: "ml-auto rounded-full bg-white/8 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#8d8069]",
+                    "14"
+                }
+            }
+            nav { aria_label: "Sections", class: "flex-1",
+                for (group, items) in NAV.iter() {
+                    p { class: "px-2.5 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#6FA4AF]",
+                        "{group}"
+                    }
+                    for item in items.iter() {
+                        a {
+                            href: "#{slug(item)}",
+                            class: "block rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[#9c8f77] transition hover:bg-white/5 hover:text-[#f4e9d7]",
+                            onclick: move |_| open.set(false),
+                            "{item}"
+                        }
+                    }
+                }
+            }
+            p { class: "px-2.5 pb-1 pt-3 text-[11px] leading-relaxed text-[#6d6150]",
+                "Every pattern, one library."
+            }
+        }
+    }
+}
+
 #[component]
 fn Header() -> Element {
     rsx! {
@@ -169,10 +276,13 @@ fn Header() -> Element {
 }
 
 /// A light section divider: a small uppercase label and a one-line lead.
+/// Carries a `slug(kicker)` id so sidebar group labels can link to it.
 #[component]
 fn GroupLabel(kicker: String, title: String) -> Element {
     rsx! {
-        div { class: "mb-4 mt-14 flex flex-wrap items-baseline gap-x-3 gap-y-1 first:mt-2",
+        div {
+            id: slug(&kicker),
+            class: "mb-4 mt-14 flex flex-wrap items-baseline gap-x-3 gap-y-1 scroll-mt-20 first:mt-2 lg:scroll-mt-8",
             h2 { class: "text-[12px] font-semibold uppercase tracking-[0.18em] text-[#6FA4AF]",
                 "{kicker}"
             }
@@ -184,7 +294,10 @@ fn GroupLabel(kicker: String, title: String) -> Element {
 #[component]
 fn Section(title: String, note: String, tag: String, children: Element) -> Element {
     rsx! {
-        section { class: "rounded-2xl bg-[#2b2620] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_1px_2px_rgba(0,0,0,0.3),0_18px_36px_-24px_rgba(0,0,0,0.6)] sm:p-6",
+        section {
+            // The sidebar links here by the slug of the visible title.
+            id: slug(&title),
+            class: "rounded-2xl bg-[#2b2620] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_1px_2px_rgba(0,0,0,0.3),0_18px_36px_-24px_rgba(0,0,0,0.6)] scroll-mt-20 sm:p-6 lg:scroll-mt-8",
             div { class: "mb-5 flex items-start justify-between gap-4",
                 div { class: "min-w-0",
                     h3 { class: "text-[15px] font-semibold tracking-tight text-[#f4e9d7]",
@@ -1397,9 +1510,9 @@ fn UploadDemo() -> Element {
             tag: "FileFilter",
             FileDropZone {
                 filter: FileFilter::new()
-                                                    .content_types(["image/*"])
-                                                    .max_size(5_000_000)
-                                                    .max_files(6),
+                                                                    .content_types(["image/*"])
+                                                                    .max_size(5_000_000)
+                                                                    .max_files(6),
                 on_files: move |drop: FileDrop| {
                     accepted.write().extend(drop.files.iter().map(|f| f.name()));
                 },
