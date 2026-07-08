@@ -2,8 +2,8 @@
 //! scroll it - the missing piece for long lists and tall boards.
 //!
 //! Implemented entirely through Dioxus's `MountedData` (no JS eval):
-//! `dragover` (native drags) and active `pointermove` events (pointer drags
-//! via [`crate::pointer::PointerDraggable`]) feed pointer positions; when the
+//! `dragover` (native boundary drags) and active `pointermove` events (in-app
+//! pointer drags via [`crate::core::Draggable`]) feed pointer positions; when the
 //! pointer sits within `threshold` px of an edge, the container is scrolled
 //! by up to `speed` px per event, scaled by proximity.
 //!
@@ -158,7 +158,7 @@ pub fn AutoScroll(
             onmounted: move |evt: Event<MountedData>| {
                 mounted.set(Some(evt.data()));
             },
-            // Native HTML5 drags (mouse): dragover fires continuously while
+            // Native boundary drags: dragover fires continuously while
             // hovering. Note: no prevent_default here - drop permission stays
             // the business of the zones inside.
             ondragover: move |evt: DragEvent| {
@@ -229,7 +229,10 @@ mod tests {
         // nearer edge must win rather than the left always winning.
         let rect = Rect::new(0.0, 0.0, 40.0, 400.0);
         let (dx, _) = edge_delta(Point::new(35.0, 200.0), rect, 48.0, 24.0, ScrollAxis::X);
-        assert!(dx > 0.0, "near the right edge should scroll right, got {dx}");
+        assert!(
+            dx > 0.0,
+            "near the right edge should scroll right, got {dx}"
+        );
         let (dx, _) = edge_delta(Point::new(5.0, 200.0), rect, 48.0, 24.0, ScrollAxis::X);
         assert!(dx < 0.0, "near the left edge should scroll left, got {dx}");
     }

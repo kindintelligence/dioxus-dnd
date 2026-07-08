@@ -1,7 +1,7 @@
 //! Drops arriving from *outside* your app - selected text, links dragged from
 //! another tab, content from other applications - plus typed serde payloads
-//! over Dioxus 0.7's `DataTransfer` bridge for interop scenarios where the
-//! Rust-side context can't reach.
+//! over the `DataTransfer` bridge for interop scenarios the Rust-side
+//! context can't reach.
 //!
 //! For drags between elements of your own app, prefer the core context: it
 //! carries any `Clone` type with zero serialization. Reach for this module

@@ -113,47 +113,12 @@ impl Rect {
     }
 }
 
-/// Which browser/input path a drag source should use.
-///
-/// Native HTML5 drag gives you `DataTransfer` and browser-level behavior
-/// such as dragging into another tab or application. Pointer-driven drag is
-/// synthetic: it uses pointer events and the crate's own state/registry, so
-/// the browser does not create or style a native drag image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DragInputMode {
-    /// Use pointer events for mouse, touch and pen.
-    #[default]
-    Pointer,
-    /// Use native HTML5 drag only.
-    Native,
-    /// Current compatibility behavior: native mouse, pointer touch/pen.
-    Hybrid,
-}
-
-impl DragInputMode {
-    /// Should this pointer event drive the synthetic pointer path?
-    pub fn uses_pointer(self, pointer_type: &str) -> bool {
-        match self {
-            DragInputMode::Pointer => true,
-            DragInputMode::Native => false,
-            DragInputMode::Hybrid => pointer_type != "mouse",
-        }
-    }
-
-    /// Should the rendered element opt into native HTML5 drag events?
-    pub fn uses_native(self) -> bool {
-        matches!(self, DragInputMode::Native | DragInputMode::Hybrid)
-    }
-}
-
 /// How the current drag is being driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DragMode {
     /// Pointer-event driven drag.
     #[default]
     Pointer,
-    /// Native HTML5 drag.
-    Native,
     /// Keyboard-driven drag (Space/Enter to pick up, arrows to navigate).
     Keyboard,
 }
@@ -256,21 +221,6 @@ mod tests {
             effective_effect(DropEffect::None, Modifiers::CONTROL),
             DropEffect::None
         );
-    }
-
-    #[test]
-    fn input_modes_select_pointer_and_native_paths() {
-        assert!(DragInputMode::Pointer.uses_pointer("mouse"));
-        assert!(DragInputMode::Pointer.uses_pointer("touch"));
-        assert!(!DragInputMode::Pointer.uses_native());
-
-        assert!(!DragInputMode::Native.uses_pointer("mouse"));
-        assert!(!DragInputMode::Native.uses_pointer("touch"));
-        assert!(DragInputMode::Native.uses_native());
-
-        assert!(!DragInputMode::Hybrid.uses_pointer("mouse"));
-        assert!(DragInputMode::Hybrid.uses_pointer("touch"));
-        assert!(DragInputMode::Hybrid.uses_native());
     }
 
     #[test]

@@ -1,5 +1,4 @@
-//! Hooks for providing and consuming the drag context, plus small event
-//! helpers for people wiring `ondrag*` handlers by hand.
+//! Hooks for providing and consuming the drag context.
 
 use dioxus::prelude::*;
 
@@ -36,13 +35,16 @@ pub fn use_zone_id() -> ZoneId {
     use_hook(ZoneId::auto)
 }
 
-/// Client (viewport) coordinates of a drag event as a [`Point`].
+/// Client (viewport) coordinates of a native drag event as a [`Point`].
+/// In-app drags don't produce `DragEvent`s; this serves the boundary
+/// modules ([`crate::files`], [`crate::external`]) and custom native zones.
 pub fn client_point(evt: &DragEvent) -> Point {
     let c = evt.client_coordinates();
     Point::new(c.x, c.y)
 }
 
-/// Element-relative coordinates of a drag event as a [`Point`].
+/// Element-relative coordinates of a native drag event as a [`Point`].
+/// See [`client_point`] for when these apply.
 pub fn element_point(evt: &DragEvent) -> Point {
     let c = evt.element_coordinates();
     Point::new(c.x, c.y)

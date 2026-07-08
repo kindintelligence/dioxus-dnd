@@ -2,7 +2,7 @@
 //!
 //! Shows the intended split:
 //! - `CanvasDropZone` reports where the payload landed.
-//! - `PointerDraggable` moves existing app nodes and palette items.
+//! - `Draggable` moves existing app nodes and palette items.
 //! - `Bounds::clamp_item` applies app-owned item-aware bounds.
 //! - Connection handles and edges are app state layered over the headless
 //!   canvas primitive.
@@ -270,7 +270,7 @@ fn App() -> Element {
                                 h2 { class: "mb-3 text-sm font-semibold text-neutral-200", "Blocks" }
                                 div { class: "space-y-2",
                                     for kind in [NodeKind::Source, NodeKind::Transform, NodeKind::Output] {
-                                        PointerDraggable::<NodeDrag> {
+                                        Draggable::<NodeDrag> {
                                             payload: NodeDrag::New(kind),
                                             label: format!("New {}", kind.label()),
                                             class: format!(
@@ -484,7 +484,7 @@ fn CanvasNode(
     let screen = world_to_screen(Point::new(node.x, node.y), viewport);
     let size = world_delta_to_screen(Point::new(node.width, node.height), viewport);
     rsx! {
-        PointerDraggable::<NodeDrag> {
+        Draggable::<NodeDrag> {
             payload: NodeDrag::Existing(node.id),
             zone: CANVAS,
             label: node.kind.label(),

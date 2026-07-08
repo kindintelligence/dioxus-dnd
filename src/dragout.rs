@@ -175,10 +175,7 @@ mod tests {
     fn url_html_entry_escapes_attribute_and_text() {
         // A url with a query string (`&`) and a title with markup must not
         // break or inject into the generated anchor.
-        let c = OutboundContent::url(
-            "https://x.y/?a=1&b=\"2\"",
-            Some("A & B <img src=x>"),
-        );
+        let c = OutboundContent::url("https://x.y/?a=1&b=\"2\"", Some("A & B <img src=x>"));
         let html = &c.entries()[2].1;
         assert_eq!(
             html,
@@ -202,8 +199,10 @@ mod tests {
             assert_eq!(html, "<a>click</a>");
         }
         // Ordinary schemes keep the href.
-        assert!(OutboundContent::url("mailto:a@b.c", Some("mail")).entries()[2]
-            .1
-            .contains("href="));
+        assert!(
+            OutboundContent::url("mailto:a@b.c", Some("mail")).entries()[2]
+                .1
+                .contains("href=")
+        );
     }
 }

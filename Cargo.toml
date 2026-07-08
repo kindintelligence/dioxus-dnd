@@ -38,7 +38,7 @@ web = ["dep:web-sys"]
 # `MountedData::get_client_rect()`, and dioxus-web only fires `onmounted` /
 # implements those methods when this feature is on. Without it, rects stay
 # empty, hit-testing finds nothing, and drags stick without dropping.
-dioxus = { version = "0.8.0-alpha.0", default-features = false, features = ["minimal", "launch", "web", "document", "mounted"] }
+dioxus = { version = "0.8.0-alpha.0", default-features = false, features = ["minimal", "launch", "web", "document", "mounted", "router"] }
 dioxus-ssr = "0.8.0-alpha.0"
 # dioxus-web 0.8.0-alpha.0's `document` feature forgets to enable web-sys'
 # `Location`; features are additive, so enabling it here fixes the build.

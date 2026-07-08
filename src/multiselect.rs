@@ -29,15 +29,14 @@
 //!             on_drop: move |o: DropOutcome<Vec<FileId>>| trash(o.payload),
 //!             "Trash"
 //!         }
-//!         DragOverlay::<Vec<FileId>> { SelectionCount::<FileId> { selection } }
+//!         DragOverlay::<Vec<FileId>> { SelectionCount::<FileId> {} }
 //!     }
 //! }
 //! ```
 
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, DragInputMode, DropEffect, ZoneId};
-use crate::pointer::PointerDraggable;
+use crate::core::{use_dnd, Draggable, DropEffect, ZoneId};
 
 /// Selection state for keys of type `K`. Cheap to copy.
 pub struct Selection<K: Clone + PartialEq + 'static> {
@@ -125,7 +124,7 @@ pub fn use_selection<K: Clone + PartialEq + 'static>() -> Selection<K> {
 /// - Click / Ctrl+click manage the selection (via [`Selection::click`]).
 /// - Dragging a selected item picks up **the whole selection**; dragging an
 ///   unselected one picks up just that item (and selects it).
-/// - Works with mouse, touch, pen and keyboard (wraps `PointerDraggable`).
+/// - Works with mouse, touch, pen and keyboard.
 /// - The wrapper exposes `data-selected="true"` for styling (absent when
 ///   unselected, so presence-based selectors like Tailwind
 ///   `data-selected:ring-2` work directly).
@@ -143,11 +142,6 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     /// Drop effect. Defaults to `Move`.
     #[props(default)]
     effect: DropEffect,
-    /// Which input/browser drag path items use. Defaults to pointer events for
-    /// mouse, touch and pen. Set [`DragInputMode::Native`] or
-    /// [`DragInputMode::Hybrid`] to opt into HTML5 drag.
-    #[props(default)]
-    input: DragInputMode,
     /// Label for screen-reader announcements.
     #[props(default)]
     label: Option<String>,
@@ -173,11 +167,10 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
                 selection.click(click_key.clone(), evt.modifiers());
             },
             ..attributes,
-            PointerDraggable::<Vec<K>> {
+            Draggable::<Vec<K>> {
                 payload,
                 zone,
                 effect,
-                input,
                 label,
                 {children}
             }

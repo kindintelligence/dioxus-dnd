@@ -79,10 +79,10 @@ fn App() -> Element {
                             class: "column-scroll",
                             for (ix, card) in board.read().get(&col).cloned().unwrap_or_default().into_iter().enumerate() {
                                 BoardSlot::<Card> { column: col, index: ix, on_move, class: "slot" }
-                                // PointerDraggable defaults to pointer events
+                                // Draggable defaults to pointer events
                                 // for mouse, touch and pen. Keyboard works out
                                 // of the box (Tab + Space/arrows).
-                                PointerDraggable::<BoardPayload<Card>> {
+                                Draggable::<BoardPayload<Card>> {
                                     payload: BoardPayload { item: card.clone(), from: col, index: ix },
                                     zone: col,
                                     label: card.title.clone(),

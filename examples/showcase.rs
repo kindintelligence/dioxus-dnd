@@ -513,7 +513,7 @@ fn CoreDemo() -> Element {
                     {stamp_for(SHELF)}
                     div { class: "bay-stack",
                         for c in crates_in(SHELF) {
-                            PointerDraggable::<Crate> {
+                            Draggable::<Crate> {
                                 key: "{c.id}",
                                 payload: c.clone(),
                                 zone: SHELF,
@@ -535,7 +535,7 @@ fn CoreDemo() -> Element {
                     {stamp_for(BAY_A)}
                     div { class: "bay-stack",
                         for c in crates_in(BAY_A) {
-                            PointerDraggable::<Crate> {
+                            Draggable::<Crate> {
                                 key: "{c.id}",
                                 payload: c.clone(),
                                 zone: BAY_A,
@@ -557,7 +557,7 @@ fn CoreDemo() -> Element {
                     {stamp_for(BAY_B)}
                     div { class: "bay-stack",
                         for c in crates_in(BAY_B) {
-                            PointerDraggable::<Crate> {
+                            Draggable::<Crate> {
                                 key: "{c.id}",
                                 payload: c.clone(),
                                 zone: BAY_B,
@@ -821,7 +821,7 @@ fn TreeDemo() -> Element {
                         },
                         class: "tree-row",
                         style: "padding-left: {row.depth as f64 * 1.4 + 0.6}rem;",
-                        PointerDraggable::<u64> {
+                        Draggable::<u64> {
                             payload: row.id,
                             label: row.name.clone(),
                             class: "tree-grab",
@@ -867,7 +867,7 @@ fn CanvasDemo() -> Element {
             div { class: "canvas-wrap",
                 div { class: "shelf shelf-side",
                     for p in parts {
-                        PointerDraggable::<Part> {
+                        Draggable::<Part> {
                             payload: p.clone(),
                             label: p.name,
                             class: "part",
@@ -1158,7 +1158,7 @@ fn KeyboardDemo() -> Element {
                         if !rule.is_empty() { span { class: "bay-rule", "{rule}" } }
                         div { class: "bay-stack",
                             for c in crates_in(zone) {
-                                PointerDraggable::<Crate> {
+                                Draggable::<Crate> {
                                     key: "{c.id}",
                                     payload: c.clone(),
                                     zone,

@@ -36,7 +36,6 @@ pulls in `web-sys` for native pointer capture (see [Feature flags](#feature-flag
 | `multiselect` | drag N selected items as one (`SelectableDraggable`) | context (`Vec<K>`) |
 | `external` | text, URLs and HTML dropped in from other apps | native `DataTransfer` |
 | `dragout` | drag text, links and HTML out to other apps (`ExternalDragSource`) | native `DataTransfer` |
-| `pointer` | configurable pointer/native drag source (`PointerDraggable`) | context + pointer events |
 | `autoscroll` | edge-scrolling containers (`AutoScroll`) | n/a |
 | `a11y` | screen-reader announcements (`LiveRegion`), no-drag reordering (`ReorderButtons`) | n/a |
 | `animate` | FLIP reorder transitions (`FlipItem`, experimental) | n/a |
@@ -50,11 +49,10 @@ field its own lazy subscription, so a component that reads `dnd.over()` in
 render to highlight a zone reruns only when the hovered zone changes, not
 on every pointer move.
 
-Native events are used for what only they can do: OS files, `DataTransfer`,
-and content crossing the app boundary. In-app drag sources can instead use
-pointer events, which avoids the browser's native drag image and keeps the
-visual state under your control. Firefox's requirement that something is set
-on `DataTransfer` for a native drag to start is handled for you.
+Native events are used only for what requires the browser/OS boundary: OS
+files, external text/links/HTML, and content dragged out to another app.
+In-app drag sources use pointer events plus keyboard controls, which avoids
+the browser's native drag image and keeps visual state under your control.
 
 The provider also carries a zone registry. Every mounted `DropZone`
 records its id, label, drop callback, acceptance filter and DOM handle
@@ -107,17 +105,17 @@ plain CSS (`[data-dragging] { … }`) and Tailwind's presence-based variants
 
 | Attribute | Found on | Present while |
 |---|---|---|
-| `data-dragging` | `Draggable`, `PointerDraggable`, `SortableList` / `SortableGrid` items | that element's payload is being dragged |
+| `data-dragging` | `Draggable`, `SortableList` / `SortableGrid` items | that element's payload is being dragged |
 | `data-drop-target` | `SortableList` / `SortableGrid` items | hovered as the drop slot |
 | `data-over` | `DropZone`, `FileDropZone`, `ExternalDropZone` | a (compatible) drag hovers the zone |
 | `data-active` | `DropZone`, `BoardSlot`, `CanvasDropZone` | a compatible drag is in flight anywhere - reveal your targets |
 | `data-intent` | `TreeNodeTarget` | hovered; valued `"before" \| "after" \| "into"` |
 | `data-selected` | `SelectableDraggable` | the item is selected |
-| `data-disabled` | `Draggable`, `PointerDraggable` | dragging is disabled |
+| `data-disabled` | `Draggable` | dragging is disabled |
 
-Context-backed attributes (`Draggable`, `PointerDraggable`, `DropZone`,
-`CanvasDropZone`, `BoardSlot`, `TreeNodeTarget`) follow mouse, touch, pen
-and keyboard drags. Native boundary components (`FileDropZone`,
+Context-backed attributes (`Draggable`, `DropZone`, `CanvasDropZone`,
+`BoardSlot`, `TreeNodeTarget`) follow mouse, touch, pen and keyboard drags.
+Native boundary components (`FileDropZone`,
 `ExternalDropZone`) reflect browser drag events from outside the app. With
 Tailwind that composes into complete drag styling with no extra state:
 
@@ -171,7 +169,7 @@ no wrapper class at all: `in-data-dragging:italic` inside your `render`
 content reacts to the row's drag state with zero wiring.
 
 One mechanic worth knowing: a forwarded `style` is *merged after* any
-functional inline style (`touch-action` on `PointerDraggable`, positioning
+functional inline style (`touch-action` on `Draggable`, positioning
 on `DragOverlay`, the `display: grid` layout on `SortableGrid`) rather
 than replacing it - your declarations win per property, the functional
 ones survive. So grid spacing is just `class: "gap-2"`, and custom column
@@ -185,7 +183,7 @@ Not using Tailwind? The same contract serves plain CSS: `[data-over]`,
 
 ## Accessibility (built in, not opt-in)
 
-Every core `Draggable` (and `PointerDraggable`) is focusable and keyboard
+Every core `Draggable` (and `Draggable`) is focusable and keyboard
 operable:
 
 - **Space / Enter** picks the item up
@@ -216,34 +214,24 @@ with `dnd.announce(...)`.
 
 ## Touch
 
-Every in-app drag pattern in this crate defaults to pointer events for mouse,
-touch and pen. You do not need to do anything to get consistent styled drags
-inside the app.
+Every in-app drag pattern in this crate uses pointer events for mouse, touch
+and pen, plus keyboard controls where a typed provider is involved. You do not
+need to choose between pointer, native, and hybrid modes for app UI.
 
-Native HTML5 drag from a touch long-press exists in some browsers (Safari
-on iOS/iPadOS 15+; Android support is inconsistent), so relying on it means
-your app works on some phones after a hold and not at all on others. This
-crate uses the pointer-event path for ordinary app UI. Set
-`input: DragInputMode::Native` or `Hybrid` only when you need the browser's
-HTML5 drag behavior.
-
-- `PointerDraggable` is the configurable pointer-capable drag source for
-  `DropZone` targets. `BoardItem`, `SelectableDraggable` and
-  `TreeNodeTarget` already build on this machinery, so boards, multi-select
-  and trees are touch-ready as-is. Missed pointer drops re-measure the zones
-  and retry with a closest-center fallback, so drops in the gutter between
-  zones still land.
-- `SortableList` and `SortableGrid` carry their own built-in pointer path.
-  They default to pointer events for mouse, touch and pen, which avoids the
-  browser's native drag image during reorders. Use
-  `input: DragInputMode::Native` or `Hybrid` to opt back into HTML5 drag.
-- Native components stay native: `FileDropZone`, `ExternalDropZone`,
-  `ExternalDragSource`, `external::typed` and plain `Draggable` use
-  `DataTransfer` for file drops, external drops, drag-out and cross-window
-  interop.
+- `Draggable` is the pointer-capable drag source for `DropZone` targets.
+  `BoardItem`, `SelectableDraggable` and `TreeNodeTarget` build on the same
+  machinery, so boards, multi-select and trees are touch-ready as-is. Missed
+  pointer drops re-measure zones and retry with a closest-center fallback, so
+  drops in the gutter between zones still land.
+- `SortableList` and `SortableGrid` carry their own built-in pointer path,
+  avoiding the browser's native drag image during reorders.
+- Native components stay native because they cross the app boundary:
+  `FileDropZone`, `ExternalDropZone`, `ExternalDragSource` and
+  `external::typed` use `DataTransfer` for file drops, external drops,
+  drag-out and cross-window interop.
 
 ```text
-PointerDraggable::<Card> {
+Draggable::<Card> {
     payload: card,
     label: "Ship it",
     "Ship it"
@@ -282,16 +270,14 @@ rsx! {
 
 While you drag, the row slides toward its landing slot and its neighbors
 translate out of the way: a live preview of the final order (disable with
-`live_preview: false`). Native HTML5 drag is off by default for sortables;
-set `input: DragInputMode::Native` or `Hybrid` only when you need browser
-drag behavior. Style the hover target via `[data-drop-target]` and the
-dragged row via `[data-dragging]` (or Tailwind presence selectors on the
+`live_preview: false`). Style the hover target via `[data-drop-target]` and
+the dragged row via `[data-dragging]` (or Tailwind presence selectors on the
 list root, such as `[&>[data-drop-target]]:border-blue-500`).
 
 ## Canvas drops
 
 `CanvasDropZone` is the free-position primitive for node editors,
-whiteboards and floor planners. Start in-app moves with `PointerDraggable`;
+whiteboards and floor planners. Start in-app moves with `Draggable`;
 the completed `CanvasDrop` gives you both the raw canvas-relative pointer
 and the corrected top-left position:
 
@@ -304,8 +290,8 @@ and the corrected top-left position:
 Keyboard drops use the selected target's measured center by default. Set
 `keyboard: CanvasKeyboardPlacement::Origin` or
 `CanvasKeyboardPlacement::Fixed(point)` when keyboard placement should be
-explicit. Pointer and native drops still use pointer geometry and grab
-offset. If the selected target has no measured rect, the default `Center`
+explicit. Pointer drops use pointer geometry and grab offset. If the selected
+target has no measured rect, the default `Center`
 policy receives origin from core keyboard geometry.
 
 ```text
@@ -317,7 +303,7 @@ CanvasDropZone::<Node> {
         place_node(drop.payload.id, drop.position);
     },
     for node in nodes.read().clone() {
-        PointerDraggable::<Node> {
+        Draggable::<Node> {
             payload: node,
             style: "position: absolute;",
             NodeView {}
@@ -338,8 +324,8 @@ boundary drags, such as files or external text dropped onto a canvas.
 
 Wrap any scrollable container in `AutoScroll` and drags hovering within
 `threshold` px of an edge (default 48) scroll it by up to `speed` px per
-event (default 24), ramped by proximity. Works for native drags and
-`PointerDraggable` pointer drags, including mouse pointer drags. Pass
+event (default 24), ramped by proximity. Works for native boundary drags and
+`Draggable` pointer drags, including mouse pointer drags. Pass
 `active: Some(false)` when a parent tracks drag state and wants to suppress
 scrolling. Pure `MountedData`, no JavaScript eval.
 
@@ -533,17 +519,16 @@ drops, external text/link drops and drag-out payload formats.
 
 ## Platform notes
 
-- **Firefox**: handled. Drags set `text/plain` data automatically so the
-  gesture starts.
-- **`DragOverlay`**: pointer tracking uses the `drag` event, whose
-  coordinates some webviews report as `(0, 0)`. Those samples are ignored,
-  so treat the overlay as progressive enhancement on desktop.
+- **Firefox native boundary drags**: `ExternalDragSource` writes real
+  `DataTransfer` formats so outbound drags work across browsers.
+- **`DragOverlay`**: pointer tracking uses pointer events, so custom ghosts
+  stay under app control.
 - **Windows desktop file drops** have a history of platform quirks in
   wry-based webviews. Test on your target and consider a file input
   fallback.
 - **`animate::FlipItem`** is experimental: it is the one module whose
   behavior depends on browser paint timing rather than pure logic.
-- **Mouse pointer drags** (`input: DragInputMode::Pointer` on a mouse).
+- **Mouse pointer drags**.
   Dioxus 0.8 exposes no pointer-capture API, so the behavior depends on the
   `web` feature:
   - **With `web`** (recommended for web): the crate grabs real pointer
@@ -554,8 +539,7 @@ drops, external text/link drops and drag-out payload formats.
     straying off the drag surface no longer cancels the drag, and a mouse
     released outside is reconciled when the cursor returns (via the
     held-button state). Best-effort; a release that never returns won't
-    commit. Use `DragInputMode::Hybrid`/`Native` when mouse should take the
-    browser-managed native HTML5 path instead.
+    commit.
 
   Touch and pen are unaffected either way - the browser implicitly captures
   them.
