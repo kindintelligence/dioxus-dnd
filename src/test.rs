@@ -37,7 +37,7 @@
 //! `DropOutcome` construction, closest-edge enrichment, settle routing -
 //! shared with `Draggable` itself, not a reimplementation. Releases mirror
 //! the pointer gesture: an exact hit wins; otherwise the drop snaps to the
-//! closest acceptable zone whose *center* is within 48px (the touch
+//! closest acceptable zone whose edge is within 48px (the touch
 //! forgiveness), else the drag cancels. Not simulated: pointer capture,
 //! auto-scroll, and the re-measure that precedes the real snap (headless
 //! rects are wherever you placed them).
@@ -172,7 +172,7 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
 
     /// Release at the current pointer position. Returns the zone that
     /// received the drop, or `None` when the drag cancelled (no acceptable
-    /// zone under the pointer, and none with a center within the 48px
+    /// zone under the pointer, and none with an edge within the 48px
     /// snap).
     pub fn release(&mut self, dom: &VirtualDom) -> Option<ZoneId> {
         self.release_as(dom, DropEffect::Move)

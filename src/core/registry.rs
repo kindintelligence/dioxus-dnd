@@ -228,12 +228,14 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 
     /// Like [`Self::hit_test`], but acceptance-aware: it returns the topmost
-    /// zone that both contains the point **and** accepts `payload`, and when no
-    /// such zone contains the point, falls back to the acceptable zone whose
-    /// center is nearest - within `max_distance` CSS px. Skipping zones that
-    /// reject the payload lets a drop land on an accepting zone sitting *under*
-    /// a rejecting (or decorative) one, and is friendlier for imprecise (touch)
-    /// drops that land in the gutter between zones.
+    /// zone that both contains the point **and** accepts `payload`, and when
+    /// no such zone contains the point, falls back to the acceptable zone
+    /// whose *rect* is nearest - within `max_distance` CSS px of its closest
+    /// edge, not its center, so a large zone snaps a release right beside it
+    /// even though its center sits far away. Skipping zones that reject the
+    /// payload lets a drop land on an accepting zone sitting *under* a
+    /// rejecting (or decorative) one, and is friendlier for imprecise
+    /// (touch) drops that land in the gutter between zones.
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
         if let Some(hit) = self
             .zones
@@ -251,8 +253,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         let mut best: Option<(ZoneId, f64)> = None;
         for z in self.acceptable(payload) {
             let Some(r) = *z.rect.peek() else { continue };
-            let c = r.center();
-            let (dx, dy) = (c.x - point.x, c.y - point.y);
+            // Distance to the rect's nearest point (zero on either axis the
+            // point already overlaps), not to its center.
+            let dx = (r.x - point.x).max(point.x - (r.x + r.width)).max(0.0);
+            let dy = (r.y - point.y).max(point.y - (r.y + r.height)).max(0.0);
             let d = (dx * dx + dy * dy).sqrt();
             if d <= max_distance && best.map(|(_, bd)| d < bd).unwrap_or(true) {
                 best = Some((z.id, d));
