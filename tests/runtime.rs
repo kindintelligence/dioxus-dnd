@@ -949,6 +949,64 @@ fn board_slot_inherits_column_accepts() {
     );
 }
 
+// --- Explicit low column ids never collide with slot auto ids -------------
+
+/// Regression: `use_zone_id` draws from one process-wide counter and the zone
+/// registry replaces records by id, so when the counter began at 1 a slot's
+/// auto id could land exactly on a *neighboring column's* hand-picked id
+/// (say `ZoneId(2)`), and that column registering silently replaced the slot,
+/// which then stopped lighting up and receiving drops. Auto ids now start at
+/// 2^32, so explicit ids in the `u32` range can never be knocked out.
+#[test]
+fn slot_auto_ids_never_collide_with_explicit_column_ids() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<BoardPayload<&'static str>> {
+                for col in 1..=3u64 {
+                    BoardColumn::<&'static str> {
+                        id: ZoneId(col),
+                        on_move: move |_| {},
+                        BoardSlot::<&'static str> {
+                            column: ZoneId(col),
+                            index: 0,
+                            on_move: move |_| {},
+                        }
+                        BoardSlot::<&'static str> {
+                            column: ZoneId(col),
+                            index: 1,
+                            on_move: move |_| {},
+                        }
+                    }
+                }
+                CollisionProbe {}
+            }
+        }
+    }
+
+    #[component]
+    fn CollisionProbe() -> Element {
+        let registry = use_zone_registry::<BoardPayload<&'static str>>();
+        let payload = BoardPayload { item: "card", from: ZoneId(1), index: 0 };
+        let roots = registry.children_of(None, &payload);
+        assert_eq!(roots.len(), 3, "every explicit column stays registered");
+        // Each column still owns both of its slots: no slot was replaced by a
+        // neighboring column registering over its auto id.
+        for col in 1..=3u64 {
+            assert_eq!(
+                registry.children_of(Some(ZoneId(col)), &payload).len(),
+                2,
+                "column {col} keeps both slots"
+            );
+        }
+        rsx! {
+            div {}
+        }
+    }
+
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+}
+
 // --- Board slots deliver the current index after a prop change (#3) -------
 
 #[derive(Clone, Props)]

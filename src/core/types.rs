@@ -2,7 +2,16 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// Auto-generated ids start far above any id a human writes by hand. The
+/// zone registry replaces records by id, so if the auto sequence began at 1
+/// it would eventually collide with explicit low ids (`ZoneId(11)`) in the
+/// same provider and *silently knock that zone out of the registry* - e.g. a
+/// `BoardSlot`'s auto id landing on a neighboring column's hand-picked id.
+/// Reserving everything below 2^32 for explicit ids makes the collision
+/// impossible: any id that fits in a `u32` can never clash with an auto id.
+const AUTO_ID_BASE: u64 = 1 << 32;
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(AUTO_ID_BASE);
 
 /// Identifies a drop zone (a list, a column, a canvas, a tree node…).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -11,6 +20,9 @@ pub struct ZoneId(pub u64);
 impl ZoneId {
     /// Generate a process-unique zone id. Handy when you don't care about
     /// stable ids across renders - call it inside `use_hook` so it sticks.
+    ///
+    /// Auto ids live at `2^32` and above; explicit ids below that (anything
+    /// that fits in a `u32`) can never collide with them.
     pub fn auto() -> Self {
         Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
     }
@@ -268,5 +280,17 @@ mod tests {
         assert!(r.contains(Point::new(110.0, 60.0)));
         assert!(!r.contains(Point::new(111.0, 30.0)));
         assert_eq!(r.center(), Point::new(60.0, 35.0));
+    }
+
+    /// Auto ids must never collide with hand-written explicit ids: the zone
+    /// registry replaces records by id, so a `BoardSlot`'s auto id landing on
+    /// a column's explicit `ZoneId(11)` silently unregistered the slot. All
+    /// auto ids live at `2^32` and above; explicit `u32`-range ids are safe.
+    #[test]
+    fn auto_ids_stay_above_the_explicit_range() {
+        for _ in 0..64 {
+            assert!(ZoneId::auto().0 >= super::AUTO_ID_BASE);
+            assert!(DragId::auto().0 >= super::AUTO_ID_BASE);
+        }
     }
 }
