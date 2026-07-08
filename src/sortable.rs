@@ -34,6 +34,7 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
+use crate::a11y::use_reduced_motion_css;
 use crate::core::components::overlay_style;
 use crate::core::hooks::use_rect_refresh_thunk;
 use crate::core::{platform, transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
@@ -449,6 +450,9 @@ pub fn SortableList(
         }
     };
 
+    // Rows glide via inline transitions; honor prefers-reduced-motion.
+    let reduced_motion_css = use_reduced_motion_css();
+
     let primary_pointer = move |evt: &PointerEvent| evt.is_primary();
     let mut cancel_drag = move || {
         feed(GestureEvent::Cancel);
@@ -526,9 +530,11 @@ pub fn SortableList(
             },
             onlostpointercapture: move |_| cancel_drag(),
             ..attributes,
+            {reduced_motion_css}
             for ix in 0..len {
                 div {
                     key: "{ix}",
+                    "data-dnd-motion": true,
                     "data-dragging": if drag_from() == Some(ix) { "true" },
                     "data-drop-target": if over() == Some(ix) && drag_from() != Some(ix) { "true" },
                     style: {

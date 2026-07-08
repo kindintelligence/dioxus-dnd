@@ -28,14 +28,30 @@ use super::{platform, transition, GestureEffect, GestureEvent, GesturePhase};
 pub struct ParentZone(pub ZoneId);
 
 /// Internal: which hierarchical move an arrow key requested.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum NavKey {
     Next,
     Prev,
     Descend,
     Ascend,
 }
-use super::types::{effective_effect, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId};
+use super::types::{
+    effective_effect, Direction, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId,
+};
+
+/// Map an arrow key to a hierarchical move, honoring layout direction:
+/// horizontal arrows mirror under RTL (the WAI-ARIA tree convention), so
+/// "into" is always the arrow pointing along reading order. Pure, for
+/// testability.
+fn nav_key(key: &Key, dir: Direction) -> Option<NavKey> {
+    Some(match (key, dir) {
+        (Key::ArrowDown, _) => NavKey::Next,
+        (Key::ArrowUp, _) => NavKey::Prev,
+        (Key::ArrowRight, Direction::Ltr) | (Key::ArrowLeft, Direction::Rtl) => NavKey::Descend,
+        (Key::ArrowLeft, Direction::Ltr) | (Key::ArrowRight, Direction::Rtl) => NavKey::Ascend,
+        _ => return None,
+    })
+}
 
 /// Pull a user-provided `style` out of forwarded attributes and append it to
 /// a functional inline style. Spread attributes land after static ones and
@@ -70,10 +86,17 @@ pub fn DndProvider<T: Clone + PartialEq + 'static>(
     /// Internal marker; never set this.
     #[props(default)]
     phantom: std::marker::PhantomData<T>,
+    /// Layout direction: `Direction::Rtl` mirrors keyboard navigation and
+    /// spatial zone ordering to follow the visual right-to-left flow.
+    #[props(default)]
+    dir: Direction,
     children: Element,
 ) -> Element {
     let _ = phantom;
     use_dnd_provider::<T>();
+    // Synced every render (a compare-and-set no-op when unchanged), so a
+    // live direction switch propagates.
+    use_zone_registry::<T>().set_direction(dir);
     rsx! {
         {children}
     }
@@ -343,17 +366,12 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 }
 
                 // Hierarchical navigation (WAI-ARIA tree convention):
-                // Up/Down cycle siblings at the current level; Right
-                // descends into the hovered zone's children; Left ascends
-                // to its parent. In flat apps (no nesting) Right/Left fall
+                // Up/Down cycle siblings at the current level; the arrow
+                // along reading order descends into the hovered zone's
+                // children; the opposite one ascends to its parent (both
+                // mirror under RTL). In flat apps (no nesting) they fall
                 // back to next/previous, preserving the simple behavior.
-                let nav = match key {
-                    Key::ArrowDown => Some(NavKey::Next),
-                    Key::ArrowUp => Some(NavKey::Prev),
-                    Key::ArrowRight => Some(NavKey::Descend),
-                    Key::ArrowLeft => Some(NavKey::Ascend),
-                    _ => None,
-                };
+                let nav = nav_key(&key, registry.direction());
                 if let (Some(nav), Some(p)) = (nav, dnd.payload()) {
                     evt.prevent_default();
                     let over = dnd.over();
@@ -572,6 +590,21 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Horizontal arrows mirror under RTL: "descend into" is always the
+    /// arrow pointing along reading order. Vertical arrows never mirror.
+    #[test]
+    fn nav_keys_mirror_under_rtl() {
+        for dir in [Direction::Ltr, Direction::Rtl] {
+            assert_eq!(nav_key(&Key::ArrowDown, dir), Some(NavKey::Next));
+            assert_eq!(nav_key(&Key::ArrowUp, dir), Some(NavKey::Prev));
+            assert_eq!(nav_key(&Key::Enter, dir), None);
+        }
+        assert_eq!(nav_key(&Key::ArrowRight, Direction::Ltr), Some(NavKey::Descend));
+        assert_eq!(nav_key(&Key::ArrowLeft, Direction::Ltr), Some(NavKey::Ascend));
+        assert_eq!(nav_key(&Key::ArrowRight, Direction::Rtl), Some(NavKey::Ascend));
+        assert_eq!(nav_key(&Key::ArrowLeft, Direction::Rtl), Some(NavKey::Descend));
+    }
 
     #[test]
     fn keyboard_drop_points_use_zone_center_and_element_offset() {

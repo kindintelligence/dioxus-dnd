@@ -9,7 +9,7 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
-use super::types::{DropOutcome, Point, Rect, ZoneId};
+use super::types::{Direction, DropOutcome, Point, Rect, ZoneId};
 
 /// One registered drop zone.
 pub struct ZoneRecord<T: Clone + 'static> {
@@ -56,6 +56,8 @@ impl<T: Clone + 'static> ZoneRecord<T> {
 /// Registry of the currently mounted drop zones, in mount order.
 pub struct ZoneRegistry<T: Clone + 'static> {
     zones: Signal<Vec<ZoneRecord<T>>>,
+    /// Layout direction for spatial ordering (keyboard navigation).
+    dir: Signal<Direction>,
 }
 
 impl<T: Clone + 'static> Copy for ZoneRegistry<T> {}
@@ -66,14 +68,30 @@ impl<T: Clone + 'static> Clone for ZoneRegistry<T> {
 }
 impl<T: Clone + 'static> PartialEq for ZoneRegistry<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.zones == other.zones
+        self.zones == other.zones && self.dir == other.dir
     }
 }
 
 impl<T: Clone + 'static> ZoneRegistry<T> {
     /// Wrap an existing signal. Prefer [`crate::core::hooks::use_dnd_provider`].
     pub fn from_signal(zones: Signal<Vec<ZoneRecord<T>>>) -> Self {
-        Self { zones }
+        Self {
+            zones,
+            dir: Signal::new(Direction::default()),
+        }
+    }
+
+    /// Layout direction spatial ordering follows.
+    pub fn direction(&self) -> Direction {
+        *self.dir.peek()
+    }
+
+    /// Set the layout direction (no-op if unchanged; safe to call every
+    /// render). `DndProvider`'s `dir` prop calls this for you.
+    pub fn set_direction(&mut self, dir: Direction) {
+        if *self.dir.peek() != dir {
+            self.dir.set(dir);
+        }
     }
 
     /// Add (or replace, by id) a zone.
@@ -145,7 +163,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// registration order, after the measured ones.
     pub fn step_zone(&self, current: Option<ZoneId>, payload: &T, step: isize) -> Option<ZoneId> {
         let mut zones = self.acceptable(payload);
-        spatial_sort(&mut zones);
+        spatial_sort(&mut zones, self.direction());
         let current_ix = current.and_then(|c| zones.iter().position(|z| z.id == c));
         cycle(zones.len(), current_ix, step).map(|ix| zones[ix].id)
     }
@@ -166,7 +184,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             .filter(|z| z.parent == parent && z.accepts_payload(payload))
             .cloned()
             .collect();
-        spatial_sort(&mut zones);
+        spatial_sort(&mut zones, self.direction());
         zones
     }
 
@@ -356,12 +374,18 @@ impl RectRefresh {
     }
 }
 
-/// Sort zones spatially: measured rects by (top, left), unmeasured last in
-/// their original relative order.
-fn spatial_sort<T: Clone + 'static>(zones: &mut [ZoneRecord<T>]) {
+/// Sort zones spatially: measured rects by (top, reading order), unmeasured
+/// last in their original relative order. Reading order within a row is
+/// left-to-right in LTR and right-to-left in RTL, so keyboard traversal
+/// follows what the user sees either way.
+fn spatial_sort<T: Clone + 'static>(zones: &mut [ZoneRecord<T>], dir: Direction) {
+    let reading_x = move |x: f64| match dir {
+        Direction::Ltr => x,
+        Direction::Rtl => -x,
+    };
     zones.sort_by(|a, b| match (*a.rect.peek(), *b.rect.peek()) {
-        (Some(ra), Some(rb)) => (ra.y, ra.x)
-            .partial_cmp(&(rb.y, rb.x))
+        (Some(ra), Some(rb)) => (ra.y, reading_x(ra.x))
+            .partial_cmp(&(rb.y, reading_x(rb.x)))
             .unwrap_or(std::cmp::Ordering::Equal),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,

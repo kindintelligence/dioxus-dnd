@@ -113,6 +113,20 @@ impl Rect {
     }
 }
 
+/// Horizontal layout direction. Keyboard navigation mirrors under RTL:
+/// ArrowRight ascends instead of descending (the WAI-ARIA tree convention)
+/// and spatial zone ordering runs right-to-left within a row. Set it on
+/// [`crate::core::DndProvider`] (or via
+/// [`crate::core::ZoneRegistry::set_direction`] when using the hooks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    /// Left-to-right (the default).
+    #[default]
+    Ltr,
+    /// Right-to-left (Arabic, Hebrew, ...).
+    Rtl,
+}
+
 /// How the current drag is being driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DragMode {

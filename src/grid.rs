@@ -36,6 +36,7 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
+use crate::a11y::use_reduced_motion_css;
 use crate::core::components::merge_style;
 use crate::core::hooks::use_rect_refresh_thunk;
 use crate::core::{platform, transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
@@ -191,8 +192,16 @@ pub fn SortableGrid(
         GestureEffect::None => {}
     };
     let primary_pointer = move |evt: &PointerEvent| evt.is_primary();
+    // The grid itself doesn't animate, but its tiles commonly do (FlipItem
+    // siblings can't share context with each other) - anchor the
+    // reduced-motion stylesheet once for the whole subtree.
+    let reduced_motion_css = use_reduced_motion_css();
 
     rsx! {
+        // Outside the grid container: tooling (and tests) often index the
+        // container's children as tiles, and <style> is layout-neutral
+        // wherever it sits.
+        {reduced_motion_css}
         div {
             style: style,
             "data-mode": mode_str,
