@@ -514,3 +514,58 @@ test("bridge zone receives typed drops from both payload worlds", async ({ page 
   await page.mouse.up();
   await expect(status).toHaveAttribute("data-log", "ticket:DND-41,person:7");
 });
+
+// Zone rects are cached at drag start; autoscroll moves the zones mid-drag.
+// The rect-refresh channel re-measures after every scroll, so both the hover
+// highlight and the drop must target the zone the user actually sees at the
+// pointer - not the one whose stale rect still covers that point.
+test("drops land on the zone that auto-scrolled into place", async ({ page }) => {
+  await openFixtures(page);
+
+  const sec = await section(page, "Stale rects");
+  await sec.scrollIntoViewIfNeeded();
+  const scroll = sec.locator(".stale-scroll");
+  await scroll.evaluate((node) => {
+    node.scrollTop = 0;
+  });
+
+  const drag = sec.locator("#stale-drag");
+  const d = await drag.boundingBox();
+  const box = await scroll.boundingBox();
+
+  // Pick up the item and park near the container's bottom edge so
+  // autoscroll kicks in; keep feeding pointermove so it keeps ticking.
+  await page.mouse.move(d.x + d.width / 2, d.y + d.height / 2);
+  await page.mouse.down();
+  const edgeX = box.x + box.width / 2;
+  const edgeY = box.y + box.height - 4;
+  await page.mouse.move(edgeX, edgeY, { steps: 15 });
+  let jiggle = 0;
+  await expect
+    .poll(async () => {
+      jiggle = 1 - jiggle;
+      await page.mouse.move(edgeX + jiggle, edgeY);
+      return scroll.evaluate((node) => node.scrollTop);
+    })
+    .toBeGreaterThan(120);
+
+  // The list has scrolled well past a full zone height. Ask the DOM which
+  // zone is REALLY under the container's midpoint now...
+  const midX = box.x + box.width / 2;
+  const midY = box.y + box.height / 2;
+  const expected = await page.evaluate(([x, y]) => {
+    const el = document.elementFromPoint(x, y);
+    return el?.closest(".stale-zone")?.textContent.trim() ?? null;
+  }, [midX, midY]);
+  expect(expected).not.toBeNull();
+
+  // ...hover it: the freshly-measured zone must light up, not its stale
+  // predecessor...
+  await page.mouse.move(midX, midY, { steps: 8 });
+  const target = sec.locator(".stale-zone").filter({ hasText: new RegExp(`^${expected}$`) });
+  await expect(target).toHaveAttribute("data-over", "true");
+
+  // ...and the drop must land there.
+  await page.mouse.up();
+  await expect(sec.locator("#stale-status")).toHaveAttribute("data-landed", expected);
+});

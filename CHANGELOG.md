@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Stale hit-test rects while auto-scrolling.** Zone rects are cached at
+  drag start, but `AutoScroll` moves the zones mid-drag - so hover
+  highlighting and drops targeted where zones *sat at pickup*, not where
+  the user sees them. A new payload-type-erased **rect-refresh channel**
+  (`RectRefresh`, one per provider tree; nested providers share the
+  outermost) fixes this: every provider registers a re-measure thunk that
+  runs only while it has a drag in flight, and `AutoScroll` pings the
+  channel after every scroll it performs and on any other scroll of its
+  container (wheel/trackpad mid-drag). Custom layout mutators can ping it
+  too via the new `use_rect_refresh()` hook. Known remaining gap:
+  `SortableList`'s internal row cache measures pre-displacement layout on
+  purpose, so it needs scroll *compensation* rather than re-measurement -
+  tracked separately.
+
+### Tests
+
+- Runtime: nested providers share one refresh channel and a provider's
+  thunk unregisters on unmount. Browser: a drag that auto-scrolls its
+  container hovers and drops on the zone that scrolled into place
+  (verified red without the fix, green with it).
+
 ## 2.2.0 - 2026-07-08
 
 Cross-type drops, documented and de-trapped. Providers stay monomorphic -
