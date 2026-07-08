@@ -48,6 +48,8 @@ enum Route {
         MoodboardPage {},
         #[route("/standup")]
         StandupPage {},
+        #[route("/itinerary")]
+        ItineraryPage {},
         #[route("/shuffle")]
         ShufflePage {},
         #[route("/menu")]
@@ -140,6 +142,11 @@ fn nav() -> Vec<(&'static str, &'static str, Vec<NavItem>)> {
                     title: "Standup",
                     blurb: "Two payload worlds bridged by one shared drop zone.",
                     route: Route::StandupPage {},
+                },
+                NavItem {
+                    title: "Itinerary",
+                    blurb: "Closest-edge insertion: drop above or below any row.",
+                    route: Route::ItineraryPage {},
                 },
             ],
         ),

@@ -29,13 +29,14 @@ pub mod prelude {
         CanvasDrop, CanvasDropZone, CanvasKeyboardPlacement, SnapGrid,
     };
     pub use crate::core::{
-        apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point,
+        apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point, edge_of,
         effective_effect, element_point, screen_delta_to_world, screen_to_world, transition,
         use_dnd, use_dnd_provider, use_rect_refresh, use_zone_id, use_zone_registry,
         world_delta_to_screen, world_to_screen, BridgeDropZone, CanvasViewport, Direction,
         DndContext, DndProvider, DragId, DragMode, DragModifier, DragOverlay, DragState, Draggable,
-        DropEffect, DropOutcome, DropZone, GestureEffect, GestureEvent, GesturePhase, ModifierCtx,
-        ParentZone, Point, Rect, RectRefresh, ZoneId, ZoneRecord, ZoneRegistry,
+        DropEffect, DropOutcome, DropZone, Edge, EdgeSet, GestureEffect, GestureEvent,
+        GesturePhase, ModifierCtx, ParentZone, Point, Rect, RectRefresh, ZoneId, ZoneRecord,
+        ZoneRegistry,
     };
     pub use crate::dragout::{ExternalDragSource, OutboundContent};
     pub use crate::external::{classify, ExternalDrop, ExternalDropZone, ExternalPayload};

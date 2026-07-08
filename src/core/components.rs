@@ -36,7 +36,8 @@ enum NavKey {
     Ascend,
 }
 use super::types::{
-    effective_effect, Direction, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId,
+    edge_of, effective_effect, Direction, DragMode, DropEffect, DropOutcome, EdgeSet, Point, Rect,
+    ZoneId,
 };
 
 /// Map an arrow key to a hierarchical move, honoring layout direction:
@@ -204,6 +205,8 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 client: point,
                 element: point - origin,
                 grab,
+                // The receiving zone fills this in when it opted in.
+                edge: None,
             });
             return true;
         }
@@ -443,7 +446,8 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                                 client,
                                 element,
                                 grab: Point::default(),
-                            });
+
+                                edge: None,                            });
                             let name = record
                                 .label
                                 .unwrap_or_else(|| format!("zone {}", target.0));
@@ -484,6 +488,14 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
 /// `[data-over]`, Tailwind `data-over:ring-2`) work directly. Driven by the
 /// shared context, so they light up for pointer, touch and keyboard drags
 /// alike.
+///
+/// Opting into `edge` adds the closest-edge signal for insertion
+/// indicators: while an acceptable *pointer* drag hovers this zone, the div
+/// also carries `data-edge="top" | "right" | "bottom" | "left"` (the zone
+/// edge nearest the pointer, live on every move - see [`edge_of`]), and the
+/// delivered [`DropOutcome::edge`] records it at release. Style it with
+/// value selectors, e.g. Tailwind
+/// `data-[edge=top]:shadow-[0_-2px_0_0_currentColor]`.
 #[component]
 pub fn DropZone<T: Clone + PartialEq + 'static>(
     /// Stable identity for this zone. Auto-generated if omitted.
@@ -495,6 +507,12 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     /// Return `false` to reject a payload (zone won't highlight or accept it).
     #[props(default)]
     accepts: Option<Callback<T, bool>>,
+    /// Track the zone edge nearest the pointer: `EdgeSet::Vertical` for
+    /// top/bottom (a vertical stack), `EdgeSet::Horizontal` for left/right,
+    /// `EdgeSet::All` for all four. Renders `data-edge` while hovered and
+    /// fills [`DropOutcome::edge`]. Off (absent, `None`) by default.
+    #[props(default)]
+    edge: Option<EdgeSet>,
     /// Fired on a successful drop.
     on_drop: EventHandler<DropOutcome<T>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
@@ -519,7 +537,19 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
             id: zone_id,
             parent,
             label: label.clone(),
-            on_drop: Callback::new(move |o| on_drop.call(o)),
+            // The zone (not the drag source) owns the edge signal: it knows
+            // its own rect and whether it opted in, so it enriches the
+            // outcome on the way to the app's handler.
+            on_drop: Callback::new(move |mut o: DropOutcome<T>| {
+                if let Some(set) = edge {
+                    if o.mode == DragMode::Pointer {
+                        if let Some(r) = *rect.peek() {
+                            o.edge = Some(edge_of(o.client, r, set));
+                        }
+                    }
+                }
+                on_drop.call(o)
+            }),
             accepts,
             mounted,
             rect,
@@ -538,11 +568,24 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
             None => false,
         }
     };
+    // Live closest-edge readout while an acceptable pointer drag hovers.
+    // Guards run cheapest-first, and the pointer signal is only read (so
+    // this zone only re-renders per pointer move) once actually hovered
+    // with the prop set.
+    let live_edge = move || -> Option<&'static str> {
+        let set = edge?;
+        if dnd.over() != Some(zone_id) || dnd.mode() != DragMode::Pointer || !acceptable() {
+            return None;
+        }
+        let r = (*rect.peek())?;
+        Some(edge_of(dnd.pointer(), r, set).as_str())
+    };
 
     rsx! {
         div {
             "data-active": if dnd.dragging() && acceptable() { "true" },
             "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
+            "data-edge": live_edge(),
             onmounted: move |evt: Event<MountedData>| {
                 let mut mounted = mounted;
                 mounted.set(Some(evt.data()));

@@ -91,7 +91,7 @@ to their wrapper `div`.
 
 | Module | Pattern | Payload transport |
 |---|---|---|
-| `core` | `Draggable` to `DropZone` with any `Clone` payload | Rust `Store` context |
+| `core` | `Draggable` to `DropZone` with any `Clone` payload; closest-edge insertion indicators (`edge`) | Rust `Store` context |
 | `sortable` | reorder within one list, with live preview (`SortableList`) | self-contained (indices) |
 | `grid` | 2D tile reorder or swap (`SortableGrid`) | self-contained (indices) |
 | `board` | kanban and cross-container moves (`BoardColumn`, `BoardItem`, `BoardSlot`) | context (`BoardPayload<T>`) |
@@ -182,6 +182,15 @@ SortableList {
 Value selectors work too, e.g. tree insertion indicators:
 `data-[intent=before]:border-t-2 data-[intent=into]:bg-blue-50
 data-[intent=after]:border-b-2`.
+
+For insertion indicators on a *bare* zone, opt into the closest-edge
+signal: `DropZone { edge: EdgeSet::Vertical, ... }` carries
+`data-edge="top" | "bottom"` live while an acceptable pointer drag hovers
+(`Horizontal` tracks left/right, `All` every side), and the delivered
+`DropOutcome::edge` records the edge held at release - so the handler maps
+`Top` to "insert before" without re-deriving geometry. The pure function
+behind it, `edge_of(point, rect, edges)`, is public for custom zones. The
+gallery's *Itinerary* page builds a drop-above/drop-below list with it.
 
 The drag ghost styles the same way; `DragOverlay` forwards `class` to its
 wrapper while positioning stays functional:

@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Closest-edge primitive.** `edge_of(point, rect, edges) -> Edge`: the
+  generic "which edge am I nearest" signal for insertion indicators,
+  public and pure (clamps the point into the rect; ties resolve top, then
+  left). `EdgeSet` names the competing edges by stacking direction, like
+  sortable's `Axis`: `Vertical` tracks top/bottom, `Horizontal`
+  left/right, `All` every side. `DropZone` exposes it as an opt-in `edge`
+  prop: while an acceptable pointer drag hovers, the zone carries
+  `data-edge="top" | "right" | "bottom" | "left"` (live on every move,
+  same contract as the tree's `data-intent`), and the delivered outcome
+  records the edge held at release in the new `DropOutcome::edge` field -
+  `None` for keyboard drops and non-opted zones, so handlers treat it as
+  their neutral intent. Edges are physical and don't mirror under RTL.
+  New gallery page **Itinerary** builds a drop-above/drop-below list from
+  the attribute alone. (`DropOutcome` gained a field: construct it
+  through the components as usual, or add `edge: None` in literals.)
+
 - **Drop-settle animation.** `DragOverlay { settle: true }`: on a
   successful pointer drop the ghost no longer vanishes - it glides from
   the release point until its center meets the receiving zone's center,
@@ -36,6 +52,14 @@
 
 ### Tests
 
+- Unit: `edge_of` nearest-edge selection, edge-set restriction, clamping,
+  tie-breaking and the attribute string contract. Runtime: an edge-opted
+  zone enriches pointer outcomes against its registered rect (keyboard
+  drops and non-opted zones stay `None`); no `data-edge` renders idle.
+  Browser: `data-edge` follows the pointer live within the hovered zone
+  (top in the upper half even at the far left, flipping to bottom across
+  the midline), the drop delivers the edge held at release, and the
+  attribute leaves with the drag.
 - Runtime: the settle state machine (payload readable while settling,
   hover cleared, guarded `finish_settle` that can't clobber a newer drag,
   `start` interrupting a glide), the mid-settle SSR markup (armed
