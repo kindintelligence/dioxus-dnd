@@ -31,6 +31,7 @@ fn App() -> Element {
         NativeBoundaryFixture {}
         BridgeFixture {}
         StaleRectsFixture {}
+        SettleFixture {}
     }
 }
 
@@ -468,6 +469,48 @@ fn NativeBoundaryFixture() -> Element {
                 content: OutboundContent::url("https://dioxuslabs.com", Some("Dioxus")),
                 style: "display: block; width: 320px; margin-top: 12px; border: 1px solid #333; padding: 10px; cursor: grab;",
                 "Drag this link out to another app"
+            }
+        }
+    }
+}
+
+// --- drop-settle: the ghost glides into the receiving zone on drop -----------
+// DragOverlay { settle: true }: after a successful pointer drop the overlay
+// must survive the drop (while the zones unlight immediately), glide its
+// center onto the zone's center, and unmount on transitionend. A cancelled
+// drag just vanishes - settle is for completed drops only.
+
+#[component]
+fn SettleFixture() -> Element {
+    let mut landed = use_signal(|| "none".to_string());
+    rsx! {
+        section {
+            h2 { "Drop settle" }
+            DndProvider::<u32> {
+                Draggable::<u32> {
+                    payload: 5u32,
+                    label: "parcel",
+                    id: "settle-drag",
+                    style: "width:120px; padding:10px; border:1px solid #333; \
+                            background:#fff; cursor:grab; user-select:none;",
+                    "parcel #5"
+                }
+                DropZone::<u32> {
+                    on_drop: move |o: DropOutcome<u32>| landed.set(format!("landed:{}", o.payload)),
+                    class: "settle-zone",
+                    style: "margin-top:120px; width:260px; min-height:60px; \
+                            border:2px dashed #999; padding:8px;",
+                    "settle target"
+                }
+                // Slowed down so the spec can observe the mid-glide ghost.
+                DragOverlay::<u32> {
+                    settle: true,
+                    duration: 600.0,
+                    class: "settle-ghost",
+                    style: "width:120px; padding:10px; border:1px solid #339; background:#eef;",
+                    "parcel #5"
+                }
+                div { id: "settle-status", "data-landed": landed(), "landed: {landed}" }
             }
         }
     }

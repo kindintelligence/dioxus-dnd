@@ -6,6 +6,23 @@ use super::registry::{RectRefresh, ZoneRegistry};
 use super::state::{DndContext, DragState};
 use super::types::{DragId, Point, ZoneId};
 
+/// Marker flag: a settle-enabled `DragOverlay<T>` is mounted somewhere in
+/// this provider's subtree, so `Draggable<T>` should route successful
+/// pointer drops through [`DndContext::take_settling`] instead of
+/// [`DndContext::take`]. Typed so nested providers of different payloads
+/// can't arm each other.
+pub(crate) struct SettleFlag<T> {
+    pub(crate) armed: Signal<bool>,
+    marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Copy for SettleFlag<T> {}
+impl<T> Clone for SettleFlag<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 /// Provide a `DndContext<T>` (and its zone registry) to this component's
 /// subtree. Call once, high up (or use the
 /// [`crate::core::components::DndProvider`] component).
@@ -14,6 +31,10 @@ pub fn use_dnd_provider<T: Clone + 'static>() -> DndContext<T> {
     let announcement = use_signal(String::new);
     let registry = use_context_provider(|| ZoneRegistry::<T>::from_signal(Signal::new(Vec::new())));
     let ctx = use_context_provider(move || DndContext::from_parts(state, announcement));
+    use_context_provider(|| SettleFlag::<T> {
+        armed: Signal::new(false),
+        marker: std::marker::PhantomData,
+    });
 
     // One rect-refresh channel per provider *tree*: the outermost provider
     // creates it, nested providers inherit and re-provide the same one. A

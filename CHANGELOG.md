@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Drop-settle animation.** `DragOverlay { settle: true }`: on a
+  successful pointer drop the ghost no longer vanishes - it glides from
+  the release point until its center meets the receiving zone's center,
+  then unmounts on `transitionend` (tune with `duration`/`easing`,
+  defaults 200ms `ease`). During the glide the context is *settling*:
+  `dragging()` is already false (zones unlight and the drop handler ran at
+  release), but `payload()` stays readable so the ghost keeps its content.
+  Honors `prefers-reduced-motion` via `data-dnd-motion` (2.3.0's
+  near-zero-not-zero duration means cleanup still runs). Cancelled drags
+  and keyboard drops never settle. Works through `BoardItem` and
+  `SelectableDraggable` too - anything delivering via the core
+  `Draggable`. Hook users: `DndContext::{take_settling, finish_settle,
+  settling}`; `DragState` gained a `settle` field (construct via
+  `..Default::default()` if you build it literally). The gallery Reading
+  list demos it.
+
 - **`BridgeDropZone<A, B>`** promotes the documented cross-type bridge
   (README "Mixing payload types", the gallery's Standup page) from a
   user-land recipe to a crate component. One element holds the same
@@ -20,6 +36,14 @@
 
 ### Tests
 
+- Runtime: the settle state machine (payload readable while settling,
+  hover cleared, guarded `finish_settle` that can't clobber a newer drag,
+  `start` interrupting a glide), the mid-settle SSR markup (armed
+  transition, release-point hold, motion marker + override sheet), and
+  the non-settle overlay still vanishing on drop. Browser: a real drop
+  keeps the ghost alive with `data-dnd-motion` while the zone unlights,
+  then unmounts it on `transitionend`; a cancelled drag vanishes without
+  settling.
 - Runtime: `BridgeDropZone` registers in both registries with the synced
   label, per-world `accepts` filters payloads (and keyboard `step_zone`
   honors it), each drop lands through its own typed callback, and the

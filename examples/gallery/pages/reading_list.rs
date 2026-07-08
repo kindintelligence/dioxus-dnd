@@ -39,7 +39,7 @@ pub fn ReadingListPage() -> Element {
             }
             Prose {
                 p {
-                    "The floating card that follows your cursor is a DragOverlay. It renders your own rsx pinned to the pointer while a drag is in flight, so the ghost is a real element you style, not a screenshot the browser took of the original."
+                    "The floating card that follows your cursor is a DragOverlay. It renders your own rsx pinned to the pointer while a drag is in flight, so the ghost is a real element you style, not a screenshot the browser took of the original. With settle: true it also finishes the story: on drop the ghost glides into the receiving shelf instead of vanishing (and snaps near-instantly when the OS asks for reduced motion)."
                 }
             }
         }
@@ -79,6 +79,14 @@ pub fn ReadingListPage() -> Element {
                     ("id", "Option<ZoneId>", "Stable identity. Auto-generated when omitted; pass your own (any u32-range value) when handlers need to name zones."),
                     ("label", "Option<String>", "Screen-reader name announced during keyboard navigation (\"Over Finished\")."),
                     ("accepts", "Callback<T, bool>", "Return false to refuse a payload: the zone won't highlight, and drops pass through to whatever is beneath."),
+                ],
+            }
+            PropsTable {
+                title: "DragOverlay props",
+                rows: vec![
+                    ("settle", "bool = false", "Glide the ghost from the release point into the receiving zone on drop, instead of vanishing. Honors prefers-reduced-motion; cancelled drags and keyboard drops never settle."),
+                    ("duration", "f64 = 200.0", "Settle transition duration in milliseconds."),
+                    ("easing", "String = \"ease\"", "CSS easing function for the settle glide."),
                 ],
             }
             PropsTable {
@@ -130,7 +138,7 @@ const SNIPPET: &str = r#"DndProvider::<Card> {
         on_drop: move |o: DropOutcome<Card>| shelve(o.payload, o.to),
         "Drop here"
     }
-    DragOverlay::<Card> { class: "rotate-2 shadow-xl", Ghost {} }
+    DragOverlay::<Card> { settle: true, class: "rotate-2 shadow-xl", Ghost {} }
 }"#;
 
 // --- 1. reading list (core Draggable / DropZone + overlay) -------------------
@@ -172,7 +180,7 @@ fn ReadingListDemo() -> Element {
     rsx! {
         Section {
             title: "Reading list",
-            note: "Two shelves: what you're reading, and what you've finished. Move a book across and it flashes onto its new shelf.",
+            note: "Two shelves: what you're reading, and what you've finished. Release a book over the other shelf and the ghost settles into it, then the book flashes into place.",
             tag: "DropZone",
             DndProvider::<Card> {
                 LiveRegion::<Card> {}
@@ -206,7 +214,9 @@ fn ReadingListDemo() -> Element {
                         }
                     }
                 }
-                DragOverlay::<Card> { class: "pointer-events-none flex items-center gap-2 rounded-xl bg-gradient-to-b from-[#FBFAF6] to-[#F6F3EC] px-3.5 py-2.5 text-[13px] font-medium text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_20px_44px_-12px_rgba(26,24,21,0.14)]",
+                DragOverlay::<Card> {
+                    settle: true,
+                    class: "pointer-events-none flex items-center gap-2 rounded-xl bg-gradient-to-b from-[#FBFAF6] to-[#F6F3EC] px-3.5 py-2.5 text-[13px] font-medium text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_20px_44px_-12px_rgba(26,24,21,0.14)]",
                     CardGhost {}
                 }
             }

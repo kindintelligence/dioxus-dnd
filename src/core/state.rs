@@ -13,7 +13,7 @@
 
 use dioxus::prelude::*;
 
-use super::types::{DragMode, DropEffect, Point, ZoneId};
+use super::types::{DragMode, DropEffect, Point, Rect, ZoneId};
 
 /// A snapshot of an in-flight drag.
 ///
@@ -35,6 +35,10 @@ pub struct DragState<T: 'static> {
     pub effect: DropEffect,
     /// How this drag is being driven (pointer vs keyboard).
     pub mode: DragMode,
+    /// Destination rect of a just-completed drop whose overlay is still
+    /// gliding home (the drop-settle animation). While set, `dragging()` is
+    /// false but `payload` stays readable so the ghost keeps its content.
+    pub settle: Option<Rect>,
 }
 
 impl<T> Default for DragState<T> {
@@ -47,6 +51,7 @@ impl<T> Default for DragState<T> {
             grab: Point::default(),
             effect: DropEffect::default(),
             mode: DragMode::default(),
+            settle: None,
         }
     }
 }
@@ -100,6 +105,8 @@ impl<T: Clone + 'static> DndContext<T> {
             grab,
             effect,
             mode,
+            // Starting a new drag interrupts any settle still gliding.
+            settle: None,
         });
     }
 
@@ -141,6 +148,30 @@ impl<T: Clone + 'static> DndContext<T> {
         Some((payload, source))
     }
 
+    /// Consume the payload on a successful drop, like [`Self::take`], but
+    /// enter the *settling* phase instead of resetting: the returned clone
+    /// goes to the drop handler while the stored payload stays readable and
+    /// `settle` records the destination rect, so a settle-enabled
+    /// [`crate::core::components::DragOverlay`] can glide the ghost home.
+    /// After this, `dragging()` is false and `over()` is cleared; call
+    /// [`Self::finish_settle`] (the overlay does) to reset fully.
+    pub fn take_settling(&mut self, to: Rect) -> Option<(T, Option<ZoneId>)> {
+        let mut s = self.state.write();
+        let payload = s.payload.clone()?;
+        let source = s.source;
+        s.over = None;
+        s.settle = Some(to);
+        Some((payload, source))
+    }
+
+    /// End the settling phase and reset all state. A no-op unless currently
+    /// settling, so a late `transitionend` can never clobber a new drag.
+    pub fn finish_settle(&mut self) {
+        if self.state.settle().peek().is_some() {
+            self.state.set(DragState::default());
+        }
+    }
+
     /// Abort the drag and reset all state.
     pub fn cancel(&mut self) {
         self.state.set(DragState::default());
@@ -150,9 +181,16 @@ impl<T: Clone + 'static> DndContext<T> {
     // Each reads through a field lens, so render-time reads subscribe only
     // to that field.
 
-    /// Is a drag currently in flight?
+    /// Is a drag currently in flight? False while a completed drop is still
+    /// settling, even though [`Self::payload`] remains readable.
     pub fn dragging(&self) -> bool {
-        self.state.payload().is_some()
+        self.state.payload().is_some() && self.state.settle().is_none()
+    }
+
+    /// Destination rect of a drop currently settling (see
+    /// [`Self::take_settling`]), if any.
+    pub fn settling(&self) -> Option<Rect> {
+        self.state.settle().cloned()
     }
 
     /// Clone of the current payload, if dragging.

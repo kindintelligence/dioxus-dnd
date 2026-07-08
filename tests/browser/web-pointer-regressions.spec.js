@@ -633,3 +633,45 @@ test("sortable reorders against rows that auto-scrolled into place", async ({ pa
   const after = await rowTexts();
   expect(after[t]).toBe("Unload the truck");
 });
+
+// Drop-settle (DragOverlay { settle: true }): a successful pointer drop keeps
+// the ghost alive and glides it into the receiving zone, then unmounts it on
+// transitionend. The drag itself is already over - the zone unlights and the
+// drop handler ran at release. A cancelled drag never settles.
+test("drop-settle glides the ghost into the zone then unmounts it", async ({ page }) => {
+  await openFixtures(page);
+
+  const sec = await section(page, "Drop settle");
+  await sec.scrollIntoViewIfNeeded();
+  const zone = sec.locator(".settle-zone");
+  const ghost = page.locator(".settle-ghost");
+  const status = sec.locator("#settle-status");
+
+  const from = await sec.locator("#settle-drag").boundingBox();
+  const to = await zone.boundingBox();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  // Release near the zone's top-left corner so the glide toward its center
+  // has real distance to cover.
+  await page.mouse.move(to.x + 15, to.y + 10, { steps: 20 });
+  await page.mouse.up();
+
+  // The ghost survives the drop to run the glide, marked for the
+  // reduced-motion override...
+  await expect(ghost).toBeVisible();
+  await expect(ghost).toHaveAttribute("data-dnd-motion", "true");
+  // ...while the drag itself ended at release: handler ran, zone unlit.
+  await expect(status).toHaveAttribute("data-landed", "landed:5");
+  await expect(zone).not.toHaveAttribute("data-active", "true");
+  // The transition ends and the ghost unmounts.
+  await expect(ghost).toHaveCount(0, { timeout: 3000 });
+
+  // A cancelled drag (released over nothing) vanishes without settling.
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2 + 60, from.y - 80, { steps: 10 });
+  await expect(ghost).toBeVisible();
+  await page.mouse.up();
+  await expect(ghost).toHaveCount(0, { timeout: 1000 });
+  await expect(status).toHaveAttribute("data-landed", "landed:5");
+});

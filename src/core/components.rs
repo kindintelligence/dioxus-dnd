@@ -17,7 +17,7 @@ use dioxus::prelude::*;
 
 use std::rc::Rc;
 
-use super::hooks::{use_dnd, use_dnd_provider, use_zone_id, use_zone_registry};
+use super::hooks::{use_dnd, use_dnd_provider, use_zone_id, use_zone_registry, SettleFlag};
 use super::registry::ZoneRecord;
 use super::{platform, transition, GestureEffect, GestureEvent, GesturePhase};
 
@@ -147,6 +147,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
 ) -> Element {
     let mut dnd = use_dnd::<T>();
     let registry = use_zone_registry::<T>();
+    let settle_flag = try_use_context::<SettleFlag<T>>();
     // Separate clones for the two closures that need the payload.
     let kb_payload = payload.clone();
     let pointer_payload = payload.clone();
@@ -181,7 +182,19 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             .unwrap_or_default();
         let mode = dnd.mode();
         let grab = dnd.grab();
-        if let Some((p, from)) = dnd.take() {
+        // A settle-enabled overlay glides the ghost into the target zone:
+        // route the drop through the settling take so the payload stays
+        // readable while it animates. Pointer drops only - a keyboard drag
+        // renders no positioned ghost to glide.
+        let settle_to = match settle_flag {
+            Some(f) if mode == DragMode::Pointer && *f.armed.peek() => *record.rect.peek(),
+            _ => None,
+        };
+        let taken = match settle_to {
+            Some(to) => dnd.take_settling(to),
+            None => dnd.take(),
+        };
+        if let Some((p, from)) = taken {
             record.on_drop.call(DropOutcome {
                 payload: p,
                 from,
@@ -673,6 +686,16 @@ pub(crate) fn overlay_style(pos: Point) -> String {
 /// `class: "rotate-3 scale-105 shadow-xl"`. A forwarded `style` is merged
 /// after the functional positioning rather than replacing it.
 ///
+/// With `settle: true`, a successful pointer drop doesn't vanish the ghost:
+/// it glides from the release point until its center meets the receiving
+/// zone's center, then unmounts - the drop-settle animation. During the
+/// glide the drag context is *settling*: `dragging()` is already false
+/// (zones have unlit), but `payload()` stays readable so the ghost keeps
+/// its content. The glide honors `prefers-reduced-motion` via
+/// `data-dnd-motion` (it snaps near-instantly, and cleanup still runs
+/// because `transitionend` still fires). Cancelled drags and keyboard
+/// drops never settle.
+///
 /// Note: the ghost follows the shared context's pointer position, which
 /// pointer drags update on every move. Keyboard drags carry no pointer, so
 /// during one the ghost sits at the viewport origin - check `dnd.mode()`
@@ -682,19 +705,123 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     /// Internal marker; never set this.
     #[props(default)]
     phantom: std::marker::PhantomData<T>,
+    /// Glide the ghost into the receiving zone on drop instead of
+    /// vanishing. Off by default.
+    #[props(default)]
+    settle: bool,
+    /// Settle transition duration in milliseconds.
+    #[props(default = 200.0)]
+    duration: f64,
+    /// CSS easing function for the settle glide.
+    #[props(default = "ease".to_string())]
+    easing: String,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
     let _ = phantom;
-    let dnd = use_dnd::<T>();
-    if !dnd.dragging() {
+    let mut dnd = use_dnd::<T>();
+
+    // Arm settle-aware drops for this provider while mounted. Draggables
+    // check the flag at delivery time, so mount order doesn't matter.
+    let flag = try_use_context::<SettleFlag<T>>();
+    use_hook(move || {
+        if settle {
+            if let Some(mut f) = flag {
+                f.armed.set(true);
+            }
+        }
+    });
+    use_drop(move || {
+        if settle {
+            if let Some(mut f) = flag {
+                f.armed.set(false);
+            }
+            // Unmounting mid-glide: nobody is left to hear transitionend,
+            // so reset now (guarded no-op otherwise).
+            dnd.finish_settle();
+        }
+    });
+
+    let mut node = use_signal(|| None::<Rc<MountedData>>);
+    // The played glide: `Some(delta)` once the ghost has been measured and
+    // the transform released toward the target.
+    let mut glide = use_signal(|| None::<Point>);
+    // The settle transition is inline; honor prefers-reduced-motion. Only
+    // an overlay that settles claims the subtree's stylesheet slot.
+    let reduced_motion_css = crate::a11y::use_reduced_motion_css_if(settle);
+
+    // Measure & play (FLIP, like FlipItem): the settled frame commits at
+    // the release position with the transition armed; this effect then
+    // measures the ghost and releases the transform, so the browser glides
+    // its center onto the zone's center.
+    use_effect(move || {
+        match dnd.settling() {
+            Some(to) if settle => {
+                if glide.peek().is_some() {
+                    return;
+                }
+                let Some(m) = node.peek().clone() else {
+                    // Never mounted (e.g. keyboard-only ghost skipped) -
+                    // nothing to animate.
+                    dnd.finish_settle();
+                    return;
+                };
+                spawn(async move {
+                    let Ok(r) = m.get_client_rect().await else {
+                        dnd.finish_settle();
+                        return;
+                    };
+                    let from = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
+                    let d = to.center() - from.center();
+                    // A sub-pixel glide would produce no transition (and
+                    // thus no transitionend) - finish immediately.
+                    if d.x.abs() < 1.0 && d.y.abs() < 1.0 {
+                        dnd.finish_settle();
+                    } else {
+                        glide.set(Some(d));
+                    }
+                });
+            }
+            _ => {
+                if glide.peek().is_some() {
+                    glide.set(None);
+                }
+            }
+        }
+    });
+
+    let settling = settle && dnd.settling().is_some();
+    if !dnd.dragging() && !settling {
         return rsx! {};
     }
+
+    let functional = if settling {
+        let transform = match glide() {
+            Some(d) => format!("translate({}px, {}px)", d.x, d.y),
+            None => "none".to_string(),
+        };
+        format!(
+            "{} transform: {transform}; transition: transform {duration}ms {easing};",
+            overlay_style(dnd.pointer() - dnd.grab()),
+        )
+    } else {
+        overlay_style(dnd.pointer() - dnd.grab())
+    };
     let mut attributes = attributes;
-    let style = merge_style(&mut attributes, &overlay_style(dnd.pointer() - dnd.grab()));
+    let style = merge_style(&mut attributes, &functional);
     rsx! {
+        {reduced_motion_css}
         div {
             style: style,
+            "data-dnd-motion": if settle { "true" },
+            onmounted: move |evt: Event<MountedData>| node.set(Some(evt.data())),
+            ontransitionend: move |_| {
+                // The only transition this element runs is the settle glide;
+                // finish_settle is a guarded no-op against stray bubbles.
+                if settling && glide.peek().is_some() {
+                    dnd.finish_settle();
+                }
+            },
             ..attributes,
             {children}
         }
