@@ -12,8 +12,7 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    client_point, element_point, use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome,
-    ParentZone, Rect, ZoneRecord,
+    use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone, Rect, ZoneRecord,
 };
 
 /// Identifies a tree node.
@@ -87,16 +86,15 @@ pub fn would_create_cycle(
 /// A single tree row that acts as a drop target with intent detection.
 ///
 /// The payload type `T` travels through the shared `DndContext<T>` (use the
-/// core `Draggable` or `PointerDraggable` on your rows to start drags).
+/// core `Draggable` on your rows to start drags).
 /// While hovered, the wrapper carries `data-intent="before" | "after" |
-/// "into"` for styling insertion indicators - for native mouse drags,
-/// touch/pen drags, and keyboard drags alike. The attribute is absent when
-/// not hovered, so both value selectors (Tailwind
-/// `data-[intent=into]:bg-blue-50`) and presence selectors
-/// (`data-intent:outline`) work.
+/// "into"` for styling insertion indicators - for pointer (mouse, touch,
+/// pen) and keyboard drags alike. The attribute is absent when not hovered,
+/// so both value selectors (Tailwind `data-[intent=into]:bg-blue-50`) and
+/// presence selectors (`data-intent:outline`) work.
 ///
 /// Every target also registers itself in the shared zone registry, which is
-/// what makes it reachable by touch hit-testing and keyboard navigation.
+/// what makes it reachable by pointer hit-testing and keyboard navigation.
 /// Keyboard drops land with `Into` intent (the row's center band). At the
 /// registry level a target accepts a payload if your `accepts` passes for
 /// *any* intent; the exact intent is re-checked at drop time.
@@ -121,9 +119,8 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
-    let mut dnd = use_dnd::<T>();
+    let dnd = use_dnd::<T>();
     let mut registry = use_zone_registry::<T>();
-    let mut intent = use_signal(|| None::<DropIntent>);
     let mut label_now = use_signal(|| label.clone());
     let mut accepts_now = use_signal(|| accepts);
     let mut row_height_now = use_signal(|| row_height);
@@ -193,13 +190,9 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     // Registry readers only `peek`, so this render-time write can't loop.
     registry.sync_label(zone_id, label.clone());
 
-    // Native drags drive `intent` from dragover; pointer (touch/pen) drags
-    // derive a live band from the shared pointer position, so fingers see
-    // the same before/into/after feedback as mice.
+    // Pointer drags derive a live band from the shared pointer position, so
+    // fingers see the same before/into/after feedback as mice.
     let display_intent = move || -> Option<DropIntent> {
-        if let Some(it) = intent() {
-            return Some(it);
-        }
         if dnd.dragging() && dnd.mode() == DragMode::Pointer && dnd.over() == Some(zone_id) {
             let r = (*rect.peek())?;
             return Some(intent_from_offset(dnd.pointer().y - r.y, row_height));
@@ -214,17 +207,6 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             None => None,
         }
     };
-    // Drag events report element offsets relative to whatever *child* is
-    // under the cursor, not this row - band math needs row-relative Y, so
-    // derive it from client coordinates and the measured rect when we have
-    // one.
-    let row_offset_y = move |evt: &DragEvent| -> f64 {
-        match *rect.peek() {
-            Some(r) => client_point(evt).y - r.y,
-            None => element_point(evt).y,
-        }
-    };
-
     rsx! {
         div {
             "data-intent": intent_str(),
@@ -243,45 +225,6 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
                         )));
                     }
                 });
-            },
-            ondragover: move |evt: DragEvent| {
-                if !dnd.dragging() {
-                    return;
-                }
-                let it = intent_from_offset(row_offset_y(&evt), row_height);
-                let ok = match (&accepts, dnd.payload()) {
-                    (Some(cb), Some(p)) => cb.call((p, it)),
-                    (None, Some(_)) => true,
-                    _ => false,
-                };
-                if ok {
-                    evt.prevent_default();
-                    if intent() != Some(it) {
-                        intent.set(Some(it));
-                    }
-                } else if intent().is_some() {
-                    intent.set(None);
-                }
-            },
-            ondragleave: move |_| {
-                intent.set(None);
-            },
-            ondrop: move |evt: DragEvent| {
-                evt.prevent_default();
-                evt.stop_propagation();
-                let it = intent_from_offset(row_offset_y(&evt), row_height);
-                intent.set(None);
-                let ok = match (&accepts, dnd.payload()) {
-                    (Some(cb), Some(p)) => cb.call((p, it)),
-                    (None, Some(_)) => true,
-                    _ => false,
-                };
-                if !ok {
-                    return;
-                }
-                if let Some((payload, _)) = dnd.take() {
-                    on_drop.call(TreeDropEvent { payload, target: node, intent: it });
-                }
             },
             ..attributes,
             {children}

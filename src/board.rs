@@ -31,10 +31,9 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_zone_id, use_zone_registry, DragInputMode, DropEffect, DropOutcome, DropZone,
-    ParentZone, ZoneId, ZoneRecord,
+    use_dnd, use_zone_id, use_zone_registry, Draggable, DropOutcome, DropZone, ParentZone, ZoneId,
+    ZoneRecord,
 };
-use crate::pointer::PointerDraggable;
 
 /// Columns are just zones.
 pub type ContainerId = ZoneId;
@@ -98,8 +97,7 @@ pub fn apply_move<T>(board: &mut HashMap<ContainerId, Vec<T>>, mv: MoveEvent<T>)
 }
 
 /// A draggable card living in a column. Thin wrapper over
-/// [`crate::pointer::PointerDraggable`] (so cards work with mouse, touch,
-/// pen and keyboard) that packs origin info into the payload.
+/// [`crate::core::Draggable`] that packs origin info into the payload.
 #[component]
 pub fn BoardItem<T: Clone + PartialEq + 'static>(
     item: T,
@@ -107,11 +105,6 @@ pub fn BoardItem<T: Clone + PartialEq + 'static>(
     column: ContainerId,
     /// Index within the column.
     index: usize,
-    /// Which input/browser drag path cards use. Defaults to pointer events for
-    /// mouse, touch and pen. Set [`DragInputMode::Native`] or
-    /// [`DragInputMode::Hybrid`] to opt into HTML5 drag.
-    #[props(default)]
-    input: DragInputMode,
     /// Label for screen-reader announcements.
     #[props(default)]
     label: Option<String>,
@@ -119,10 +112,9 @@ pub fn BoardItem<T: Clone + PartialEq + 'static>(
     children: Element,
 ) -> Element {
     rsx! {
-        PointerDraggable::<BoardPayload<T>> {
+        Draggable::<BoardPayload<T>> {
             payload: BoardPayload { item, from: column, index },
             zone: column,
-            input,
             label,
             attributes,
             {children}
@@ -202,9 +194,8 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     let accepts = move |p: BoardPayload<T>| column_accepts.map(|cb| cb.call(p)).unwrap_or(true);
 
     // `index` is positional - it shifts as items move above this slot - so the
-    // registered (pointer/keyboard) drop must read the *current* props, not the
-    // ones captured when the zone first registered. Mirror them through signals.
-    // (The native `ondrop` below closes over the live props each render already.)
+    // registered drop must read the *current* props, not the ones captured when
+    // the zone first registered. Mirror them through signals.
     let mut column_now = use_signal(|| column);
     let mut index_now = use_signal(|| index);
     let mut on_move_now = use_signal(|| on_move);
@@ -261,29 +252,6 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
             onmounted: move |evt: Event<MountedData>| {
                 let mut mounted = mounted;
                 mounted.set(Some(evt.data()));
-            },
-            ondragover: move |evt: DragEvent| {
-                if acceptable() {
-                    evt.prevent_default();
-                    evt.data_transfer().set_drop_effect(DropEffect::Move.as_str());
-                }
-            },
-            ondrop: {
-                let mut dnd = dnd;
-                move |evt: DragEvent| {
-                    evt.prevent_default();
-                    evt.stop_propagation();
-                    if !acceptable() {
-                        return;
-                    }
-                    if let Some((p, _)) = dnd.take() {
-                        on_move.call(MoveEvent {
-                            item: p.item,
-                            from: (p.from, p.index),
-                            to: (column, Some(index)),
-                        });
-                    }
-                }
             },
             ..attributes,
             {children}

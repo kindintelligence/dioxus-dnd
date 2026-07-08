@@ -184,22 +184,6 @@ async function openRegressions(page) {
   await expect(page.getByRole("heading", { name: "Regressions" })).toBeVisible({ timeout: 60_000 });
 }
 
-async function dispatchNativeDropAt(target, setup, clientX, clientY) {
-  return target.evaluate(
-    (node, { setup, clientX, clientY }) => {
-      const dataTransfer = new DataTransfer();
-      for (const [type, value] of Object.entries(setup.data || {})) {
-        dataTransfer.setData(type, value);
-      }
-      const init = { bubbles: true, cancelable: true, clientX, clientY, dataTransfer };
-      for (const type of ["dragenter", "dragover", "drop"]) {
-        node.dispatchEvent(new DragEvent(type, init));
-      }
-    },
-    { setup, clientX, clientY },
-  );
-}
-
 async function dispatchNativeDrop(target, setup) {
   return target.evaluate((node, setup) => {
     const rect = node.getBoundingClientRect();
@@ -754,47 +738,4 @@ test("reorder buttons reorder from inside a sortable row", async ({ page }) => {
   expect(await order()).toEqual(["Wake up", "Ship code", "Touch grass", "Sleep"]);
   await sec.getByRole("button", { name: "Move Wake up down" }).click();
   await expect.poll(order).toEqual(["Ship code", "Wake up", "Touch grass", "Sleep"]);
-});
-
-// A native drop landing on a child node inside a canvas must report
-// canvas-relative coordinates, not coordinates relative to the child element.
-test("canvas native drop over a child reports canvas-relative coordinates", async ({ page }) => {
-  await openRegressions(page);
-
-  const canvas = page.locator("#canvas-child").locator("xpath=ancestor::div[1]");
-  const child = page.locator("#canvas-child");
-  const out = page.locator("#canvas-drop-pointer");
-
-  const canvasBox = await canvas.boundingBox();
-  const childBox = await child.boundingBox();
-  expect(canvasBox).not.toBeNull();
-  expect(childBox).not.toBeNull();
-
-  // Where we'll drop: the centre of the child (which sits at ~200,120 inside
-  // the canvas). In canvas coordinates that is child-centre minus canvas origin.
-  const dropX = childBox.x + childBox.width / 2;
-  const dropY = childBox.y + childBox.height / 2;
-  const expectedX = dropX - canvasBox.x;
-  const expectedY = dropY - canvasBox.y;
-
-  // Start a native HTML5 drag on the source, then drop onto the child.
-  const source = page.getByText("native source", { exact: true });
-  await source.evaluate((node) => {
-    node.dispatchEvent(
-      new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }),
-    );
-  });
-  await dispatchNativeDropAt(child, { data: { "text/plain": "x" } }, dropX, dropY);
-
-  await expect(out).toHaveAttribute("data-set", "true", { timeout: 5_000 });
-  const got = await out.evaluate((n) => ({
-    x: Number.parseFloat(n.dataset.x),
-    y: Number.parseFloat(n.dataset.y),
-  }));
-
-  // Canvas-relative (~240, ~135), NOT child-relative (~40, ~15).
-  expect(Math.abs(got.x - expectedX)).toBeLessThan(2);
-  expect(Math.abs(got.y - expectedY)).toBeLessThan(2);
-  expect(got.x).toBeGreaterThan(150);
-  expect(got.y).toBeGreaterThan(90);
 });

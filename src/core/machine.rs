@@ -6,8 +6,8 @@
 //! (stray pointer ids, release before the threshold, cancellation mid-drag)
 //! is an exhaustive match arm with a test, not an ad-hoc `if`.
 //!
-//! [`crate::pointer::PointerDraggable`] drives this machine; you can drive
-//! it yourself to build custom pointer interactions with the same rigor:
+//! [`crate::core::Draggable`] drives this machine; you can drive it yourself
+//! to build custom pointer interactions with the same rigor:
 //!
 //! ```rust
 //! use dioxus_dnd::core::{transition, GestureEffect, GesturePhase, GestureEvent, Point};

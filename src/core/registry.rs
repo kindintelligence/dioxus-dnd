@@ -1,7 +1,8 @@
 //! The zone registry: every mounted [`crate::core::DropZone`] records itself
 //! here (id, label, drop callback, acceptance filter, and its mounted DOM
-//! handle). Keyboard navigation walks it in registration order; the pointer
-//! (touch) fallback hit-tests against cached client rects.
+//! handle). Pointer drags hit-test against cached client rects; keyboard
+//! navigation walks the zones in spatial order (top-to-bottom, left-to-right,
+//! with unmeasured zones last in registration order).
 
 use std::rc::Rc;
 

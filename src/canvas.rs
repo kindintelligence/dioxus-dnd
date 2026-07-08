@@ -7,8 +7,8 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 
 use crate::core::{
-    client_point, element_point, use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome,
-    ParentZone, Point, Rect, ZoneId, ZoneRecord,
+    use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone, Point, Rect,
+    ZoneId, ZoneRecord,
 };
 
 /// A payload dropped at a position on the canvas.
@@ -40,8 +40,8 @@ impl SnapGrid {
 
 /// Where a keyboard-driven canvas drop should place its pointer.
 ///
-/// Pointer and native drops always use their event geometry. This policy is
-/// only applied when the completed drop came from keyboard interaction.
+/// Pointer drops use their event geometry. This policy is only applied when
+/// the completed drop came from keyboard interaction.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum CanvasKeyboardPlacement {
     /// Use the selected zone geometry supplied by core keyboard navigation.
@@ -170,7 +170,7 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
-    let mut dnd = use_dnd::<T>();
+    let dnd = use_dnd::<T>();
     let mut registry = use_zone_registry::<T>();
     let auto_id = use_zone_id();
     let zone_id = id.unwrap_or(auto_id);
@@ -202,11 +202,9 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
         });
     };
 
-    // --- pointer/keyboard path: register as a zone so `PointerDraggable`
-    // (touch, pen, and mouse under the `web` feature) can drop here. The
+    // Register as a zone so pointer and keyboard drags can drop here. The
     // registry delivers a `DropOutcome`; `element` is the pointer relative to
-    // the canvas and `grab` is the pickup offset - exactly what native `ondrop`
-    // computes below, so both paths place the element identically.
+    // the canvas and `grab` is the pickup offset.
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
     let mounted = use_signal(|| None::<Rc<MountedData>>);
     let rect = use_signal(|| None::<Rect>);
@@ -254,30 +252,6 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
                         )));
                     }
                 });
-            },
-            // --- native path: core `Draggable` sources drop through HTML5 drag.
-            ondragover: move |evt: DragEvent| {
-                if dnd.dragging() {
-                    evt.prevent_default();
-                }
-            },
-            ondrop: move |evt: DragEvent| {
-                evt.prevent_default();
-                // `element_point` is relative to the *deepest* element under
-                // the cursor, which is a child node when the drop lands on an
-                // already-placed item - not the canvas. Derive canvas-relative
-                // coordinates from the client point and the measured canvas
-                // origin instead, matching the pointer/keyboard path
-                // (`DropOutcome::element = point - rect.origin`). Fall back to
-                // `element_point` only before the rect has been measured.
-                let pointer = match *rect.peek() {
-                    Some(r) => client_point(&evt) - r.origin(),
-                    None => element_point(&evt),
-                };
-                let grab = dnd.grab();
-                if let Some((payload, _)) = dnd.take() {
-                    place(payload, pointer, grab);
-                }
             },
             ..attributes,
             {children}
@@ -400,23 +374,6 @@ mod tests {
             ),
             Point::new(12.0, 18.0)
         );
-    }
-
-    #[test]
-    fn canvas_position_is_path_independent_for_same_geometry() {
-        let pointer = Point::new(81.0, 97.0);
-        let grab = Point::new(13.0, 19.0);
-        let snap = Some(SnapGrid(8.0));
-        let bounds = Some(Bounds {
-            width: 120.0,
-            height: 80.0,
-        });
-
-        let pointer_path = canvas_position(pointer, grab, snap, bounds);
-        let native_path = canvas_position(pointer, grab, snap, bounds);
-
-        assert_eq!(pointer_path, native_path);
-        assert_eq!(pointer_path, Point::new(72.0, 80.0));
     }
 
     #[test]

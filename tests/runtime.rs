@@ -245,9 +245,16 @@ fn draggable_renders_a11y_attributes() {
         }
     }
     let html = run(app);
-    assert!(html.contains("draggable"), "draggable attr missing: {html}");
     assert!(html.contains("tabindex=0"), "not focusable: {html}");
     assert!(html.contains(r#"role="button""#), "role missing: {html}");
+    assert!(
+        !html.contains("draggable=true"),
+        "in-app drags should not opt into native HTML drag: {html}"
+    );
+    assert!(
+        html.contains("touch-action: none"),
+        "pointer drag style missing: {html}"
+    );
     assert!(
         html.contains("aria-roledescription"),
         "roledescription missing: {html}"
@@ -275,24 +282,6 @@ fn disabled_draggable_leaves_tab_order() {
 }
 
 #[test]
-fn draggable_native_can_be_disabled_without_losing_keyboard_access() {
-    fn app() -> Element {
-        rsx! {
-            DndProvider::<u8> {
-                Draggable::<u8> { payload: 1, native: false, "keyboard only" }
-            }
-        }
-    }
-    let html = run(app);
-    assert!(
-        html.contains("draggable=false"),
-        "native drag should be explicitly disabled: {html}"
-    );
-    assert!(html.contains("tabindex=0"), "keyboard access lost: {html}");
-    assert!(html.contains(r#"role="button""#), "role missing: {html}");
-}
-
-#[test]
 fn reorder_buttons_render_labels_and_edge_disabling() {
     fn app() -> Element {
         rsx! {
@@ -313,34 +302,20 @@ fn reorder_buttons_render_labels_and_edge_disabling() {
 }
 
 #[test]
-fn sortable_native_drag_is_opt_in() {
+fn sortable_does_not_render_native_draggable_attrs() {
     fn app() -> Element {
         rsx! {
-            div {
-                SortableList {
-                    len: 1,
-                    on_sort: move |_| {},
-                    render: move |_| rsx! { "pointer" },
-                }
-                SortableList {
-                    len: 1,
-                    input: DragInputMode::Native,
-                    on_sort: move |_| {},
-                    render: move |_| rsx! { "native" },
-                }
+            SortableList {
+                len: 1,
+                on_sort: move |_| {},
+                render: move |_| rsx! { "row" },
             }
         }
     }
     let html = run(app);
-    assert_eq!(
-        html.matches("draggable=false").count(),
-        1,
-        "default list should opt out of native drag: {html}"
-    );
-    assert_eq!(
-        html.matches("draggable=true").count(),
-        1,
-        "native opt-in list should enable native drag: {html}"
+    assert!(
+        !html.contains("draggable=true") && !html.contains("draggable=false"),
+        "sortable should not render native drag attrs: {html}"
     );
 }
 
@@ -673,14 +648,6 @@ fn canvas_keyboard_policy_does_not_affect_pointer_drops() {
     );
 }
 
-#[test]
-fn canvas_keyboard_policy_does_not_affect_native_outcomes() {
-    assert_eq!(
-        run_keyboard_policy(CanvasKeyboardPlacement::Origin, DragMode::Native),
-        vec![Point::new(80.0, 60.0)]
-    );
-}
-
 #[derive(Clone, Props)]
 struct DynamicKeyboardPolicyProps {
     phase: Shared<u8>,
@@ -901,8 +868,16 @@ fn board_slot_inherits_column_accepts() {
     #[component]
     fn BoardAcceptsProbe() -> Element {
         let registry = use_zone_registry::<BoardPayload<&'static str>>();
-        let ok = BoardPayload { item: "ok", from: ZoneId(10), index: 0 };
-        let blocked = BoardPayload { item: "blocked", from: ZoneId(10), index: 0 };
+        let ok = BoardPayload {
+            item: "ok",
+            from: ZoneId(10),
+            index: 0,
+        };
+        let blocked = BoardPayload {
+            item: "blocked",
+            from: ZoneId(10),
+            index: 0,
+        };
 
         // Hover/keyboard filtering: the slot is an acceptable child for an
         // allowed payload, and filtered out for a rejected one.
@@ -986,7 +961,11 @@ fn slot_auto_ids_never_collide_with_explicit_column_ids() {
     #[component]
     fn CollisionProbe() -> Element {
         let registry = use_zone_registry::<BoardPayload<&'static str>>();
-        let payload = BoardPayload { item: "card", from: ZoneId(1), index: 0 };
+        let payload = BoardPayload {
+            item: "card",
+            from: ZoneId(1),
+            index: 0,
+        };
         let roots = registry.children_of(None, &payload);
         assert_eq!(roots.len(), 3, "every explicit column stays registered");
         // Each column still owns both of its slots: no slot was replaced by a
@@ -1047,7 +1026,11 @@ fn dynamic_board_slot_app(props: DynamicBoardSlotProps) -> Element {
 fn DynamicBoardSlotProbe(phase: u8) -> Element {
     let registry = use_zone_registry::<BoardPayload<&'static str>>();
     if phase == 0 || phase == 2 {
-        let payload = BoardPayload { item: "card", from: ZoneId(10), index: 0 };
+        let payload = BoardPayload {
+            item: "card",
+            from: ZoneId(10),
+            index: 0,
+        };
         let slot = registry.children_of(Some(ZoneId(90)), &payload).remove(0);
         slot.on_drop.call(DropOutcome {
             payload,
@@ -1078,7 +1061,10 @@ fn board_slot_registered_drop_reads_latest_index() {
     );
 
     dom.rebuild_in_place();
-    assert_eq!(moves.lock().unwrap().last().unwrap().to, (ZoneId(90), Some(1)));
+    assert_eq!(
+        moves.lock().unwrap().last().unwrap().to,
+        (ZoneId(90), Some(1))
+    );
 
     // Prop-update pass: no drop delivered, just re-render with the new index.
     *phase.lock().unwrap() = 1;
@@ -1090,7 +1076,10 @@ fn board_slot_registered_drop_reads_latest_index() {
     *phase.lock().unwrap() = 2;
     dom.mark_dirty(ScopeId::APP);
     dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
-    assert_eq!(moves.lock().unwrap().last().unwrap().to, (ZoneId(90), Some(3)));
+    assert_eq!(
+        moves.lock().unwrap().last().unwrap().to,
+        (ZoneId(90), Some(3))
+    );
 }
 
 // --- Tree targets join the zone registry ---------------------------------
@@ -1511,11 +1500,11 @@ fn drag_overlay_forwards_class_and_merges_style() {
 }
 
 #[test]
-fn pointer_draggable_merges_user_style_with_touch_action() {
+fn draggable_merges_user_style_with_touch_action() {
     fn app() -> Element {
         use_dnd_provider::<String>();
         rsx! {
-            PointerDraggable::<String> {
+            Draggable::<String> {
                 payload: "x".to_string(),
                 style: "background: red;",
                 "item"
@@ -1530,46 +1519,25 @@ fn pointer_draggable_merges_user_style_with_touch_action() {
 }
 
 #[test]
-fn pointer_draggable_input_mode_controls_native_attr() {
+fn draggable_does_not_render_native_attrs() {
     fn app() -> Element {
         use_dnd_provider::<String>();
         rsx! {
-            PointerDraggable::<String> {
-                payload: "default".to_string(),
-                "default"
-            }
-            PointerDraggable::<String> {
-                payload: "pointer".to_string(),
-                input: DragInputMode::Pointer,
-                "pointer"
-            }
-            PointerDraggable::<String> {
-                payload: "native".to_string(),
-                input: DragInputMode::Native,
-                "native"
-            }
-            PointerDraggable::<String> {
-                payload: "hybrid".to_string(),
-                input: DragInputMode::Hybrid,
-                "hybrid"
+            Draggable::<String> {
+                payload: "x".to_string(),
+                "item"
             }
         }
     }
     let html = run(app);
-    assert_eq!(
-        html.matches("draggable=false").count(),
-        2,
-        "default and pointer mode should disable native drag: {html}"
-    );
-    assert_eq!(
-        html.matches("draggable=true").count(),
-        2,
-        "native and hybrid mode should enable native drag: {html}"
+    assert!(
+        !html.contains("draggable=true") && !html.contains("draggable=false"),
+        "in-app draggables should not render native drag attrs: {html}"
     );
 }
 
 #[test]
-fn pointer_wrappers_default_to_pointer_drag() {
+fn board_and_selectable_draggables_do_not_render_native_attrs() {
     fn app() -> Element {
         use_dnd_provider::<BoardPayload<String>>();
         rsx! {
@@ -1579,25 +1547,12 @@ fn pointer_wrappers_default_to_pointer_drag() {
                 index: 0,
                 "board-default"
             }
-            BoardItem::<String> {
-                item: "board-native".to_string(),
-                column: ZoneId(1),
-                index: 1,
-                input: DragInputMode::Native,
-                "board-native"
-            }
         }
     }
     let html = run(app);
-    assert_eq!(
-        html.matches("draggable=false").count(),
-        1,
-        "BoardItem default should disable native drag: {html}"
-    );
-    assert_eq!(
-        html.matches("draggable=true").count(),
-        1,
-        "BoardItem native opt-in should enable native drag: {html}"
+    assert!(
+        !html.contains("draggable=true") && !html.contains("draggable=false"),
+        "BoardItem should not render native drag attrs: {html}"
     );
 
     fn selectable_app() -> Element {
@@ -1609,24 +1564,12 @@ fn pointer_wrappers_default_to_pointer_drag() {
                 selection,
                 "select-default"
             }
-            SelectableDraggable::<u32> {
-                item: 2,
-                selection,
-                input: DragInputMode::Hybrid,
-                "select-hybrid"
-            }
         }
     }
     let html = run(selectable_app);
-    assert_eq!(
-        html.matches("draggable=false").count(),
-        1,
-        "SelectableDraggable default should disable native drag: {html}"
-    );
-    assert_eq!(
-        html.matches("draggable=true").count(),
-        1,
-        "SelectableDraggable hybrid opt-in should enable native drag: {html}"
+    assert!(
+        !html.contains("draggable=true") && !html.contains("draggable=false"),
+        "SelectableDraggable should not render native drag attrs: {html}"
     );
 }
 

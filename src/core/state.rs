@@ -106,8 +106,9 @@ impl<T: Clone + 'static> DndContext<T> {
     /// Update the tracked pointer position (drives `DragOverlay`). Granular:
     /// only `pointer` subscribers rerun.
     pub fn update_pointer(&mut self, pointer: Point) {
-        // Some webviews fire `drag` with (0,0); ignore those so the overlay
-        // doesn't jump to the corner.
+        // An exact (0,0) is overwhelmingly a bogus platform report (some
+        // webviews emit it for synthetic events), not a real drag at the
+        // viewport corner; ignore it so the overlay doesn't jump there.
         if pointer.x == 0.0 && pointer.y == 0.0 {
             return;
         }
@@ -129,8 +130,7 @@ impl<T: Clone + 'static> DndContext<T> {
     }
 
     /// Consume the payload on a successful drop. Returns `(payload, source)`.
-    /// After this, `dragging()` is false - which is how `Draggable` tells a
-    /// completed drop apart from a cancelled one in `ondragend`.
+    /// After this, `dragging()` is false.
     pub fn take(&mut self) -> Option<(T, Option<ZoneId>)> {
         let (payload, source) = {
             let mut s = self.state.write();

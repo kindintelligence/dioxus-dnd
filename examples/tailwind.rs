@@ -109,10 +109,9 @@ fn CardsDemo() -> Element {
                                     data-over:border-blue-500 data-over:bg-blue-50",
                             h3 { class: "mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400", "{name}" }
                             for card in bins.read().get(&zone).cloned().unwrap_or_default() {
-                                PointerDraggable::<Card> {
+                                Draggable::<Card> {
                                     payload: card.clone(),
                                     zone,
-                                    input: DragInputMode::Pointer,
                                     label: card.title.clone(),
                                     class: "mb-2 cursor-grab rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-sm transition
                                             focus-visible:outline-2 focus-visible:outline-blue-500
@@ -164,7 +163,6 @@ fn SortableDemo() -> Element {
             SortableList {
                 len: items.read().len(),
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                input: DragInputMode::Pointer,
                 touch_handle: true,
                 class: "[&>*]:mb-1 [&>*]:gap-2 [&>*]:rounded-lg [&>*]:border [&>*]:border-slate-200 [&>*]:bg-white [&>*]:p-2 [&>*]:transition [&>*]:will-change-transform [&>*]:select-none
                         [&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:cursor-grab [&_[data-sort-handle]]:text-slate-400 [&>[data-dragging]_[data-sort-handle]]:cursor-grabbing

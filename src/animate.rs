@@ -27,10 +27,8 @@
 //! }
 //! ```
 //!
-//! **Snap-back on cancel** needs no Rust at all - it's a CSS recipe. The
-//! core `Draggable` exposes no transform during native drags (the browser
-//! owns the ghost), but pointer drags via `PointerDraggable` use your
-//! `DragOverlay`; give the overlay's child
+//! **Snap-back on cancel** needs no Rust at all - it's a CSS recipe. Pointer
+//! drags via `Draggable` use your `DragOverlay`; give the overlay's child
 //! `transition: transform 150ms ease` and render it conditionally on
 //! `dnd.dragging()` - reverting your item's `data-dragging` styles with a
 //! transition produces the settle effect.

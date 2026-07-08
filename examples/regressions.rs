@@ -19,7 +19,6 @@ fn App() -> Element {
     rsx! {
         h1 { "Regressions" }
         OverlapReject {}
-        CanvasNativeChild {}
     }
 }
 
@@ -34,9 +33,8 @@ fn OverlapReject() -> Element {
     rsx! {
         h2 { "Overlap reject" }
         DndProvider::<u32> {
-            PointerDraggable::<u32> {
+            Draggable::<u32> {
                 payload: 1u32,
-                input: DragInputMode::Pointer,
                 label: "card",
                 style: "display:block; width:140px; padding:10px; border:1px solid #333; \
                         background:#fff; cursor:grab; user-select:none;",
@@ -66,54 +64,6 @@ fn OverlapReject() -> Element {
                 }
             }
             div { id: "overlap-status", "data-landed": "{landed}", "landed: {landed}" }
-        }
-    }
-}
-
-// --- #2: a native drop landing on a child node inside a canvas reports
-// canvas-relative coordinates, not coordinates relative to the child. ----------
-
-#[derive(Clone, PartialEq)]
-struct CanvasNode {
-    id: u32,
-    label: String,
-}
-
-#[component]
-fn CanvasNativeChild() -> Element {
-    let mut pointer = use_signal(|| None::<(f64, f64)>);
-    rsx! {
-        h2 { "Canvas native child" }
-        DndProvider::<CanvasNode> {
-            // Native HTML5 drag source (core `Draggable` defaults to native).
-            Draggable::<CanvasNode> {
-                payload: CanvasNode { id: 1, label: "new".into() },
-                style: "display:block; width:120px; padding:10px; border:1px solid #333; \
-                        background:#fff; user-select:none;",
-                "native source"
-            }
-            CanvasDropZone::<CanvasNode> {
-                id: ZoneId(2001),
-                bounds: Bounds { width: 640.0, height: 220.0 },
-                on_drop: move |d: CanvasDrop<CanvasNode>| pointer.set(Some((d.pointer.x, d.pointer.y))),
-                style: "position:relative; width:640px; height:220px; margin-top:20px; \
-                        border:1px solid #333;",
-                // An existing child positioned well away from the canvas origin.
-                // A drop lands *on* this child, so element-relative coordinates
-                // would report the child offset, not the canvas position.
-                div {
-                    id: "canvas-child",
-                    style: "position:absolute; left:200px; top:120px; width:80px; height:30px; \
-                            background:#cdd9ff; display:flex; align-items:center; justify-content:center;",
-                    "child"
-                }
-            }
-            div {
-                id: "canvas-drop-pointer",
-                "data-set": if pointer().is_some() { "true" } else { "false" },
-                "data-x": pointer().map(|p| format!("{:.2}", p.0)).unwrap_or_default(),
-                "data-y": pointer().map(|p| format!("{:.2}", p.1)).unwrap_or_default(),
-            }
         }
     }
 }

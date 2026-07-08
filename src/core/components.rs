@@ -17,10 +17,9 @@ use dioxus::prelude::*;
 
 use std::rc::Rc;
 
-use super::hooks::{
-    client_point, element_point, use_dnd, use_dnd_provider, use_zone_id, use_zone_registry,
-};
+use super::hooks::{use_dnd, use_dnd_provider, use_zone_id, use_zone_registry};
 use super::registry::ZoneRecord;
+use super::{platform, transition, GestureEffect, GestureEvent, GesturePhase};
 
 /// Context marker a `DropZone` provides so zones nested inside it can
 /// discover their parent - powering hierarchical keyboard traversal with no
@@ -80,8 +79,13 @@ pub fn DndProvider<T: Clone + PartialEq + 'static>(
     }
 }
 
-/// Wraps its children in a focusable drag source and pushes `payload` into
-/// the shared context on drag start.
+fn pointer_client(evt: &PointerEvent) -> Point {
+    let c = evt.client_coordinates();
+    Point::new(c.x, c.y)
+}
+
+/// Wraps its children in a focusable pointer/keyboard drag source and pushes
+/// `payload` into the shared context on drag start.
 ///
 /// Any extra attributes (`class`, `style`, `id`…) are forwarded to the div.
 ///
@@ -96,17 +100,15 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     /// The zone this item currently lives in (reported in `DropOutcome::from`).
     #[props(default)]
     zone: Option<ZoneId>,
-    /// HTML5 drop effect. Defaults to `Move`.
+    /// Drop effect. Defaults to `Move`.
     #[props(default)]
     effect: DropEffect,
     /// Disable dragging without unmounting.
     #[props(default)]
     disabled: bool,
-    /// Opt into native HTML5 drag events. Set this to `false` when another
-    /// wrapper drives pointer events but still wants this component's
-    /// keyboard interaction.
-    #[props(default = true)]
-    native: bool,
+    /// Movement in CSS px before a pointer press becomes a drag.
+    #[props(default = 8.0)]
+    threshold: f64,
     /// Human label used in screen-reader announcements ("Picked up {label}").
     #[props(default)]
     label: Option<String>,
@@ -124,51 +126,176 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     let registry = use_zone_registry::<T>();
     // Separate clones for the two closures that need the payload.
     let kb_payload = payload.clone();
+    let pointer_payload = payload.clone();
     let kb_label = label.clone();
     // Comparing against the context payload (rather than a local flag) means
-    // the attribute is also correct when an outer wrapper - e.g.
-    // `PointerDraggable`'s pointer path - started the drag.
+    // the attribute is also correct when a custom source started the drag.
     let attr_payload = payload.clone();
+    let mut phase = use_signal(|| GesturePhase::Idle);
+    let mut step = move |event: GestureEvent, threshold: f64| -> GestureEffect {
+        let (next, fx) = transition(*phase.peek(), event, threshold);
+        phase.set(next);
+        fx
+    };
+    let mut node = use_signal(|| None::<Rc<MountedData>>);
+    let mut press_offset = use_signal(Point::default);
+    let mut mods = use_signal(Modifiers::empty);
+    let mut attributes = attributes;
+    let style = merge_style(&mut attributes, "touch-action: none;");
+
+    let mut deliver_to = move |target: ZoneId, point: Point, effect: DropEffect| -> bool {
+        let Some(record) = registry.get(target) else {
+            return false;
+        };
+        let Some(p) = dnd.payload() else {
+            return false;
+        };
+        if !record.accepts_payload(&p) {
+            return false;
+        }
+        let origin = (*record.rect.peek())
+            .map(|r| r.origin())
+            .unwrap_or_default();
+        let mode = dnd.mode();
+        let grab = dnd.grab();
+        if let Some((p, from)) = dnd.take() {
+            record.on_drop.call(DropOutcome {
+                payload: p,
+                from,
+                to: target,
+                effect,
+                mode,
+                client: point,
+                element: point - origin,
+                grab,
+            });
+            return true;
+        }
+        false
+    };
+
+    let mut finish_drop = move |point: Point| {
+        let effect = effective_effect(effect, *mods.peek());
+        if let Some(target) = registry.hit_test(point) {
+            if deliver_to(target, point, effect) {
+                if let Some(h) = &on_drag_end {
+                    h.call(true);
+                }
+                return;
+            }
+        }
+        spawn(async move {
+            registry.measure_all().await;
+            let target = dnd
+                .payload()
+                .and_then(|p| registry.hit_test_closest(point, &p, 48.0));
+            let dropped = match target {
+                Some(t) => deliver_to(t, point, effect),
+                None => false,
+            };
+            if !dropped {
+                dnd.cancel();
+            }
+            if let Some(h) = &on_drag_end {
+                h.call(dropped);
+            }
+        });
+    };
 
     rsx! {
         div {
-            draggable: native && !disabled,
+            style: style,
             "data-dragging": if dnd.dragging() && dnd.payload().as_ref() == Some(&attr_payload) { "true" },
             "data-disabled": if disabled { "true" },
-            ondragstart: move |evt: DragEvent| {
-                if disabled || !native {
+            onmounted: move |evt: Event<MountedData>| node.set(Some(evt.data())),
+            onpointerdown: move |evt: PointerEvent| {
+                if disabled || !evt.is_primary() {
                     return;
                 }
-                // Nested draggables: the innermost one owns the drag.
                 evt.stop_propagation();
-                let dt = evt.data_transfer();
-                // Firefox refuses to start a drag unless *some* data is set.
-                let _ = dt.set_data("text/plain", "dioxus-dnd");
-                dt.set_effect_allowed(effect.as_str());
-                dnd.start(
-                    payload.clone(),
-                    zone,
-                    client_point(&evt),
-                    element_point(&evt),
-                    effect,
-                    DragMode::Native,
+                if let Some(n) = node.peek().clone() {
+                    platform::capture_pointer(&n, evt.pointer_id());
+                }
+                let o = evt.element_coordinates();
+                press_offset.set(Point::new(o.x, o.y));
+                let _ = step(
+                    GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
+                    threshold,
                 );
-                if let Some(h) = &on_drag_start {
-                    h.call(());
+            },
+            onpointermove: move |evt: PointerEvent| {
+                let at = pointer_client(&evt);
+                mods.set(evt.modifiers());
+                let event = if matches!(*phase.peek(), GesturePhase::Dragging { .. })
+                    && evt.held_buttons().is_empty()
+                {
+                    if let Some(n) = node.peek().clone() {
+                        platform::release_pointer(&n, evt.pointer_id());
+                    }
+                    GestureEvent::Up { at, pointer_id: evt.pointer_id() }
+                } else {
+                    GestureEvent::Move { at, pointer_id: evt.pointer_id() }
+                };
+                match step(event, threshold) {
+                    GestureEffect::Begin { at, .. } => {
+                        dnd.start(
+                            pointer_payload.clone(),
+                            zone,
+                            at,
+                            *press_offset.peek(),
+                            effect,
+                            DragMode::Pointer,
+                        );
+                        registry.refresh_rects();
+                        if let Some(h) = &on_drag_start {
+                            h.call(());
+                        }
+                    }
+                    GestureEffect::Track { at } => {
+                        dnd.update_pointer(at);
+                        match registry.hit_test(at) {
+                            Some(z) => dnd.enter(z),
+                            None => {
+                                if let Some(over) = dnd.over() {
+                                    dnd.leave(over);
+                                }
+                            }
+                        }
+                    }
+                    GestureEffect::Drop { at: point } => finish_drop(point),
+                    _ => {}
                 }
             },
-            ondrag: move |evt: DragEvent| {
-                // Keeps DragOverlay tracking the pointer. Coordinates can be
-                // (0,0) on some platforms; update_pointer filters those.
-                dnd.update_pointer(client_point(&evt));
+            onpointerup: move |evt: PointerEvent| {
+                if let Some(n) = node.peek().clone() {
+                    platform::release_pointer(&n, evt.pointer_id());
+                }
+                mods.set(evt.modifiers());
+                let GestureEffect::Drop { at: point } = step(
+                    GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
+                    threshold,
+                ) else {
+                    return;
+                };
+                finish_drop(point);
             },
-            ondragend: move |_| {
-                // If a DropZone consumed the payload, the state is already
-                // idle - that's how we know the drop landed.
-                let dropped = !dnd.dragging();
-                dnd.cancel();
-                if let Some(h) = &on_drag_end {
-                    h.call(dropped);
+            onpointercancel: move |evt: PointerEvent| {
+                if let Some(n) = node.peek().clone() {
+                    platform::release_pointer(&n, evt.pointer_id());
+                }
+                if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
+                    dnd.cancel();
+                    if let Some(h) = &on_drag_end {
+                        h.call(false);
+                    }
+                }
+            },
+            onlostpointercapture: move |_| {
+                if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
+                    dnd.cancel();
+                    if let Some(h) = &on_drag_end {
+                        h.call(false);
+                    }
                 }
             },
             // --- keyboard interaction ---------------------------------
@@ -337,16 +464,10 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     accepts: Option<Callback<T, bool>>,
     /// Fired on a successful drop.
     on_drop: EventHandler<DropOutcome<T>>,
-    /// Fired when an acceptable drag first enters the zone.
-    #[props(default)]
-    on_enter: Option<EventHandler<T>>,
-    /// Fired when the drag leaves the zone (or drops).
-    #[props(default)]
-    on_leave: Option<EventHandler<()>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
-    let mut dnd = use_dnd::<T>();
+    let dnd = use_dnd::<T>();
     let mut registry = use_zone_registry::<T>();
     let auto_id = use_zone_id();
     let zone_id = id.unwrap_or(auto_id);
@@ -354,9 +475,6 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     // via context, and provides itself to zones deeper down.
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
     use_context_provider(|| ParentZone(zone_id));
-    // dragenter/dragleave fire for every child element; a depth counter turns
-    // them into a single logical enter/leave pair.
-    let mut depth = use_signal(|| 0u32);
     let mounted = use_signal(|| None::<Rc<MountedData>>);
     let rect = use_signal(|| None::<super::types::Rect>);
 
@@ -396,66 +514,6 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                 let mut mounted = mounted;
                 mounted.set(Some(evt.data()));
             },
-            ondragover: move |evt: DragEvent| {
-                if acceptable() {
-                    // Without this, the browser never fires `drop`.
-                    evt.prevent_default();
-                    // Ctrl/Cmd = copy, Alt = link (file-manager convention).
-                    let eff = effective_effect(dnd.effect(), evt.modifiers());
-                    evt.data_transfer().set_drop_effect(eff.as_str());
-                }
-            },
-            ondragenter: move |evt: DragEvent| {
-                if !acceptable() {
-                    return;
-                }
-                evt.prevent_default();
-                let d = depth() + 1;
-                depth.set(d);
-                if d == 1 {
-                    dnd.enter(zone_id);
-                    if let (Some(h), Some(p)) = (&on_enter, dnd.payload()) {
-                        h.call(p);
-                    }
-                }
-            },
-            ondragleave: move |_| {
-                let d = depth().saturating_sub(1);
-                depth.set(d);
-                if d == 0 {
-                    dnd.leave(zone_id);
-                    if let Some(h) = &on_leave {
-                        h.call(());
-                    }
-                }
-            },
-            ondrop: move |evt: DragEvent| {
-                evt.prevent_default();
-                depth.set(0);
-                if !acceptable() {
-                    return;
-                }
-                let client = client_point(&evt);
-                let element = element_point(&evt);
-                let effect = effective_effect(dnd.effect(), evt.modifiers());
-                let mode = dnd.mode();
-                let grab = dnd.grab();
-                if let Some((payload, from)) = dnd.take() {
-                    on_drop.call(DropOutcome {
-                        payload,
-                        from,
-                        to: zone_id,
-                        effect,
-                        mode,
-                        client,
-                        element,
-                        grab,
-                    });
-                    if let Some(h) = &on_leave {
-                        h.call(());
-                    }
-                }
-            },
             ..attributes,
             {children}
         }
@@ -481,9 +539,10 @@ pub(crate) fn overlay_style(pos: Point) -> String {
 /// `class: "rotate-3 scale-105 shadow-xl"`. A forwarded `style` is merged
 /// after the functional positioning rather than replacing it.
 ///
-/// Note: pointer tracking relies on the `drag` event's coordinates, which a
-/// few webviews report as (0,0). The overlay simply won't move there; treat
-/// it as progressive enhancement.
+/// Note: the ghost follows the shared context's pointer position, which
+/// pointer drags update on every move. Keyboard drags carry no pointer, so
+/// during one the ghost sits at the viewport origin - check `dnd.mode()`
+/// and skip rendering it if that matters to you.
 #[component]
 pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     /// Internal marker; never set this.
