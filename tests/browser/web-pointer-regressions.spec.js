@@ -472,3 +472,45 @@ test("native DataTransfer paths handle files, external drops, and drag-out", asy
     html: '<a href="https://dioxuslabs.com">Dioxus</a>',
   });
 });
+
+// The bridge pattern (README "Mixing payload types"): one box registered in
+// two payload worlds. Each world's drag lights and lands on the shared zone
+// through its own typed callback, while the other world's zones stay dark
+// and unreachable for the foreign drag.
+test("bridge zone receives typed drops from both payload worlds", async ({ page }) => {
+  await openFixtures(page);
+
+  const sec = await section(page, "Bridge zone");
+  await sec.scrollIntoViewIfNeeded();
+  const zone = sec.locator("#bridge-zone");
+  const ticketOnly = sec.locator(".ticket-only");
+  const status = sec.locator("#bridge-status");
+
+  const dragTo = async (sourceId, target) => {
+    const from = await sec.locator(sourceId).boundingBox();
+    const to = await target.boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 20 });
+  };
+
+  // A ticket drag activates its own world: the ticket zone AND the bridge.
+  await dragTo("#bridge-ticket", zone);
+  await expect(zone).toHaveAttribute("data-active", "true");
+  await expect(zone).toHaveAttribute("data-over", "true");
+  await expect(ticketOnly).toHaveAttribute("data-active", "true");
+  await page.mouse.up();
+  await expect(status).toHaveAttribute("data-log", "ticket:DND-41");
+
+  // A person drag activates the bridge but NOT the ticket-only zone.
+  await dragTo("#bridge-person", zone);
+  await expect(zone).toHaveAttribute("data-active", "true");
+  await expect(ticketOnly).not.toHaveAttribute("data-active", "true");
+  await page.mouse.up();
+  await expect(status).toHaveAttribute("data-log", "ticket:DND-41,person:7");
+
+  // A person dropped on the ticket-only zone cancels: wrong world entirely.
+  await dragTo("#bridge-person", ticketOnly);
+  await page.mouse.up();
+  await expect(status).toHaveAttribute("data-log", "ticket:DND-41,person:7");
+});

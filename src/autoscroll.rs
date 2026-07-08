@@ -198,7 +198,7 @@ mod tests {
         );
         // near top: negative dy, magnitude below max
         let (_, dy) = edge_delta(Point::new(100.0, 10.0), rect, 48.0, 24.0, ScrollAxis::Y);
-        assert!(dy < 0.0 && dy >= -24.0);
+        assert!((-24.0..0.0).contains(&dy));
         // at the very bottom edge: full speed down
         let (_, dy) = edge_delta(Point::new(100.0, 400.0), rect, 48.0, 24.0, ScrollAxis::Y);
         assert_eq!(dy, 24.0);

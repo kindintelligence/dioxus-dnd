@@ -110,6 +110,22 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         self.zones.peek().iter().find(|z| z.id == id).cloned()
     }
 
+    /// Is a zone with this id registered *here*? The parent-zone context is
+    /// shared across payload types, so a record's `parent` can name a zone
+    /// living in another type's registry - check before navigating to one.
+    pub fn contains(&self, id: ZoneId) -> bool {
+        self.zones.peek().iter().any(|z| z.id == id)
+    }
+
+    /// The zone keyboard navigation should enter when ascending from
+    /// `current`: its parent, but only when that parent is registered in
+    /// this registry. A `DropZone<A>` nested inside a `DropZone<B>` records
+    /// B's id as its parent, and entering an id this registry can't resolve
+    /// would leave the drag hovering a zone that can never receive it.
+    pub fn ascend(&self, current: ZoneId) -> Option<ZoneId> {
+        self.parent_of(current).filter(|pid| self.contains(*pid))
+    }
+
     /// All zones accepting `payload`, in registration order.
     pub fn acceptable(&self, payload: &T) -> Vec<ZoneRecord<T>> {
         self.zones

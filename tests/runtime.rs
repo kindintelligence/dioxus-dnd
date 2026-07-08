@@ -397,6 +397,55 @@ fn nested_zone_traversal() {
         assert_eq!(reg.first_child(ZoneId(10), &0), None);
         assert_eq!(reg.parent_of(ZoneId(1)), None);
 
+        // ascend resolves a registered parent, and refuses one that only
+        // exists in another type's registry (the parent context is shared
+        // across payload types, so records can carry foreign parent ids).
+        assert_eq!(reg.ascend(ZoneId(11)), Some(ZoneId(1)));
+        assert_eq!(reg.ascend(ZoneId(1)), None, "roots have nowhere to go");
+        reg.register(record(20, Some(99), 300.0)); // parent 99 lives elsewhere
+        assert_eq!(reg.parent_of(ZoneId(20)), Some(ZoneId(99)));
+        assert!(!reg.contains(ZoneId(99)));
+        assert_eq!(reg.ascend(ZoneId(20)), None);
+        // Sibling grouping under the foreign parent still works: it only
+        // compares parent ids, never resolves the parent record.
+        reg.register(record(21, Some(99), 340.0));
+        assert_eq!(reg.step_sibling(Some(ZoneId(20)), &0, 1), Some(ZoneId(21)));
+
+        rsx! { div {} }
+    }
+    run(app);
+}
+
+/// A `DropZone<A>` nested inside a `DropZone<B>` records B's id as its
+/// parent - `ParentZone` is one context shared across payload types. That
+/// foreign id must never be *entered* by keyboard ascent, or Enter would
+/// silently no-op on a zone this world can't resolve.
+#[test]
+fn cross_type_nested_zone_ascend_stays_in_its_own_world() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u8> {
+                DndProvider::<u16> {
+                    DropZone::<u8> { id: ZoneId(1), on_drop: move |_: DropOutcome<u8>| {},
+                        DropZone::<u16> { id: ZoneId(2), on_drop: move |_: DropOutcome<u16>| {},
+                            CrossWorldProbe {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[component]
+    fn CrossWorldProbe() -> Element {
+        let reg8 = use_zone_registry::<u8>();
+        let reg16 = use_zone_registry::<u16>();
+        // The u16 zone discovered the u8 zone as its parent...
+        assert_eq!(reg16.parent_of(ZoneId(2)), Some(ZoneId(1)));
+        // ...but that parent lives in the other world's registry,
+        assert!(reg8.contains(ZoneId(1)));
+        assert!(!reg16.contains(ZoneId(1)));
+        // ...so ascent refuses it (the Draggable then falls back to a sibling).
+        assert_eq!(reg16.ascend(ZoneId(2)), None);
         rsx! { div {} }
     }
     run(app);
@@ -1571,6 +1620,147 @@ fn board_and_selectable_draggables_do_not_render_native_attrs() {
         !html.contains("draggable=true") && !html.contains("draggable=false"),
         "SelectableDraggable should not render native drag attrs: {html}"
     );
+}
+
+// --- Bridge zones: one box registered in two type-worlds ------------------
+//
+// The documented cross-type pattern (README "Mixing payload types", the
+// gallery's Standup page): zone ids are process-global while registries are
+// per-type, so one element registers the *same* ZoneId in two registries,
+// sharing its mounted/rect signals. These tests pin the crate invariants
+// that pattern depends on.
+
+#[derive(Clone, Props)]
+struct BridgeProps {
+    ticket_drops: Shared<Vec<&'static str>>,
+    person_drops: Shared<Vec<u32>>,
+}
+
+impl PartialEq for BridgeProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.ticket_drops, &other.ticket_drops)
+            && Arc::ptr_eq(&self.person_drops, &other.person_drops)
+    }
+}
+
+fn bridge_app(props: BridgeProps) -> Element {
+    use_dnd_provider::<&'static str>();
+    use_dnd_provider::<u32>();
+    let mut reg_a = use_zone_registry::<&'static str>();
+    let mut reg_b = use_zone_registry::<u32>();
+
+    let id = ZoneId(500);
+    let mounted = use_signal(|| None::<std::rc::Rc<dioxus::html::MountedData>>);
+    let rect = use_signal(|| None::<Rect>);
+    let ticket_drops = props.ticket_drops.clone();
+    let person_drops = props.person_drops.clone();
+    use_hook(move || {
+        reg_a.register(ZoneRecord {
+            id,
+            parent: None,
+            label: Some("agenda".into()),
+            on_drop: Callback::new(move |o: DropOutcome<&'static str>| {
+                ticket_drops.lock().unwrap().push(o.payload)
+            }),
+            accepts: None,
+            mounted,
+            rect,
+        });
+        reg_b.register(ZoneRecord {
+            id,
+            parent: None,
+            label: Some("agenda".into()),
+            on_drop: Callback::new(move |o: DropOutcome<u32>| {
+                person_drops.lock().unwrap().push(o.payload)
+            }),
+            accepts: None,
+            mounted,
+            rect,
+        });
+    });
+
+    rsx! {
+        BridgeProbe {}
+    }
+}
+
+#[component]
+fn BridgeProbe() -> Element {
+    let mut reg_a = use_zone_registry::<&'static str>();
+    let reg_b = use_zone_registry::<u32>();
+    let id = ZoneId(500);
+
+    // The same id resolves in both worlds.
+    assert!(reg_a.contains(id) && reg_b.contains(id));
+
+    // The rect signal is one shared handle: measuring through one world's
+    // record is immediately visible through the other's, and both worlds'
+    // hit-testing find the same box.
+    let mut rect = reg_a.get(id).expect("registered in world A").rect;
+    rect.set(Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+    assert_eq!(
+        *reg_b.get(id).expect("registered in world B").rect.peek(),
+        Some(Rect::new(0.0, 0.0, 100.0, 50.0)),
+    );
+    let p = Point::new(10.0, 10.0);
+    assert_eq!(reg_a.hit_test(p), Some(id));
+    assert_eq!(reg_b.hit_test(p), Some(id));
+    assert_eq!(reg_a.hit_test_closest(p, &"ticket", 48.0), Some(id));
+    assert_eq!(reg_b.hit_test_closest(p, &7, 48.0), Some(id));
+
+    // Keyboard navigation lists the bridge among each world's own zones.
+    assert_eq!(reg_a.step_zone(None, &"ticket", 1), Some(id));
+    assert_eq!(reg_b.step_zone(None, &7, 1), Some(id));
+
+    // Each drop is delivered through its own typed callback.
+    let outcome_a = DropOutcome {
+        payload: "ship it",
+        from: None,
+        to: id,
+        effect: DropEffect::Move,
+        mode: DragMode::Pointer,
+        client: p,
+        element: p,
+        grab: Point::default(),
+    };
+    reg_a.get(id).unwrap().on_drop.call(outcome_a);
+    let outcome_b = DropOutcome {
+        payload: 7u32,
+        from: None,
+        to: id,
+        effect: DropEffect::Move,
+        mode: DragMode::Keyboard,
+        client: p,
+        element: p,
+        grab: Point::default(),
+    };
+    reg_b.get(id).unwrap().on_drop.call(outcome_b);
+
+    // The registrations are independent: leaving one world doesn't touch
+    // the other.
+    reg_a.unregister(id);
+    assert!(!reg_a.contains(id));
+    assert!(reg_b.contains(id));
+
+    rsx! { div {} }
+}
+
+#[test]
+fn bridge_zone_same_id_in_two_registries_stays_typed() {
+    let ticket_drops = Arc::new(Mutex::new(Vec::new()));
+    let person_drops = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        bridge_app,
+        BridgeProps {
+            ticket_drops: ticket_drops.clone(),
+            person_drops: person_drops.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+
+    // One drop per world, each through its own callback - no crossover.
+    assert_eq!(*ticket_drops.lock().unwrap(), vec!["ship it"]);
+    assert_eq!(*person_drops.lock().unwrap(), vec![7]);
 }
 
 #[test]

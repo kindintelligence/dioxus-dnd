@@ -364,7 +364,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                             .and_then(|z| registry.first_child(z, &p))
                             .or_else(|| registry.step_sibling(over, &p, 1)),
                         NavKey::Ascend => over
-                            .and_then(|z| registry.parent_of(z))
+                            .and_then(|z| registry.ascend(z))
                             .or_else(|| registry.step_sibling(over, &p, -1)),
                     };
                     if let Some(next) = next {
@@ -391,7 +391,9 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
 
                 if is_activate {
                     evt.prevent_default();
-                    let target = dnd.over().or_else(|| {
+                    // A custom source can enter() an id from another type's
+                    // registry; falling back keeps Enter from dying silently.
+                    let target = dnd.over().filter(|z| registry.contains(*z)).or_else(|| {
                         dnd.payload().and_then(|p| registry.step_zone(None, &p, 1))
                     });
                     let Some(target) = target else {

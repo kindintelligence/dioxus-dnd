@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![Dioxus 0.7](https://img.shields.io/badge/dioxus-0.7-0E6B63)](https://dioxuslabs.com)
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
-[![Tests](https://img.shields.io/badge/tests-109%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](CHANGELOG.md)
 
 **Pick it up. Put it anywhere.** Modular, accessible drag and drop for
 [Dioxus](https://dioxuslabs.com): one small core, one module per drop
@@ -445,6 +445,41 @@ Nested `DropZone`s discover their parents automatically through context,
 which is what powers hierarchical keyboard traversal. No configuration
 needed.
 
+## Mixing payload types
+
+A provider is monomorphic on purpose: a `Task` drag can only land on a
+`DropZone<Task>`, checked at compile time. "Polymorphic" needs come in two
+shapes, with different answers.
+
+**Several payload shapes, one drag world.** A tree whose nodes are files or
+folders, a list mixing cards and separators: make the payload an enum. The
+zone's `accepts` filters variants, the drop handler matches on them, and
+the compile-time guarantee stays intact:
+
+```rust,ignore
+#[derive(Clone, PartialEq)]
+enum Node { File(u64), Folder(u64) }
+
+DropZone::<Node> {
+    accepts: move |n: Node| matches!(n, Node::Folder(_)),
+    on_drop: move |o: DropOutcome<Node>| match o.payload {
+        Node::File(id) => { /* … */ }
+        Node::Folder(id) => { /* … */ }
+    },
+}
+```
+
+**Two independent drag worlds sharing one target.** Sometimes two providers
+genuinely coexist - tasks and teammates, say - and one region should accept
+drops from both. Registries are separate per payload type, but zone ids are
+process-global, so one element can register the *same* `ZoneId` in both
+registries, sharing its `mounted`/`rect` signals. Each world's machinery
+(hit-testing, `accepts`, keyboard navigation) then finds the zone on its
+own, and each drop arrives through its own typed callback - no downcasts,
+no shared erased channel. Everything needed is public (`use_zone_registry`,
+`ZoneRecord`, `ParentZone`); the gallery's *Standup* page builds such a
+bridge zone in ~40 lines.
+
 ## Examples and website
 
 The [live gallery](https://kindintelligence.github.io/dioxus-dnd/) is
@@ -470,8 +505,8 @@ regressions driving the headless fixtures in `examples/regressions.rs`:
 sortable overlay geometry and cleanup, releases outside a list or grid
 committing no reorder, autoscroll edge behavior, canvas grab-offset
 placement, drop fall-through past rejecting zones, the Ctrl-drag copy
-convention, reorder buttons inside sortable rows, and the native boundary
-paths.
+convention, reorder buttons inside sortable rows, the native boundary
+paths, and a bridge zone receiving typed drops from two payload worlds.
 
 ```sh
 cargo test
