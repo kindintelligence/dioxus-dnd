@@ -161,6 +161,26 @@ elements. Existing `[data-…="true"]` selectors keep working.
   `imageevil/png` are rejected.
 - `FileFilter::extensions` now trims whitespace and accepts a leading dot, so
   `.png`, `png` and mixed-case extensions normalize to the same rule.
+- Gallery rework (`examples/gallery.rs`): three demos grew into real
+  interfaces. The file manager is now a mailbox that triages multi-select
+  stacks and branches on `DropOutcome::effect` (a Cmd-drop on the Receipts
+  label files a copy and keeps the originals in the inbox). The content
+  calendar is now a sprint board with `BoardSlot` insertion gaps that open
+  between cards, plus a WIP limit: a full column stops lighting up and
+  refuses the drop. The flat tree is now a real reparenting file tree with
+  indent guides, folders-only `Into` acceptance, and `would_create_cycle`
+  keeping a dragged folder out of its own subtree.
+- Gallery midnight theme: the whole page now wears the mailbox panel's dark
+  umber palette (page #211c15, cards #2b2620, items #362f26) with
+  `color-scheme: dark`, black-based shadows and white-alpha borders. Two
+  deliberate exceptions: moodboard sticky notes stay pastel with dark ink,
+  and photo tiles stay vivid, with the album's drop target brightening
+  instead of dimming.
+- Gallery accessibility and touch: every in-app `DndProvider` now renders a
+  `LiveRegion`, the auto-scrolling podcast queue uses `touch_handle: true`
+  so rows keep finger-scrolling while the dotted grip drags, and the upload
+  zone gained a `FileFilter` (images, 5 MB, 6 files) that shows per-file
+  rejection reasons.
 
 ## 1.0.0
 
