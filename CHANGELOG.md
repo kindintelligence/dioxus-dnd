@@ -205,6 +205,12 @@ elements. Existing `[data-…="true"]` selectors keep working.
   (`pointer-events-none`, negative margins) so pointing near a seam
   resolves to it, and the two no-op slots hugging the dragged card do not
   light at all.
+- Gallery sidebar: a detached floating navigation card, pinned on the left
+  from lg up and an off-canvas drawer below that, opened with a
+  double-chevron button and dismissed by the flipped chevrons, the scrim,
+  or any link. Group kickers and demo links scroll smoothly to anchor ids
+  that `Section` and `GroupLabel` derive from their visible titles, so new
+  sections need no wiring beyond their name.
 
 ## 1.0.0
 
