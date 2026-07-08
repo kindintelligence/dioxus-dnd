@@ -1,6 +1,6 @@
 [package]
 name = "dioxus-dnd"
-version = "2.0.1"
+version = "2.1.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Modular, accessible drag-and-drop for Dioxus: sortable lists, kanban boards, trees, grids, file drops, multi-select, touch support and more"
@@ -15,10 +15,10 @@ exclude = [".github/"]
 all-features = true
 
 [dependencies]
-dioxus = { version = "0.8.0-alpha.0", default-features = false, features = ["minimal"] }
+dioxus = { version = "0.7", default-features = false, features = ["minimal"] }
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
-# `web` feature only. Pinned to the version dioxus-web 0.8 pulls so cargo
+# `web` feature only. Pinned to the version dioxus-web 0.7 pulls so cargo
 # unifies to a single web-sys - `MountedData::downcast::<web_sys::Element>()`
 # matches only when the type is identical. `Element` brings
 # `set_pointer_capture`. No wasm-bindgen: we downcast via Dioxus, not JsCast.
@@ -38,9 +38,9 @@ web = ["dep:web-sys"]
 # `MountedData::get_client_rect()`, and dioxus-web only fires `onmounted` /
 # implements those methods when this feature is on. Without it, rects stay
 # empty, hit-testing finds nothing, and drags stick without dropping.
-dioxus = { version = "0.8.0-alpha.0", default-features = false, features = ["minimal", "launch", "web", "document", "mounted", "router"] }
-dioxus-ssr = "0.8.0-alpha.0"
-# dioxus-web 0.8.0-alpha.0's `document` feature forgets to enable web-sys'
+dioxus = { version = "0.7", default-features = false, features = ["minimal", "launch", "web", "document", "mounted", "router"] }
+dioxus-ssr = "0.7"
+# dioxus-web 0.7's `document` feature forgets to enable web-sys'
 # `Location`; features are additive, so enabling it here fixes the build.
 web-sys = { version = "0.3", features = ["Location"] }
 bytes = "1"
