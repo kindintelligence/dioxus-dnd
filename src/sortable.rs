@@ -776,7 +776,10 @@ mod shift_rects_tests {
         // Container scrolled down 130px: content moved up by 130.
         shift_rects(&mut rects, 0.0, -130.0);
         for i in 0..3 {
-            assert_eq!(rects[&i], Rect::new(10.0, i as f64 * 40.0 - 130.0, 200.0, 40.0));
+            assert_eq!(
+                rects[&i],
+                Rect::new(10.0, i as f64 * 40.0 - 130.0, 200.0, 40.0)
+            );
         }
         // Pitch is preserved exactly.
         assert_eq!(slot_pitch(&rects, 1, Axis::Vertical), Some(40.0));

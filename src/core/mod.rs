@@ -12,7 +12,7 @@ pub mod state;
 pub mod types;
 pub mod viewport;
 
-pub use components::{DndProvider, DragOverlay, Draggable, DropZone, ParentZone};
+pub use components::{BridgeDropZone, DndProvider, DragOverlay, Draggable, DropZone, ParentZone};
 pub use hooks::{
     client_point, element_point, use_dnd, use_dnd_provider, use_rect_refresh, use_zone_id,
     use_zone_registry,

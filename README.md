@@ -498,14 +498,27 @@ DropZone::<Node> {
 
 **Two independent drag worlds sharing one target.** Sometimes two providers
 genuinely coexist - tasks and teammates, say - and one region should accept
-drops from both. Registries are separate per payload type, but zone ids are
-process-global, so one element can register the *same* `ZoneId` in both
-registries, sharing its `mounted`/`rect` signals. Each world's machinery
-(hit-testing, `accepts`, keyboard navigation) then finds the zone on its
-own, and each drop arrives through its own typed callback - no downcasts,
-no shared erased channel. Everything needed is public (`use_zone_registry`,
-`ZoneRecord`, `ParentZone`); the gallery's *Standup* page builds such a
-bridge zone in ~40 lines.
+drops from both. That's `BridgeDropZone<A, B>`: one element holding the
+*same* `ZoneId` in both worlds' registries (ids are process-global,
+registries per-type), sharing its `mounted`/`rect` signals. Each world's
+machinery (hit-testing, keyboard navigation) finds the zone on its own,
+acceptance is per-world (`accepts_a`/`accepts_b`), and each drop arrives
+through its own typed callback (`on_drop_a`/`on_drop_b`) - no downcasts, no
+shared erased channel:
+
+```rust,ignore
+BridgeDropZone::<Task, Person> {
+    label: "Standup agenda",
+    on_drop_a: move |o: DropOutcome<Task>| { /* … */ },
+    on_drop_b: move |o: DropOutcome<Person>| { /* … */ },
+    "Drop a task or a teammate"
+}
+```
+
+The gallery's *Standup* page shows it live. For *three or more* worlds,
+write the same double registration yourself - everything it uses is public
+(`use_zone_registry`, `use_zone_id`, `ZoneRecord`, `ParentZone`), and the
+Standup page documents the recipe.
 
 ## Examples and website
 
