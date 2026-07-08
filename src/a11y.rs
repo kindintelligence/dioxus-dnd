@@ -82,9 +82,10 @@ pub fn ReorderButtons(
     on_sort: EventHandler<crate::sortable::SortEvent>,
     #[props(extends = span, extends = GlobalAttributes)] attributes: Vec<Attribute>,
 ) -> Element {
-    let name = label.unwrap_or_else(|| format!("item {}", index + 1));
-    let up_label = format!("Move {name} up");
-    let down_label = format!("Move {name} down");
+    let strings = crate::core::use_dnd_strings();
+    let name = label.unwrap_or_else(|| (strings.row)(index + 1));
+    let up_label = (strings.move_up)(&name);
+    let down_label = (strings.move_down)(&name);
 
     rsx! {
         span {

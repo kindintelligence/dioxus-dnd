@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Localizable announcements.** Every phrase the crate voices now reads a
+  `DndStrings` from context - keyboard announcements ("Picked up {name}…",
+  "Dropped in {name}.", "Drag cancelled."), `ReorderButtons` aria-labels,
+  the unlabeled-item/zone fallbacks, and `SelectionCount`'s badge (whose
+  "{n} item(s)" also becomes properly pluralizable). Each field owns its
+  whole sentence as an `Rc<dyn Fn(..) -> String>` with English defaults,
+  so translations reorder and inflect freely; build one with struct-update
+  syntax over `Default::default()` and provide it anywhere above the drag
+  UI. The crate stays dependency-free - wire dioxus-i18n's `t!` or a plain
+  match on your locale signal into the closures, which are called per
+  phrase so a live language switch takes effect on the very next
+  announcement. `use_dnd_strings()` is public for custom components. New
+  gallery page **Packing list** (Voice group) shows the full dioxus-i18n
+  wiring with a live English/Spanish toggle and a visible mirror of the
+  screen-reader channel.
+
 - **Closest-edge primitive.** `edge_of(point, rect, edges) -> Edge`: the
   generic "which edge am I nearest" signal for insertion indicators,
   public and pure (clamps the point into the rect; ties resolve top, then
@@ -52,6 +68,13 @@
 
 ### Tests
 
+- Unit: the built-in English phrases are pinned. Runtime: a provided
+  `DndStrings` reading a locale localizes `ReorderButtons` aria-labels and
+  the `SelectionCount` badge in SSR output for both languages, while the
+  no-context default stays English. Browser: a keyboard drag announces
+  pickup, hover and drop through the provided strings, and flipping the
+  locale mid-session changes the very next announcement (Spanish pickup,
+  Spanish cancel) with no remount.
 - Unit: `edge_of` nearest-edge selection, edge-set restriction, clamping,
   tie-breaking and the attribute string contract. Runtime: an edge-opted
   zone enriches pointer outcomes against its registered rect (keyboard

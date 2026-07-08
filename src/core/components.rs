@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 use super::hooks::{use_dnd, use_dnd_provider, use_zone_id, use_zone_registry, SettleFlag};
 use super::registry::ZoneRecord;
+use super::strings::use_dnd_strings;
 use super::{platform, transition, GestureEffect, GestureEvent, GesturePhase};
 
 /// Context marker a `DropZone` provides so zones nested inside it can
@@ -149,6 +150,8 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     let mut dnd = use_dnd::<T>();
     let registry = use_zone_registry::<T>();
     let settle_flag = try_use_context::<SettleFlag<T>>();
+    // Everything the keyboard path voices, localizable through context.
+    let strings = use_dnd_strings();
     // Separate clones for the two closures that need the payload.
     let kb_payload = payload.clone();
     let pointer_payload = payload.clone();
@@ -367,10 +370,8 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     // Measure zones so arrow-key order can follow visual
                     // (top-to-bottom, left-to-right) layout.
                     registry.refresh_rects();
-                    let name = kb_label.clone().unwrap_or_else(|| "item".to_string());
-                    dnd.announce(format!(
-                        "Picked up {name}. Use arrow keys to choose a drop target, Enter to drop, Escape to cancel."
-                    ));
+                    let name = kb_label.clone().unwrap_or_else(|| (strings.item)());
+                    dnd.announce((strings.picked_up)(&name));
                     if let Some(h) = &on_drag_start {
                         h.call(());
                     }
@@ -407,18 +408,18 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                         let name = record
                             .as_ref()
                             .and_then(|z| z.label.clone())
-                            .unwrap_or_else(|| format!("zone {}", next.0));
+                            .unwrap_or_else(|| (strings.zone)(next.0));
                         let inside = record
                             .as_ref()
                             .and_then(|z| z.parent)
                             .and_then(|pid| registry.get(pid))
                             .and_then(|pz| pz.label);
                         match inside {
-                            Some(parent) => dnd.announce(format!("Over {name}, inside {parent}.")),
-                            None => dnd.announce(format!("Over {name}.")),
+                            Some(parent) => dnd.announce((strings.over_inside)(&name, &parent)),
+                            None => dnd.announce((strings.over)(&name)),
                         }
                     } else {
-                        dnd.announce("No drop targets available.");
+                        dnd.announce((strings.no_targets)());
                     }
                     return;
                 }
@@ -431,7 +432,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                         dnd.payload().and_then(|p| registry.step_zone(None, &p, 1))
                     });
                     let Some(target) = target else {
-                        dnd.announce("No drop target selected.");
+                        dnd.announce((strings.no_target_selected)());
                         return;
                     };
                     if let Some(record) = registry.get(target) {
@@ -446,12 +447,12 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                                 client,
                                 element,
                                 grab: Point::default(),
-
-                                edge: None,                            });
+                                edge: None,
+                            });
                             let name = record
                                 .label
-                                .unwrap_or_else(|| format!("zone {}", target.0));
-                            dnd.announce(format!("Dropped in {name}."));
+                                .unwrap_or_else(|| (strings.zone)(target.0));
+                            dnd.announce((strings.dropped_in)(&name));
                             if let Some(h) = &on_drag_end {
                                 h.call(true);
                             }
@@ -463,7 +464,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 if matches!(key, Key::Escape) {
                     evt.prevent_default();
                     dnd.cancel();
-                    dnd.announce("Drag cancelled.");
+                    dnd.announce((strings.cancelled)());
                     if let Some(h) = &on_drag_end {
                         h.call(false);
                     }

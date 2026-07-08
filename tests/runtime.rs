@@ -2161,6 +2161,90 @@ fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
     );
 }
 
+// --- Localizable strings: the DndStrings context ---------------------------
+
+/// Components read every phrase from the `DndStrings` context; providing
+/// one whose closures read a locale swaps the whole voice. English stays
+/// the built-in fallback when nothing is provided (pinned by the existing
+/// `reorder_buttons_render_labels_and_edge_disabling` test).
+#[test]
+fn dnd_strings_context_swaps_the_locale() {
+    use std::rc::Rc;
+
+    #[derive(Clone, PartialEq, Props)]
+    struct LocaleProps {
+        locale: &'static str,
+    }
+
+    fn app(props: LocaleProps) -> Element {
+        // A real app reads a signal (or an i18n crate) inside the closures;
+        // the lookup happens per call, so a live switch re-renders readers.
+        let locale = use_signal(|| props.locale);
+        use_context_provider(|| DndStrings {
+            move_up: Rc::new(move |name| match *locale.peek() {
+                "es" => format!("Subir {name}"),
+                _ => format!("Move {name} up"),
+            }),
+            move_down: Rc::new(move |name| match *locale.peek() {
+                "es" => format!("Bajar {name}"),
+                _ => format!("Move {name} down"),
+            }),
+            row: Rc::new(move |n| match *locale.peek() {
+                "es" => format!("elemento {n}"),
+                _ => format!("item {n}"),
+            }),
+            selection_count: Rc::new(move |n| match *locale.peek() {
+                "es" => format!("{n} elementos"),
+                _ => format!("{n} item(s)"),
+            }),
+            ..Default::default()
+        });
+        rsx! {
+            ReorderButtons { index: 1, total: 3, on_sort: move |_| {} }
+            DndProvider::<Vec<u32>> {
+                SelectionBadgeProbe {}
+                SelectionCount::<u32> {}
+            }
+        }
+    }
+
+    #[component]
+    fn SelectionBadgeProbe() -> Element {
+        let mut dnd = use_dnd::<Vec<u32>>();
+        use_hook(move || {
+            dnd.start(
+                vec![7, 8, 9],
+                None,
+                Point::new(1.0, 1.0),
+                Point::default(),
+                DropEffect::Move,
+                DragMode::Pointer,
+            )
+        });
+        rsx! {
+            div {}
+        }
+    }
+
+    for (locale, up, down, badge) in [
+        ("en", "Move item 2 up", "Move item 2 down", "3 item(s)"),
+        ("es", "Subir elemento 2", "Bajar elemento 2", "3 elementos"),
+    ] {
+        let mut dom = VirtualDom::new_with_props(app, LocaleProps { locale });
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(
+            html.contains(&format!("aria-label=\"{up}\"")),
+            "{locale}: {html}"
+        );
+        assert!(
+            html.contains(&format!("aria-label=\"{down}\"")),
+            "{locale}: {html}"
+        );
+        assert!(html.contains(badge), "{locale}: {html}");
+    }
+}
+
 // --- Closest edge: data-edge + DropOutcome::edge ---------------------------
 
 /// A `DropZone` that opted into `edge` enriches delivered outcomes with the
