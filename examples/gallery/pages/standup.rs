@@ -1,10 +1,7 @@
 //! Standup: two independent drag worlds sharing one drop target.
 
-use dioxus::html::MountedData;
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::*;
-
-use std::rc::Rc;
 
 use crate::ui::*;
 
@@ -14,7 +11,7 @@ pub fn StandupPage() -> Element {
         PageIntro {
             kicker: "Structure",
             title: "Standup",
-            lead: "Tickets drag in one provider, teammates in another - two type-worlds that can't see each other, by design. The agenda tray is registered in both: one DOM box, one ZoneId, two typed drop callbacks. Built entirely from the public registry API.",
+            lead: "Tickets drag in one provider, teammates in another - two type-worlds that can't see each other, by design. The agenda tray is a BridgeDropZone, registered in both: one DOM box, one ZoneId, two typed drop callbacks.",
         }
         StandupDemo {}
         DocBlock { title: "How it works",
@@ -52,21 +49,38 @@ pub fn StandupPage() -> Element {
             CodeBlock { code: SNIPPET }
             Prose {
                 p {
-                    "That is the whole bridge - no crate support required. Registering is what DropZone does internally; doing it twice from one component is the entire trick. Unregister both records on unmount, and drive data-active / data-over from whichever context is live."
-                }
-            }
-            DioxusNote {
-                p {
-                    "Signals are Copy handles, so passing the same mounted and rect into both records genuinely shares them: either world's refresh_rects() re-measures the one rectangle both registries see."
+                    "One component, two worlds. It behaves like a DropZone in each: per-world accepts filtering, keyboard reachability, and data-active / data-over lighting up for an acceptable drag from either side."
                 }
             }
         }
         DocBlock { title: "The API",
             PropsTable {
-                title: "Registry pieces the bridge uses",
+                title: "BridgeDropZone<A, B> props",
+                rows: vec![
+                    ("id", "Option<ZoneId>", "Stable identity, valid in both worlds. Auto-generated if omitted."),
+                    ("label", "Option<String>", "Screen-reader label, announced by both worlds' navigation."),
+                    ("accepts_a / accepts_b", "Option<Callback<_, bool>>", "Per-world acceptance. Return false to reject a payload; the zone won't highlight or accept it from that world."),
+                    ("on_drop_a / on_drop_b", "EventHandler<DropOutcome<_>>", "Typed drop callbacks. An A drag can only reach on_drop_a, a B drag only on_drop_b."),
+                ],
+            }
+        }
+        DocBlock { title: "Beyond two worlds",
+            Prose {
+                p {
+                    "BridgeDropZone packages a recipe you can write yourself - and for three or more providers, you still do. Registries are per-type but zone ids are process-global, so one component registers the same ZoneId in each world's registry, sharing one mounted/rect pair:"
+                }
+            }
+            CodeBlock { code: RECIPE_SNIPPET }
+            DioxusNote {
+                p {
+                    "Signals are Copy handles, so passing the same mounted and rect into every record genuinely shares them: any world's refresh_rects() re-measures the one rectangle all registries see."
+                }
+            }
+            PropsTable {
+                title: "Registry pieces the recipe uses",
                 rows: vec![
                     ("use_zone_registry::<T>()", "-> ZoneRegistry<T>", "The per-type registry the provider carries. Public precisely so custom zones like this one can exist."),
-                    ("use_zone_id()", "-> ZoneId", "A stable, process-unique id. Unique across all types, which is what lets one id live in two registries."),
+                    ("use_zone_id()", "-> ZoneId", "A stable, process-unique id. Unique across all types, which is what lets one id live in several registries."),
                     ("ZoneRecord<T>", "id, parent, label, on_drop, accepts, mounted, rect", "Everything a registry knows about a zone. register() adds or replaces by id; unregister() removes."),
                     ("ParentZone", "context marker", "Read it to discover an enclosing zone, provide it so zones nested in the bridge find their parent."),
                 ],
@@ -81,7 +95,7 @@ pub fn StandupPage() -> Element {
                     ),
                     (
                         "Per-world acceptance still works:",
-                        "each ZoneRecord carries its own accepts, so the bridge could refuse done tickets while welcoming every teammate.",
+                        "accepts_a and accepts_b are independent, so the bridge could refuse done tickets while welcoming every teammate.",
                     ),
                     (
                         "The bridge can host nested zones.",
@@ -108,7 +122,16 @@ DropZone::<Node> {
     },
 }"#;
 
-const SNIPPET: &str = r#"let mut reg_a = use_zone_registry::<Ticket>();
+const SNIPPET: &str = r#"BridgeDropZone::<Ticket, Person> {
+    label: "Standup agenda",
+    on_drop_a: move |o: DropOutcome<Ticket>| discuss(o.payload),
+    on_drop_b: move |o: DropOutcome<Person>| update_from(o.payload),
+    // per-world acceptance, like DropZone's accepts:
+    accepts_a: move |t: Ticket| !t.done,
+    "Drop a ticket or a teammate"
+}"#;
+
+const RECIPE_SNIPPET: &str = r#"let mut reg_a = use_zone_registry::<Ticket>();
 let mut reg_b = use_zone_registry::<Person>();
 let zone_id = use_zone_id();          // process-unique: valid in both worlds
 let parent = try_use_context::<ParentZone>().map(|p| p.0);
@@ -131,70 +154,7 @@ use_drop(move || {
     reg_b.unregister(zone_id);
 });"#;
 
-// --- 15. standup (two providers bridged by double registration) --------------
-
-/// A drop target registered in two type-worlds at once: the same `ZoneId`
-/// (ids are process-global) goes into both registries, sharing one
-/// `mounted`/`rect` pair, so each world's hit-testing, acceptance and
-/// keyboard navigation find it independently and every drop stays typed.
-#[component]
-fn BridgeZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'static>(
-    /// Screen-reader label, registered in both worlds.
-    #[props(default)]
-    label: Option<String>,
-    /// A completed drag from the first world.
-    on_drop_a: EventHandler<DropOutcome<A>>,
-    /// A completed drag from the second world.
-    on_drop_b: EventHandler<DropOutcome<B>>,
-    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
-    children: Element,
-) -> Element {
-    let dnd_a = use_dnd::<A>();
-    let dnd_b = use_dnd::<B>();
-    let mut reg_a = use_zone_registry::<A>();
-    let mut reg_b = use_zone_registry::<B>();
-    let zone_id = use_zone_id();
-    let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    use_context_provider(|| ParentZone(zone_id));
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None::<Rect>);
-    use_hook(|| {
-        reg_a.register(ZoneRecord {
-            id: zone_id,
-            parent,
-            label: label.clone(),
-            on_drop: Callback::new(move |o| on_drop_a.call(o)),
-            accepts: None,
-            mounted,
-            rect,
-        });
-        reg_b.register(ZoneRecord {
-            id: zone_id,
-            parent,
-            label,
-            on_drop: Callback::new(move |o| on_drop_b.call(o)),
-            accepts: None,
-            mounted,
-            rect,
-        });
-    });
-    use_drop(move || {
-        reg_a.unregister(zone_id);
-        reg_b.unregister(zone_id);
-    });
-    rsx! {
-        div {
-            "data-active": if dnd_a.dragging() || dnd_b.dragging() { "true" },
-            "data-over": if dnd_a.over() == Some(zone_id) || dnd_b.over() == Some(zone_id) { "true" },
-            onmounted: move |evt: Event<MountedData>| {
-                let mut mounted = mounted;
-                mounted.set(Some(evt.data()));
-            },
-            ..attributes,
-            {children}
-        }
-    }
-}
+// --- 15. standup (two providers bridged by BridgeDropZone) -------------------
 
 #[derive(Clone, PartialEq)]
 struct Ticket {
@@ -221,18 +181,50 @@ enum AgendaItem {
 fn StandupDemo() -> Element {
     let mut tickets = use_signal(|| {
         vec![
-            Ticket { id: 1, key: "DND-41", title: "Ghost lags on touch" },
-            Ticket { id: 2, key: "DND-45", title: "Rects stale after resize" },
-            Ticket { id: 3, key: "DND-52", title: "Keyboard skips columns" },
-            Ticket { id: 4, key: "DND-57", title: "Autoscroll overshoots" },
+            Ticket {
+                id: 1,
+                key: "DND-41",
+                title: "Ghost lags on touch",
+            },
+            Ticket {
+                id: 2,
+                key: "DND-45",
+                title: "Rects stale after resize",
+            },
+            Ticket {
+                id: 3,
+                key: "DND-52",
+                title: "Keyboard skips columns",
+            },
+            Ticket {
+                id: 4,
+                key: "DND-57",
+                title: "Autoscroll overshoots",
+            },
         ]
     });
     let mut people = use_signal(|| {
         vec![
-            Person { id: 1, name: "Mara", role: "core" },
-            Person { id: 2, name: "Theo", role: "web" },
-            Person { id: 3, name: "Iris", role: "a11y" },
-            Person { id: 4, name: "Sam", role: "docs" },
+            Person {
+                id: 1,
+                name: "Mara",
+                role: "core",
+            },
+            Person {
+                id: 2,
+                name: "Theo",
+                role: "web",
+            },
+            Person {
+                id: 3,
+                name: "Iris",
+                role: "a11y",
+            },
+            Person {
+                id: 4,
+                name: "Sam",
+                role: "docs",
+            },
         ]
     });
     let mut agenda = use_signal(Vec::<AgendaItem>::new);
@@ -246,7 +238,7 @@ fn StandupDemo() -> Element {
         Section {
             title: "Standup",
             note: "Tickets and teammates live in separate providers: a ticket never lights the team's zone, and vice versa. Only the agenda tray is registered in both worlds, so it accepts either - and each drop arrives through its own typed callback. Keyboard works too: Enter to pick up, arrows to the tray.",
-            tag: "use_zone_registry",
+            tag: "BridgeDropZone",
             DndProvider::<Ticket> {
                 DndProvider::<Person> {
                     LiveRegion::<Ticket> {}
@@ -325,7 +317,7 @@ fn StandupDemo() -> Element {
                         }
                     }
                     // --- the bridge: one box, both worlds --------------------
-                    BridgeZone::<Ticket, Person> {
+                    BridgeDropZone::<Ticket, Person> {
                         label: "Standup agenda",
                         on_drop_a: move |o: DropOutcome<Ticket>| {
                             let mut a = agenda.write();

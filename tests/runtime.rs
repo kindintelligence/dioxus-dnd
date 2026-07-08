@@ -2029,6 +2029,107 @@ fn bridge_zone_same_id_in_two_registries_stays_typed() {
     assert_eq!(*person_drops.lock().unwrap(), vec![7]);
 }
 
+// The packaged form of the same pattern: `BridgeDropZone<A, B>` registers
+// itself in both worlds with per-world acceptance and typed callbacks.
+
+fn bridge_component_app(props: BridgeProps) -> Element {
+    let ticket_drops = props.ticket_drops.clone();
+    let person_drops = props.person_drops.clone();
+    rsx! {
+        DndProvider::<&'static str> {
+            DndProvider::<u32> {
+                BridgeDropZone::<&'static str, u32> {
+                    id: ZoneId(600),
+                    label: "agenda",
+                    accepts_a: move |t: &'static str| t != "done",
+                    on_drop_a: move |o: DropOutcome<&'static str>| {
+                        ticket_drops.lock().unwrap().push(o.payload)
+                    },
+                    on_drop_b: move |o: DropOutcome<u32>| {
+                        person_drops.lock().unwrap().push(o.payload)
+                    },
+                    "agenda"
+                }
+                BridgeComponentProbe {}
+            }
+        }
+    }
+}
+
+#[component]
+fn BridgeComponentProbe() -> Element {
+    let reg_a = use_zone_registry::<&'static str>();
+    let reg_b = use_zone_registry::<u32>();
+    let id = ZoneId(600);
+
+    // One component, registered in both worlds, label synced to each.
+    assert!(reg_a.contains(id) && reg_b.contains(id));
+    let rec_a = reg_a.get(id).expect("registered in world A");
+    let rec_b = reg_b.get(id).expect("registered in world B");
+    assert_eq!(rec_a.label.as_deref(), Some("agenda"));
+    assert_eq!(rec_b.label.as_deref(), Some("agenda"));
+
+    // Per-world acceptance: world A filters, world B takes everything.
+    assert!(rec_a.accepts_payload(&"fix the ghost"));
+    assert!(!rec_a.accepts_payload(&"done"));
+    assert!(rec_b.accepts_payload(&7));
+    // Keyboard navigation honors it too: a rejected payload finds no zone.
+    assert_eq!(reg_a.step_zone(None, &"fix the ghost", 1), Some(id));
+    assert_eq!(reg_a.step_zone(None, &"done", 1), None);
+
+    // Each drop is delivered through its own typed callback.
+    let p = Point::new(5.0, 5.0);
+    rec_a.on_drop.call(DropOutcome {
+        payload: "fix the ghost",
+        from: None,
+        to: id,
+        effect: DropEffect::Move,
+        mode: DragMode::Pointer,
+        client: p,
+        element: p,
+        grab: Point::default(),
+    });
+    rec_b.on_drop.call(DropOutcome {
+        payload: 7u32,
+        from: None,
+        to: id,
+        effect: DropEffect::Move,
+        mode: DragMode::Keyboard,
+        client: p,
+        element: p,
+        grab: Point::default(),
+    });
+
+    rsx! { div {} }
+}
+
+#[test]
+fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
+    let ticket_drops = Arc::new(Mutex::new(Vec::new()));
+    let person_drops = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        bridge_component_app,
+        BridgeProps {
+            ticket_drops: ticket_drops.clone(),
+            person_drops: person_drops.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+    let html = dioxus_ssr::render(&dom);
+
+    assert_eq!(*ticket_drops.lock().unwrap(), vec!["fix the ghost"]);
+    assert_eq!(*person_drops.lock().unwrap(), vec![7]);
+    // Idle: neither styling hook is present.
+    assert!(
+        !html.contains("data-active"),
+        "idle zone must not be active: {html}"
+    );
+    assert!(
+        !html.contains("data-over"),
+        "idle zone must not be over: {html}"
+    );
+}
+
 #[test]
 fn grid_merges_user_style_after_layout_default() {
     fn app() -> Element {

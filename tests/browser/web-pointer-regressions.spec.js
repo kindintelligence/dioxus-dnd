@@ -473,16 +473,17 @@ test("native DataTransfer paths handle files, external drops, and drag-out", asy
   });
 });
 
-// The bridge pattern (README "Mixing payload types"): one box registered in
-// two payload worlds. Each world's drag lights and lands on the shared zone
-// through its own typed callback, while the other world's zones stay dark
-// and unreachable for the foreign drag.
+// The bridge pattern (README "Mixing payload types"), shipped as
+// `BridgeDropZone<A, B>`: one box registered in two payload worlds. Each
+// world's drag lights and lands on the shared zone through its own typed
+// callback, while the other world's zones stay dark and unreachable for the
+// foreign drag.
 test("bridge zone receives typed drops from both payload worlds", async ({ page }) => {
   await openFixtures(page);
 
   const sec = await section(page, "Bridge zone");
   await sec.scrollIntoViewIfNeeded();
-  const zone = sec.locator("#bridge-zone");
+  const zone = sec.locator(".bridge-zone");
   const ticketOnly = sec.locator(".ticket-only");
   const status = sec.locator("#bridge-status");
 

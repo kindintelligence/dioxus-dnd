@@ -32,8 +32,8 @@ pub mod prelude {
         apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point,
         effective_effect, element_point, screen_delta_to_world, screen_to_world, transition,
         use_dnd, use_dnd_provider, use_rect_refresh, use_zone_id, use_zone_registry,
-        world_delta_to_screen, world_to_screen, CanvasViewport, Direction, DndContext,
-        DndProvider, DragId, DragMode, DragModifier, DragOverlay, DragState, Draggable,
+        world_delta_to_screen, world_to_screen, BridgeDropZone, CanvasViewport, Direction,
+        DndContext, DndProvider, DragId, DragMode, DragModifier, DragOverlay, DragState, Draggable,
         DropEffect, DropOutcome, DropZone, GestureEffect, GestureEvent, GesturePhase, ModifierCtx,
         ParentZone, Point, Rect, RectRefresh, ZoneId, ZoneRecord, ZoneRegistry,
     };

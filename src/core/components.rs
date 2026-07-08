@@ -540,6 +540,120 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     }
 }
 
+/// A drop target registered in two payload worlds at once - the bridge
+/// between two coexisting providers (`DndProvider<A>` and `DndProvider<B>`).
+///
+/// Zone ids are process-global while registries are per-type, so one element
+/// can hold the *same* `ZoneId` in both registries, sharing its
+/// `mounted`/`rect` signals. Each world's machinery - hit-testing, `accepts`
+/// filtering, keyboard navigation - then finds the zone independently, and
+/// every drop arrives through its own typed callback: an `A` drag can only
+/// reach `on_drop_a`, a `B` drag only `on_drop_b`. No downcasts, no shared
+/// erased channel.
+///
+/// Reach for this only when two providers genuinely coexist (say, tickets
+/// and teammates as separate features). If one drag world merely carries
+/// several shapes, make the payload an enum and use a plain [`DropZone`].
+/// For more than two worlds, register a shared id yourself with
+/// `use_zone_registry` - this component is that recipe, packaged for the
+/// common pair.
+///
+/// Styling hooks match `DropZone`: `data-active="true"` while an acceptable
+/// drag from *either* world is in flight, `data-over="true"` while one
+/// hovers this zone.
+#[component]
+pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'static>(
+    /// Stable identity for this zone, valid in both worlds. Auto-generated
+    /// if omitted.
+    #[props(default)]
+    id: Option<ZoneId>,
+    /// Human label for screen-reader announcements, used by both worlds.
+    #[props(default)]
+    label: Option<String>,
+    /// Return `false` to reject a payload from the first world.
+    #[props(default)]
+    accepts_a: Option<Callback<A, bool>>,
+    /// Return `false` to reject a payload from the second world.
+    #[props(default)]
+    accepts_b: Option<Callback<B, bool>>,
+    /// Fired when a drag from the first world drops here.
+    on_drop_a: EventHandler<DropOutcome<A>>,
+    /// Fired when a drag from the second world drops here.
+    on_drop_b: EventHandler<DropOutcome<B>>,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    let dnd_a = use_dnd::<A>();
+    let dnd_b = use_dnd::<B>();
+    let mut reg_a = use_zone_registry::<A>();
+    let mut reg_b = use_zone_registry::<B>();
+    let auto_id = use_zone_id();
+    let zone_id = id.unwrap_or(auto_id);
+    let parent = try_use_context::<ParentZone>().map(|p| p.0);
+    // One unambiguous parent id that resolves in both registries, so nested
+    // zones of either type ascend correctly.
+    use_context_provider(|| ParentZone(zone_id));
+    let mounted = use_signal(|| None::<Rc<MountedData>>);
+    let rect = use_signal(|| None::<super::types::Rect>);
+
+    // Signals are Copy handles, so both records genuinely share one
+    // mounted/rect pair: either world's refresh_rects() re-measures the one
+    // rectangle both registries see.
+    use_hook(|| {
+        reg_a.register(ZoneRecord {
+            id: zone_id,
+            parent,
+            label: label.clone(),
+            on_drop: Callback::new(move |o| on_drop_a.call(o)),
+            accepts: accepts_a,
+            mounted,
+            rect,
+        });
+        reg_b.register(ZoneRecord {
+            id: zone_id,
+            parent,
+            label: label.clone(),
+            on_drop: Callback::new(move |o| on_drop_b.call(o)),
+            accepts: accepts_b,
+            mounted,
+            rect,
+        });
+    });
+    use_drop(move || {
+        reg_a.unregister(zone_id);
+        reg_b.unregister(zone_id);
+    });
+    reg_a.sync_label(zone_id, label.clone());
+    reg_b.sync_label(zone_id, label);
+
+    let acceptable_a = move || -> bool {
+        match dnd_a.payload() {
+            Some(p) => accepts_a.map(|cb| cb.call(p)).unwrap_or(true),
+            None => false,
+        }
+    };
+    let acceptable_b = move || -> bool {
+        match dnd_b.payload() {
+            Some(p) => accepts_b.map(|cb| cb.call(p)).unwrap_or(true),
+            None => false,
+        }
+    };
+
+    rsx! {
+        div {
+            "data-active": if (dnd_a.dragging() && acceptable_a()) || (dnd_b.dragging() && acceptable_b()) { "true" },
+            "data-over": if (dnd_a.over() == Some(zone_id) && acceptable_a())
+                || (dnd_b.over() == Some(zone_id) && acceptable_b()) { "true" },
+            onmounted: move |evt: Event<MountedData>| {
+                let mut mounted = mounted;
+                mounted.set(Some(evt.data()));
+            },
+            ..attributes,
+            {children}
+        }
+    }
+}
+
 /// The functional inline style for a pointer-pinned "ghost": fixed to `pos`
 /// (a viewport-space top-left), out of flow, click-through, above the page.
 /// Kept as a single `fn` so this exact rule has one definition, shared by
@@ -600,10 +714,22 @@ mod tests {
             assert_eq!(nav_key(&Key::ArrowUp, dir), Some(NavKey::Prev));
             assert_eq!(nav_key(&Key::Enter, dir), None);
         }
-        assert_eq!(nav_key(&Key::ArrowRight, Direction::Ltr), Some(NavKey::Descend));
-        assert_eq!(nav_key(&Key::ArrowLeft, Direction::Ltr), Some(NavKey::Ascend));
-        assert_eq!(nav_key(&Key::ArrowRight, Direction::Rtl), Some(NavKey::Ascend));
-        assert_eq!(nav_key(&Key::ArrowLeft, Direction::Rtl), Some(NavKey::Descend));
+        assert_eq!(
+            nav_key(&Key::ArrowRight, Direction::Ltr),
+            Some(NavKey::Descend)
+        );
+        assert_eq!(
+            nav_key(&Key::ArrowLeft, Direction::Ltr),
+            Some(NavKey::Ascend)
+        );
+        assert_eq!(
+            nav_key(&Key::ArrowRight, Direction::Rtl),
+            Some(NavKey::Ascend)
+        );
+        assert_eq!(
+            nav_key(&Key::ArrowLeft, Direction::Rtl),
+            Some(NavKey::Descend)
+        );
     }
 
     #[test]

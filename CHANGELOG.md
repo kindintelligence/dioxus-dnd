@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`BridgeDropZone<A, B>`** promotes the documented cross-type bridge
+  (README "Mixing payload types", the gallery's Standup page) from a
+  user-land recipe to a crate component. One element holds the same
+  `ZoneId` in two providers' registries, sharing its `mounted`/`rect`
+  signals, so each world's hit-testing, keyboard navigation and
+  announcements find it independently. Acceptance is per-world
+  (`accepts_a`/`accepts_b`) and every drop arrives through its own typed
+  callback (`on_drop_a`/`on_drop_b`) - no downcasts, no erased channel.
+  Styling hooks match `DropZone` (`data-active`/`data-over`, gated on
+  acceptance), it provides `ParentZone` so nested zones of either type
+  ascend correctly, and it lives in the prelude. The gallery Standup page
+  and the browser fixture now use it; the manual double-registration
+  recipe stays documented on that page for three-plus worlds.
+
+### Tests
+
+- Runtime: `BridgeDropZone` registers in both registries with the synced
+  label, per-world `accepts` filters payloads (and keyboard `step_zone`
+  honors it), each drop lands through its own typed callback, and the
+  idle SSR output carries neither styling hook. The existing browser test
+  now drives the crate component instead of a fixture-local copy.
+
 ## 2.3.1 - 2026-07-08
 
 ### Fixed
