@@ -30,7 +30,10 @@ fn main() {
 // `children` inside a nested block element, so a `flex` on `ITEM` would never
 // reach the contents. Wrapping them in an explicit `ROW` div lays them out
 // correctly regardless.
-const ITEM: &str = "group block cursor-grab select-none rounded-xl border border-white/10 bg-[#362f26] px-3.5 py-2.5 text-[13px] text-[#f4e9d7] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition hover:border-[#D97D55]/60 hover:shadow-[0_5px_14px_-6px_rgba(217,125,85,0.35)] active:cursor-grabbing data-dragging:opacity-50";
+// Card recipe: top-lit gradient surface, a 1px inset edge highlight (the
+// "machined" line every dark card needs), a real ambient shadow, and a
+// one-pixel hover lift that presses back down on grab.
+const ITEM: &str = "group block cursor-grab select-none rounded-xl bg-gradient-to-b from-[#3d352a] to-[#332c23] px-3.5 py-2.5 text-[13px] text-[#f4e9d7] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.03),0_1px_2px_rgba(0,0,0,0.5),0_4px_12px_-4px_rgba(0,0,0,0.4)] transition hover:-translate-y-px hover:brightness-[1.06] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.09),inset_0_0_0_1px_rgba(255,255,255,0.04),0_2px_4px_rgba(0,0,0,0.5),0_12px_24px_-8px_rgba(0,0,0,0.55)] active:translate-y-0 active:cursor-grabbing data-dragging:opacity-50";
 const ROW: &str = "flex w-full items-center gap-2.5";
 const ZONE: &str = "rounded-xl border border-dashed border-white/15 p-3.5 min-h-24 transition space-y-2 data-active:border-[#B8C4A9] data-active:bg-[#B8C4A9]/12 data-over:border-solid data-over:border-[#D97D55] data-over:bg-[#D97D55]/15";
 
@@ -57,6 +60,14 @@ html {
   100% { box-shadow: 0 0 0 0 rgba(217,125,85,0),      0 1px 2px 0 rgba(0,0,0,0); }
 }
 .drop-flash { animation: drop-flash 600ms cubic-bezier(0.22, 1, 0.36, 1); }
+/* First-class keyboard focus: every draggable (core Draggable renders
+   aria-roledescription) gets a clay ring on focus-visible instead of the
+   browser default outline. */
+[aria-roledescription="draggable"]:focus-visible {
+  outline: 2px solid rgba(217,125,85,0.75);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
 "#;
 
 #[component]
@@ -64,7 +75,11 @@ fn App() -> Element {
     rsx! {
         document::Script { src: "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }
         document::Link { rel: "preconnect", href: "https://fonts.googleapis.com" }
-        document::Link { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" }
+        document::Link {
+            rel: "preconnect",
+            href: "https://fonts.gstatic.com",
+            crossorigin: "",
+        }
         document::Link {
             rel: "stylesheet",
             href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
@@ -74,14 +89,20 @@ fn App() -> Element {
             div { class: "mx-auto max-w-3xl px-5 py-14 sm:px-6 sm:py-20",
                 Header {}
 
-                GroupLabel { kicker: "Organize", title: "Move things where they belong." }
+                GroupLabel {
+                    kicker: "Organize",
+                    title: "Move things where they belong.",
+                }
                 div { class: "space-y-4",
                     ReadingListDemo {}
                     NewsletterDemo {}
                     MailboxDemo {}
                 }
 
-                GroupLabel { kicker: "Reorder", title: "Put things in the right order." }
+                GroupLabel {
+                    kicker: "Reorder",
+                    title: "Put things in the right order.",
+                }
                 div { class: "space-y-4",
                     PlaylistDemo {}
                     PriorityDemo {}
@@ -102,7 +123,10 @@ fn App() -> Element {
                     MenuDemo {}
                 }
 
-                GroupLabel { kicker: "Beyond the window", title: "Cross the app boundary." }
+                GroupLabel {
+                    kicker: "Beyond the window",
+                    title: "Cross the app boundary.",
+                }
                 div { class: "space-y-4",
                     UploadDemo {}
                     ShareDemo {}
@@ -135,7 +159,9 @@ fn Header() -> Element {
             }
             div { class: "mt-5 flex flex-wrap gap-2",
                 for chip in ["Pointer-native", "Keyboard-accessible", "Bring your own styles"] {
-                    span { class: "rounded-full border border-white/12 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-[#b8ab93]", "{chip}" }
+                    span { class: "rounded-full bg-white/8 px-2.5 py-1 text-[11px] font-medium text-[#b8ab93]",
+                        "{chip}"
+                    }
                 }
             }
         }
@@ -147,7 +173,9 @@ fn Header() -> Element {
 fn GroupLabel(kicker: String, title: String) -> Element {
     rsx! {
         div { class: "mb-4 mt-14 flex flex-wrap items-baseline gap-x-3 gap-y-1 first:mt-2",
-            h2 { class: "text-[12px] font-semibold uppercase tracking-[0.18em] text-[#6FA4AF]", "{kicker}" }
+            h2 { class: "text-[12px] font-semibold uppercase tracking-[0.18em] text-[#6FA4AF]",
+                "{kicker}"
+            }
             p { class: "text-[13px] text-[#9c8f77]", "{title}" }
         }
     }
@@ -156,13 +184,19 @@ fn GroupLabel(kicker: String, title: String) -> Element {
 #[component]
 fn Section(title: String, note: String, tag: String, children: Element) -> Element {
     rsx! {
-        section { class: "rounded-2xl border border-white/8 bg-[#2b2620] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_14px_30px_-24px_rgba(0,0,0,0.55)] sm:p-6",
+        section { class: "rounded-2xl bg-[#2b2620] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_1px_2px_rgba(0,0,0,0.3),0_18px_36px_-24px_rgba(0,0,0,0.6)] sm:p-6",
             div { class: "mb-5 flex items-start justify-between gap-4",
                 div { class: "min-w-0",
-                    h3 { class: "text-[15px] font-semibold tracking-tight text-[#f4e9d7]", "{title}" }
-                    p { class: "mt-1 text-[13px] leading-relaxed text-[#b8ab93]", "{note}" }
+                    h3 { class: "text-[15px] font-semibold tracking-tight text-[#f4e9d7]",
+                        "{title}"
+                    }
+                    p { class: "mt-1 text-[13px] leading-relaxed text-[#b8ab93]",
+                        "{note}"
+                    }
                 }
-                code { class: "mt-0.5 hidden shrink-0 rounded-md bg-white/10 px-2 py-1 font-mono text-[11px] text-[#e0a37f] sm:block", "{tag}" }
+                code { class: "mt-0.5 hidden shrink-0 rounded-md bg-white/10 px-2 py-1 font-mono text-[11px] text-[#e0a37f] ring-1 ring-white/10 sm:block",
+                    "{tag}"
+                }
             }
             {children}
         }
@@ -220,7 +254,13 @@ impl Card {
 /// A palette accent bar, derived from a card's id so it stays stable across
 /// moves. Cycles clay, teal, sage.
 fn swatch(id: u32) -> &'static str {
-    const C: [&str; 3] = ["bg-[#D97D55]", "bg-[#6FA4AF]", "bg-[#B8C4A9]"];
+    // Each bar blooms softly in its own color: accents that glow read as
+    // premium on a dark surface where a flat bar would just sit there.
+    const C: [&str; 3] = [
+        "bg-[#D97D55] shadow-[0_0_10px_rgba(217,125,85,0.5)]",
+        "bg-[#6FA4AF] shadow-[0_0_10px_rgba(111,164,175,0.5)]",
+        "bg-[#B8C4A9] shadow-[0_0_10px_rgba(184,196,169,0.45)]",
+    ];
     C[id as usize % C.len()]
 }
 
@@ -241,8 +281,8 @@ fn CardFace(card: Card) -> Element {
 
 // --- 1. reading list (core Draggable / DropZone + overlay) -------------------
 
-const TODO: ZoneId = ZoneId(1);
-const DONE: ZoneId = ZoneId(2);
+const TODO: ZoneId = ZoneId(9001);
+const DONE: ZoneId = ZoneId(9002);
 
 #[component]
 fn ReadingListDemo() -> Element {
@@ -290,7 +330,9 @@ fn ReadingListDemo() -> Element {
                             on_drop: move_card,
                             class: ZONE,
                             div { class: "mb-1 flex items-baseline justify-between",
-                                p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]", "{name}" }
+                                p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]",
+                                    "{name}"
+                                }
                                 span { class: "text-[10px] text-[#6d6150]", "{hint}" }
                             }
                             for card in bins.read().get(&zone).cloned().unwrap_or_default() {
@@ -311,8 +353,7 @@ fn ReadingListDemo() -> Element {
                         }
                     }
                 }
-                DragOverlay::<Card> {
-                    class: "pointer-events-none flex items-center gap-2 rounded-xl border border-white/10 bg-[#362f26] px-3.5 py-2.5 text-[13px] font-medium text-[#f4e9d7] shadow-[0_20px_44px_-12px_rgba(0,0,0,0.35)]",
+                DragOverlay::<Card> { class: "pointer-events-none flex items-center gap-2 rounded-xl bg-gradient-to-b from-[#3d352a] to-[#332c23] px-3.5 py-2.5 text-[13px] font-medium text-[#f4e9d7] shadow-[inset_0_1px_0_rgba(255,255,255,0.09),inset_0_0_0_1px_rgba(255,255,255,0.04),0_20px_44px_-12px_rgba(0,0,0,0.65)]",
                     CardGhost {}
                 }
             }
@@ -333,8 +374,8 @@ fn CardGhost() -> Element {
 
 // --- 2. newsletter builder (modifier keys + apply_clone_or_move) -------------
 
-const PALETTE: ZoneId = ZoneId(20);
-const STAGE: ZoneId = ZoneId(21);
+const PALETTE: ZoneId = ZoneId(9011);
+const STAGE: ZoneId = ZoneId(9012);
 
 #[component]
 fn NewsletterDemo() -> Element {
@@ -380,7 +421,9 @@ fn NewsletterDemo() -> Element {
                             label: name,
                             on_drop,
                             class: ZONE,
-                            p { class: "mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]", "{name}" }
+                            p { class: "mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]",
+                                "{name}"
+                            }
                             for card in zones.read().get(&zone).cloned().unwrap_or_default() {
                                 PointerDraggable::<Card> {
                                     payload: card.clone(),
@@ -394,7 +437,9 @@ fn NewsletterDemo() -> Element {
                                 }
                             }
                             if zone == STAGE && zones.read().get(&zone).map(|v| v.is_empty()).unwrap_or(true) {
-                                p { class: "py-3 text-center text-[12px] text-[#6d6150]", "Drop blocks to compose your email" }
+                                p { class: "py-3 text-center text-[12px] text-[#6d6150]",
+                                    "Drop blocks to compose your email"
+                                }
                             }
                         }
                     }
@@ -431,9 +476,7 @@ fn MailGhost() -> Element {
     let dnd = use_dnd::<Vec<u32>>();
     let n = dnd.payload().map(|p| p.len()).unwrap_or(0);
     let word = if n == 1 { "message" } else { "messages" };
-    rsx! {
-        "{n} {word}"
-    }
+    rsx! { "{n} {word}" }
 }
 
 #[component]
@@ -466,115 +509,142 @@ fn MailboxDemo() -> Element {
             tag: "DropOutcome::effect",
             DndProvider::<Vec<u32>> {
                 LiveRegion::<Vec<u32>> {}
-                div { class: "rounded-xl bg-[#231e17] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] ring-1 ring-black/30",
-                    div { class: "grid grid-cols-1 gap-3 sm:grid-cols-3",
-                        div { class: "sm:col-span-2",
-                            div { class: "mb-2 flex items-baseline justify-between px-1",
-                                p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8d8069]",
-                                    "Inbox · {inbox.read().len()}"
-                                }
-                                if !selection.is_empty() {
-                                    button {
-                                        class: "rounded-md px-1.5 py-0.5 text-[11px] font-medium text-[#D97D55] transition hover:bg-white/5",
-                                        onclick: move |_| selection.clear(),
-                                        "Clear {selection.len()} selected"
-                                    }
+                // No extra panel wrapper: since the whole page adopted this
+                // demo's midnight language, the inbox sits on the section card
+                // like every other well.
+                div { class: "grid grid-cols-1 gap-3 sm:grid-cols-3",
+                    div { class: "sm:col-span-2",
+                        div { class: "mb-2 flex items-baseline justify-between px-1",
+                            p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8d8069]",
+                                "Inbox · {inbox.read().len()}"
+                            }
+                            if !selection.is_empty() {
+                                button {
+                                    class: "rounded-md px-1.5 py-0.5 text-[11px] font-medium text-[#D97D55] transition hover:bg-white/5",
+                                    onclick: move |_| selection.clear(),
+                                    "Clear {selection.len()} selected"
                                 }
                             }
-                            div { class: "overflow-hidden rounded-lg bg-white/[0.03] ring-1 ring-white/5",
-                                if inbox.read().is_empty() {
-                                    p { class: "py-8 text-center text-[12px] text-[#8d8069]", "Inbox zero. Beautiful." }
+                        }
+                        div { class: "overflow-hidden rounded-lg bg-white/[0.03] ring-1 ring-white/5",
+                            if inbox.read().is_empty() {
+                                p { class: "py-8 text-center text-[12px] text-[#8d8069]",
+                                    "Inbox zero. Beautiful."
                                 }
-                                for e in inbox.read().clone() {
-                                    SelectableDraggable::<u32> {
-                                        key: "{e.id}",
-                                        item: e.id,
-                                        selection,
-                                        input: DragInputMode::Pointer,
-                                        label: e.subject,
-                                        class: "block cursor-grab select-none border-b border-white/5 px-3 py-2.5 text-[13px] transition last:border-0 hover:bg-white/[0.04] active:cursor-grabbing data-selected:bg-[#D97D55]/15 data-dragging:opacity-40",
-                                        div { class: "flex w-full items-center gap-2.5",
-                                            span {
-                                                class: if e.unread { "h-1.5 w-1.5 shrink-0 rounded-full bg-[#D97D55]" } else { "h-1.5 w-1.5 shrink-0 rounded-full bg-transparent" },
+                            }
+                            for e in inbox.read().clone() {
+                                SelectableDraggable::<u32> {
+                                    key: "{e.id}",
+                                    item: e.id,
+                                    selection,
+                                    input: DragInputMode::Pointer,
+                                    label: e.subject,
+                                    class: "block cursor-grab select-none border-b border-white/5 px-3 py-2.5 text-[13px] transition last:border-0 hover:bg-white/[0.04] active:cursor-grabbing data-selected:bg-[#D97D55]/15 data-dragging:opacity-40",
+                                    div { class: "flex w-full items-center gap-2.5",
+                                        span { class: if e.unread { "h-1.5 w-1.5 shrink-0 rounded-full bg-[#D97D55]" } else { "h-1.5 w-1.5 shrink-0 rounded-full bg-transparent" } }
+                                        span { class: if e.unread { "w-24 shrink-0 truncate font-semibold text-[#f4e9d7]" } else { "w-24 shrink-0 truncate font-medium text-[#b8ab93]" },
+                                            "{e.from}"
+                                        }
+                                        span { class: if e.unread { "min-w-0 flex-1 truncate text-[#d9cfbc]" } else { "min-w-0 flex-1 truncate text-[#9c8f77]" },
+                                            "{e.subject}"
+                                        }
+                                        if labeled.read().contains(&e.id) {
+                                            span { class: "shrink-0 rounded bg-[#B8C4A9]/20 px-1.5 py-0.5 text-[10px] font-semibold text-[#B8C4A9]",
+                                                "Receipts"
                                             }
-                                            span {
-                                                class: if e.unread { "w-24 shrink-0 truncate font-semibold text-[#f4e9d7]" } else { "w-24 shrink-0 truncate font-medium text-[#b8ab93]" },
-                                                "{e.from}"
-                                            }
-                                            span {
-                                                class: if e.unread { "min-w-0 flex-1 truncate text-[#d9cfbc]" } else { "min-w-0 flex-1 truncate text-[#9c8f77]" },
-                                                "{e.subject}"
-                                            }
-                                            if labeled.read().contains(&e.id) {
-                                                span { class: "shrink-0 rounded bg-[#B8C4A9]/20 px-1.5 py-0.5 text-[10px] font-semibold text-[#B8C4A9]", "Receipts" }
-                                            }
-                                            span { class: "shrink-0 text-[11px] tabular-nums text-[#8d8069]", "{e.time}" }
+                                        }
+                                        span { class: "shrink-0 text-[11px] tabular-nums text-[#8d8069]",
+                                            "{e.time}"
                                         }
                                     }
                                 }
                             }
                         }
-                        div { class: "flex flex-col gap-2",
-                            p { class: "px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8d8069]", "Drop to triage" }
-                            DropZone::<Vec<u32>> {
-                                label: "Archive",
-                                on_drop: move |o: DropOutcome<Vec<u32>>| {
-                                    let n = o.payload.len();
+                    }
+                    div { class: "flex flex-col gap-2",
+                        p { class: "px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8d8069]",
+                            "Drop to triage"
+                        }
+                        DropZone::<Vec<u32>> {
+                            label: "Archive",
+                            on_drop: move |o: DropOutcome<Vec<u32>>| {
+                                let n = o.payload.len();
+                                inbox.write().retain(|e| !o.payload.contains(&e.id));
+                                selection.clear();
+                                archived += n;
+                                status.set(format!("Archived {}.", messages(n)));
+                            },
+                            class: DARK_ZONE,
+                            span { "Archive" }
+                            span { class: "min-w-5 rounded-full bg-white/8 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums",
+                                "{archived}"
+                            }
+                        }
+                        DropZone::<Vec<u32>> {
+                            label: "Receipts",
+                            // The one zone where the drop *effect* matters:
+                            // Ctrl/Cmd at release resolves to Copy, so the
+                            // originals stay put and only the label lands.
+                            on_drop: move |o: DropOutcome<Vec<u32>>| {
+                                let n = o.payload.len();
+                                if o.effect == DropEffect::Copy {
+                                    labeled.write().extend(o.payload.iter().copied());
+                                    selection.clear();
+                                    status
+                                        .set(
+                                            format!(
+                                                "Filed a copy of {}. The originals kept their seat.",
+                                                messages(n),
+                                            ),
+                                        );
+                                } else {
                                     inbox.write().retain(|e| !o.payload.contains(&e.id));
                                     selection.clear();
-                                    archived += n;
-                                    status.set(format!("Archived {}.", messages(n)));
-                                },
-                                class: DARK_ZONE,
-                                span { "Archive" }
-                                span { class: "min-w-5 rounded-full bg-white/8 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums", "{archived}" }
-                            }
-                            DropZone::<Vec<u32>> {
-                                label: "Receipts",
-                                // The one zone where the drop *effect* matters:
-                                // Ctrl/Cmd at release resolves to Copy, so the
-                                // originals stay put and only the label lands.
-                                on_drop: move |o: DropOutcome<Vec<u32>>| {
-                                    let n = o.payload.len();
-                                    if o.effect == DropEffect::Copy {
-                                        labeled.write().extend(o.payload.iter().copied());
-                                        selection.clear();
-                                        status.set(format!("Filed a copy of {}. The originals kept their seat.", messages(n)));
-                                    } else {
-                                        inbox.write().retain(|e| !o.payload.contains(&e.id));
-                                        selection.clear();
-                                        filed += n;
-                                        status.set(format!("Moved {} to Receipts. Hold Cmd or Ctrl to file a copy instead.", messages(n)));
-                                    }
-                                },
-                                class: DARK_ZONE,
-                                span { "Receipts"
-                                    span { class: "ml-1.5 text-[10px] font-normal text-[#8d8069]", "⌘ copies" }
+                                    filed += n;
+                                    status
+                                        .set(
+                                            format!(
+                                                "Moved {} to Receipts. Hold Cmd or Ctrl to file a copy instead.",
+                                                messages(n),
+                                            ),
+                                        );
                                 }
-                                span { class: "min-w-5 rounded-full bg-white/8 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums", "{filed}" }
+                            },
+                            class: DARK_ZONE,
+                            span {
+                                "Receipts"
+                                span { class: "ml-1.5 text-[10px] font-normal text-[#8d8069]",
+                                    "⌘ copies"
+                                }
                             }
-                            DropZone::<Vec<u32>> {
-                                label: "Trash",
-                                on_drop: move |o: DropOutcome<Vec<u32>>| {
-                                    let n = o.payload.len();
-                                    inbox.write().retain(|e| !o.payload.contains(&e.id));
-                                    labeled.write().retain(|id| !o.payload.contains(id));
-                                    selection.clear();
-                                    trashed += n;
-                                    status.set(format!("Deleted {}.", messages(n)));
-                                },
-                                class: DARK_ZONE,
-                                span { "Trash" }
-                                span { class: "min-w-5 rounded-full bg-white/8 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums", "{trashed}" }
+                            span { class: "min-w-5 rounded-full bg-white/8 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums",
+                                "{filed}"
                             }
-                            if !status.read().is_empty() {
-                                p { class: "mt-auto px-1 pt-2 text-[11px] leading-relaxed text-[#B8C4A9]", "{status}" }
+                        }
+                        DropZone::<Vec<u32>> {
+                            label: "Trash",
+                            on_drop: move |o: DropOutcome<Vec<u32>>| {
+                                let n = o.payload.len();
+                                inbox.write().retain(|e| !o.payload.contains(&e.id));
+                                labeled.write().retain(|id| !o.payload.contains(id));
+                                selection.clear();
+                                trashed += n;
+                                status.set(format!("Deleted {}.", messages(n)));
+                            },
+                            class: DARK_ZONE,
+                            span { "Trash" }
+                            span { class: "min-w-5 rounded-full bg-white/8 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums",
+                                "{trashed}"
+                            }
+                        }
+                        if !status.read().is_empty() {
+                            p { class: "mt-auto px-1 pt-2 text-[11px] leading-relaxed text-[#B8C4A9]",
+                                "{status}"
                             }
                         }
                     }
                 }
-                DragOverlay::<Vec<u32>> {
-                    class: "pointer-events-none rotate-2 rounded-lg bg-[#3a332a] px-3.5 py-2 text-[12px] font-semibold text-[#f4e9d7] shadow-[0_20px_44px_-12px_rgba(0,0,0,0.55)] ring-1 ring-white/10",
+                DragOverlay::<Vec<u32>> { class: "pointer-events-none rotate-2 rounded-lg bg-[#3d352a] px-3.5 py-2 text-[12px] font-semibold text-[#f4e9d7] shadow-[inset_0_1px_0_rgba(255,255,255,0.09),inset_0_0_0_1px_rgba(255,255,255,0.04),0_20px_44px_-12px_rgba(0,0,0,0.65)]",
                     MailGhost {}
                 }
             }
@@ -613,11 +683,15 @@ fn PlaylistDemo() -> Element {
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
                 // No floating overlay: the grabbed row lifts in place and the
                 // others slide to make room. No ghost, no ring.
-                class: "relative [&>*]:mb-2 [&>*]:flex [&>*]:items-center [&>*]:gap-3 [&>*]:rounded-xl [&>*]:border [&>*]:border-white/10 [&>*]:bg-[#362f26] [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:shadow-[0_1px_2px_rgba(0,0,0,0.04)] [&>*]:transition [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:border-white/15 [&>[data-dragging]]:shadow-[0_16px_34px_-12px_rgba(0,0,0,0.35)]",
+                // The mailbox's list language: one contained well, hairline
+                // dividers, and the grabbed row lifts out of it as a card.
+                class: "relative rounded-xl bg-white/[0.03] ring-1 ring-white/5 [&>*]:flex [&>*]:items-center [&>*]:gap-3 [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:transition [&>*+*]:border-t [&>*+*]:border-white/5 [&>*:first-child]:rounded-t-xl [&>*:last-child]:rounded-b-xl [&>*:hover]:bg-white/[0.04] [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:rounded-lg [&>[data-dragging]]:bg-[#3d352a] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.04),0_16px_34px_-12px_rgba(0,0,0,0.65)]",
                 render: move |ix: usize| {
                     let t = items.read()[ix].clone();
                     rsx! {
-                        span { class: "w-4 shrink-0 text-center text-[11px] font-semibold tabular-nums text-[#6d6150]", "{ix + 1}" }
+                        span { class: "w-4 shrink-0 text-center text-[11px] font-semibold tabular-nums text-[#6d6150]",
+                            "{ix + 1}"
+                        }
                         div { class: "min-w-0 flex-1",
                             div { class: "truncate font-medium text-[#f4e9d7]", "{t.title}" }
                             div { class: "truncate text-[11px] text-[#9c8f77]", "{t.artist}" }
@@ -648,10 +722,12 @@ fn PriorityDemo() -> Element {
                 len: items.read().len(),
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:gap-3 [&>*]:rounded-xl [&>*]:border [&>*]:border-white/10 [&>*]:bg-[#362f26] [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:shadow-[0_1px_2px_rgba(0,0,0,0.04)] [&>*]:transition [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:border-white/15 [&>[data-dragging]]:shadow-[0_16px_34px_-12px_rgba(0,0,0,0.35)]",
+                class: "rounded-xl bg-white/[0.03] ring-1 ring-white/5 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:gap-3 [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:transition [&>*+*]:border-t [&>*+*]:border-white/5 [&>*:first-child]:rounded-t-xl [&>*:last-child]:rounded-b-xl [&>*:hover]:bg-white/[0.04] [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:rounded-lg [&>[data-dragging]]:bg-[#3d352a] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.04),0_16px_34px_-12px_rgba(0,0,0,0.65)]",
                 render: move |ix: usize| rsx! {
                     div { class: "flex min-w-0 items-center gap-2.5",
-                        span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[#D97D55] text-[11px] font-semibold tabular-nums text-white", "{ix + 1}" }
+                        span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[#D97D55] text-[11px] font-semibold tabular-nums text-white",
+                            "{ix + 1}"
+                        }
                         span { class: "truncate font-medium text-[#f4e9d7]", "{items.read()[ix]}" }
                     }
                     ReorderButtons {
@@ -659,7 +735,7 @@ fn PriorityDemo() -> Element {
                         total: items.read().len(),
                         label: items.read()[ix].clone(),
                         on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                        class: "flex shrink-0 gap-1 [&_button]:grid [&_button]:h-6 [&_button]:w-6 [&_button]:place-items-center [&_button]:rounded-md [&_button]:border [&_button]:border-white/12 [&_button]:text-[#9c8f77] [&_button]:transition [&_button:not(:disabled)]:hover:border-[#D97D55] [&_button:not(:disabled)]:hover:text-[#D97D55] [&_button:disabled]:opacity-30",
+                        class: "flex shrink-0 gap-1 [&_button]:grid [&_button]:h-6 [&_button]:w-6 [&_button]:place-items-center [&_button]:rounded-md [&_button]:bg-white/8 [&_button]:text-[#9c8f77] [&_button]:transition [&_button:not(:disabled)]:hover:bg-white/15 [&_button:not(:disabled)]:hover:text-[#D97D55] [&_button:disabled]:opacity-30",
                     }
                 },
             }
@@ -724,7 +800,8 @@ fn AlbumDemo() -> Element {
                 // arbitrary aspect ratio is unsupported.
                 // Drop target brightens (dimming reads poorly on a dark page);
                 // the dragged tile fades.
-                item_class: "group relative aspect-[4/3] min-h-[6rem] overflow-hidden rounded-xl border border-white/10 cursor-grab select-none transition data-dragging:opacity-40 data-drop-target:brightness-115".to_string(),
+                item_class: "group relative aspect-[4/3] min-h-[6rem] overflow-hidden rounded-xl cursor-grab select-none shadow-[0_2px_10px_-2px_rgba(0,0,0,0.5)] transition data-dragging:opacity-40 data-drop-target:brightness-115"
+                    .to_string(),
                 render: move |ix: usize| {
                     let p = photos.read()[ix].clone();
                     rsx! {
@@ -765,8 +842,9 @@ fn QueueDemo() -> Element {
             title: "Podcast queue",
             note: "A queue longer than the window. Drag toward the top or bottom edge and it scrolls itself; the episode flashes where it lands. On a phone the dotted grip does the dragging, so a finger on the rows still scrolls the list.",
             tag: "AutoScroll",
-            AutoScroll {
-                class: "max-h-52 overflow-y-auto rounded-xl border border-white/8 bg-[#26211a] p-2",
+            // The scroll container *is* the well: flat rows, hairline
+            // dividers, and the grabbed row lifts out of the surface.
+            AutoScroll { class: "max-h-52 overflow-y-auto rounded-xl bg-white/[0.03] ring-1 ring-white/5",
                 SortableList {
                     len: rows.read().len(),
                     input: DragInputMode::Pointer,
@@ -777,12 +855,12 @@ fn QueueDemo() -> Element {
                         apply_sort(&mut rows.write(), ev);
                         dropped.set(Some(ev.to));
                     },
-                    class: "space-y-2 [&>[data-dragging]]:opacity-60 [&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:shrink-0 [&_[data-sort-handle]]:cursor-grab [&_[data-sort-handle]]:text-[13px] [&_[data-sort-handle]]:text-[#6d6150] [&_[data-sort-handle]]:transition [&_[data-sort-handle]:hover]:text-[#D97D55]",
+                    class: "[&>*]:px-1.5 [&>*]:transition [&>*+*]:border-t [&>*+*]:border-white/5 [&>*:hover]:bg-white/[0.04] [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:bg-[#3d352a] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.04),0_12px_26px_-10px_rgba(0,0,0,0.65)] [&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:shrink-0 [&_[data-sort-handle]]:cursor-grab [&_[data-sort-handle]]:text-[13px] [&_[data-sort-handle]]:text-[#6d6150] [&_[data-sort-handle]]:transition [&_[data-sort-handle]:hover]:text-[#D97D55]",
                     render: move |ix: usize| {
                         let flash = if dropped() == Some(ix) { "drop-flash" } else { "" };
                         rsx! {
                             div {
-                                class: "cursor-grab select-none rounded-xl border border-white/10 bg-[#362f26] px-3.5 py-2.5 text-[13px] text-[#d9cfbc] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition hover:border-[#D97D55]/60 {flash}",
+                                class: "cursor-grab select-none rounded-md px-2 py-2.5 text-[13px] text-[#d9cfbc] transition {flash}",
                                 // Reset once the flash finishes so the same row
                                 // can flash again on its next drop.
                                 onanimationend: move |_| {
@@ -802,9 +880,13 @@ fn QueueDemo() -> Element {
 
 // --- 8. sprint board (kanban: insertion slots + a WIP limit that refuses) ----
 
-const BACKLOG: ContainerId = ZoneId(10);
-const DOING: ContainerId = ZoneId(11);
-const SHIPPED: ContainerId = ZoneId(12);
+// High ids, far above the `use_zone_id` auto counter: `BoardSlot`s draw
+// auto ids (11, 12, ...) from the same process-wide sequence, and the zone
+// registry replaces by id, so a low explicit column id can collide with a
+// slot's auto id and silently knock it out of the registry.
+const BACKLOG: ContainerId = ZoneId(9101);
+const DOING: ContainerId = ZoneId(9102);
+const SHIPPED: ContainerId = ZoneId(9103);
 
 /// In progress holds this many cards, no more.
 const WIP: usize = 2;
@@ -819,7 +901,7 @@ fn initials(name: &str) -> String {
 
 #[component]
 fn SprintDemo() -> Element {
-    let mut board = use_signal(|| {
+    let board = use_signal(|| {
         let mut m: HashMap<ContainerId, Vec<Card>> = HashMap::new();
         m.insert(
             BACKLOG,
@@ -833,6 +915,25 @@ fn SprintDemo() -> Element {
         m.insert(SHIPPED, vec![Card::new(5, "Pointer capture", "Sam Ortiz")]);
         m
     });
+    rsx! {
+        Section {
+            title: "Sprint board",
+            note: "Point between two cards and a clay line marks the exact insert, not just an append. In progress is capped at two: once full it stops lighting up and refuses the drop until something ships.",
+            tag: "BoardSlot",
+            DndProvider::<BoardPayload<Card>> {
+                LiveRegion::<BoardPayload<Card>> {}
+                SprintColumns { board }
+            }
+        }
+    }
+}
+
+/// The columns live in their own component so `use_dnd` runs *inside* the
+/// `DndProvider` above (context is provided to children, not siblings).
+#[component]
+fn SprintColumns(board: Signal<HashMap<ContainerId, Vec<Card>>>) -> Element {
+    let mut board = board;
+    let dnd = use_dnd::<BoardPayload<Card>>();
     let count = move |col: ContainerId| board.read().get(&col).map(|v| v.len()).unwrap_or(0);
     let on_move = move |mv: MoveEvent<Card>| apply_move(&mut board.write(), mv);
     // The WIP rule, enforced by the library: when In progress is full, neither
@@ -841,63 +942,89 @@ fn SprintDemo() -> Element {
     let wip_gate = move |col: ContainerId, p: BoardPayload<Card>| {
         col != DOING || p.from == DOING || count(DOING) < WIP
     };
-    // Idle: an invisible 8px gap doing the spacing. Mid-drag over it: a real
-    // slot opens between the two cards and shows exactly where the insert lands.
-    const SLOT: &str = "h-2 rounded-lg transition-all duration-150 data-over:h-10 data-over:border data-over:border-dashed data-over:border-[#D97D55] data-over:bg-[#D97D55]/15";
+    // The two slots hugging the dragged card are no-op drops (the card would
+    // land where it already is), so their indicator is suppressed: only slots
+    // that actually move something light up.
+    let is_noop = move |col: ContainerId, ix: usize| {
+        dnd.payload()
+            .map(|p| p.from == col && (ix == p.index || ix == p.index + 1))
+            .unwrap_or(false)
+    };
+    // Slot geometry never changes mid-drag: the pointer path hit-tests rects
+    // cached at drag start, so a slot that grows in the layout would shift
+    // every card below it and strand the highlight on stale geometry. The
+    // open state is a clay insertion line scaling in, with zero reflow.
+    //
+    // The visible gap stays 12px, but the slot's *element* is a 32px band
+    // (h-8 pulled back by -my-2.5) overlapping the card edges: the library
+    // hit-tests the measured rect, so pointing anywhere near the seam
+    // resolves to the slot. pointer-events-none keeps that invisible overlap
+    // from stealing pointerdown on the cards themselves.
+    const SLOT: &str = "pointer-events-none relative -my-2.5 flex h-8 items-center px-1 [&[data-over]>span]:scale-x-100 [&[data-over]>span]:opacity-100";
+    const SLOT_LINE: &str = "h-[3px] w-full origin-center scale-x-50 rounded-full bg-[#D97D55] opacity-0 shadow-[0_0_12px_rgba(217,125,85,0.7)] transition-all duration-150";
 
     rsx! {
-        Section {
-            title: "Sprint board",
-            note: "Point between two cards and a slot opens for a precise insert, not just an append. In progress is capped at two: once full it stops lighting up and refuses the drop until something ships.",
-            tag: "BoardSlot",
-            DndProvider::<BoardPayload<Card>> {
-                LiveRegion::<BoardPayload<Card>> {}
-                div { class: "grid grid-cols-1 gap-3 sm:grid-cols-3",
-                    for (name, col) in [("Backlog", BACKLOG), ("In progress", DOING), ("Shipped", SHIPPED)] {
-                        BoardColumn::<Card> {
-                            id: col,
-                            label: name,
-                            on_move,
-                            accepts: move |p: BoardPayload<Card>| wip_gate(col, p),
-                            class: "rounded-xl border border-white/8 bg-[#26211a] p-2.5 min-h-36 transition data-active:border-[#B8C4A9] data-active:bg-[#B8C4A9]/12",
-                            div { class: "mb-1 flex items-center justify-between px-1",
-                                p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]", "{name}" }
-                                if col == DOING {
-                                    span {
-                                        class: if count(DOING) >= WIP {
-                                            "rounded-full bg-[#D97D55] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white"
-                                        } else {
-                                            "rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#b8ab93]"
-                                        },
-                                        "{count(DOING)}/{WIP}"
+        div { class: "grid grid-cols-1 gap-3 sm:grid-cols-3",
+            for (name, col) in [("Backlog", BACKLOG), ("In progress", DOING), ("Shipped", SHIPPED)] {
+                BoardColumn::<Card> {
+                    id: col,
+                    label: name,
+                    on_move,
+                    accepts: move |p: BoardPayload<Card>| wip_gate(col, p),
+                    class: "rounded-xl bg-[#26211a] p-2.5 min-h-36 shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] transition data-active:ring-1 data-active:ring-[#B8C4A9]/60 data-active:bg-[#B8C4A9]/12",
+                    div { class: "mb-1 flex items-center justify-between px-1",
+                        p { class: "text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]",
+                            "{name}"
+                        }
+                        if col == DOING {
+                            span { class: if count(DOING) >= WIP { "rounded-full bg-[#D97D55] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white" } else { "rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#b8ab93] ring-1 ring-white/10" },
+                                "{count(DOING)}/{WIP}"
+                            }
+                        } else {
+                            span { class: "min-w-5 rounded-full bg-white/10 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums text-[#b8ab93] ring-1 ring-white/10",
+                                "{count(col)}"
+                            }
+                        }
+                    }
+                    BoardSlot::<Card> {
+                        column: col,
+                        index: 0,
+                        on_move,
+                        class: SLOT,
+                        if !is_noop(col, 0) {
+                            span { class: SLOT_LINE }
+                        }
+                    }
+                    for (ix, card) in board.read().get(&col).cloned().unwrap_or_default().into_iter().enumerate() {
+                        BoardItem::<Card> {
+                            item: card.clone(),
+                            column: col,
+                            index: ix,
+                            input: DragInputMode::Pointer,
+                            label: card.title.clone(),
+                            class: ITEM,
+                            div { class: ROW,
+                                span { class: "h-7 w-1 shrink-0 rounded-full {swatch(card.id)}" }
+                                div { class: "min-w-0 flex-1",
+                                    div { class: "truncate font-medium text-[#f4e9d7]",
+                                        "{card.title}"
                                     }
-                                } else {
-                                    span { class: "min-w-5 rounded-full bg-white/10 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums text-[#b8ab93]",
-                                        "{count(col)}"
+                                    div { class: "truncate text-[11px] text-[#9c8f77]",
+                                        "{card.sub}"
                                     }
+                                }
+                                span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/10 text-[9px] font-bold uppercase text-[#e0a37f] ring-1 ring-white/10",
+                                    "{initials(&card.sub)}"
                                 }
                             }
-                            BoardSlot::<Card> { column: col, index: 0, on_move, class: SLOT }
-                            for (ix, card) in board.read().get(&col).cloned().unwrap_or_default().into_iter().enumerate() {
-                                BoardItem::<Card> {
-                                    item: card.clone(),
-                                    column: col,
-                                    index: ix,
-                                    input: DragInputMode::Pointer,
-                                    label: card.title.clone(),
-                                    class: ITEM,
-                                    div { class: ROW,
-                                        span { class: "h-7 w-1 shrink-0 rounded-full {swatch(card.id)}" }
-                                        div { class: "min-w-0 flex-1",
-                                            div { class: "truncate font-medium text-[#f4e9d7]", "{card.title}" }
-                                            div { class: "truncate text-[11px] text-[#9c8f77]", "{card.sub}" }
-                                        }
-                                        span { class: "grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/10 text-[9px] font-bold uppercase text-[#e0a37f]",
-                                            "{initials(&card.sub)}"
-                                        }
-                                    }
-                                }
-                                BoardSlot::<Card> { column: col, index: ix + 1, on_move, class: SLOT }
+                        }
+                        BoardSlot::<Card> {
+                            column: col,
+                            index: ix + 1,
+                            on_move,
+                            class: SLOT,
+                            if !is_noop(col, ix + 1) {
+                                span { class: SLOT_LINE }
                             }
                         }
                     }
@@ -972,7 +1099,7 @@ fn FilesTreeDemo() -> Element {
             tag: "would_create_cycle",
             DndProvider::<u64> {
                 LiveRegion::<u64> {}
-                div { class: "overflow-hidden rounded-xl border border-white/8",
+                div { class: "overflow-hidden rounded-xl bg-white/[0.03] ring-1 ring-white/5",
                     for (depth, n) in flat {
                         TreeNodeTarget::<u64> {
                             key: "{n.id}",
@@ -1107,7 +1234,10 @@ fn MoodboardDemo() -> Element {
             DndProvider::<Note> {
                 LiveRegion::<Note> {}
                 CanvasDropZone::<Note> {
-                    bounds: Bounds { width: 640.0, height: 220.0 },
+                    bounds: Bounds {
+                        width: 640.0,
+                        height: 220.0,
+                    },
                     on_drop: move |d: CanvasDrop<Note>| {
                         let mut ns = notes.write();
                         if let Some(n) = ns.iter_mut().find(|n| n.id == d.payload.id) {
@@ -1115,7 +1245,7 @@ fn MoodboardDemo() -> Element {
                             n.y = d.position.y;
                         }
                     },
-                    class: "relative h-56 overflow-hidden rounded-xl border border-white/8 bg-[#26211a] bg-[radial-gradient(#3f372b_1px,transparent_1px)] [background-size:16px_16px] transition data-active:border-[#B8C4A9]",
+                    class: "relative h-56 overflow-hidden rounded-xl bg-[#26211a] bg-[radial-gradient(#3f372b_1px,transparent_1px)] [background-size:16px_16px] ring-1 ring-white/5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] transition data-active:ring-[#B8C4A9]/60",
                     for note in notes.read().clone() {
                         PointerDraggable::<Note> {
                             payload: note.clone(),
@@ -1225,11 +1355,7 @@ fn MenuDemo() -> Element {
                 div { class: "flex flex-wrap gap-2",
                     for t in ["All", "Mains", "Small plates", "Sweets"] {
                         button {
-                            class: if filter() == t {
-                                "rounded-full border border-[#D97D55] bg-[#D97D55] px-3 py-1 text-[12px] font-medium text-white transition"
-                            } else {
-                                "rounded-full border border-white/12 bg-[#362f26] px-3 py-1 text-[12px] font-medium text-[#b8ab93] transition hover:border-[#D97D55] hover:text-[#D97D55]"
-                            },
+                            class: if filter() == t { "rounded-full bg-[#D97D55] px-3 py-1 text-[12px] font-medium text-white shadow-[0_2px_6px_-2px_rgba(217,125,85,0.5)] transition" } else { "rounded-full bg-white/8 px-3 py-1 text-[12px] font-medium text-[#b8ab93] transition hover:bg-white/12 hover:text-[#D97D55]" },
                             onclick: move |_| {
                                 if filter() != t {
                                     filter.set(t);
@@ -1247,7 +1373,7 @@ fn MenuDemo() -> Element {
                         FlipItem {
                             key: "{d.id}",
                             epoch: epoch(),
-                            class: "flex items-center gap-2 rounded-xl border border-white/10 bg-[#362f26] px-3 py-2.5 text-[12px] text-[#d9cfbc] shadow-[0_1px_2px_rgba(0,0,0,0.04)]",
+                            class: "flex items-center gap-2 rounded-xl bg-gradient-to-b from-[#3d352a] to-[#332c23] px-3 py-2.5 text-[12px] text-[#d9cfbc] shadow-[inset_0_1px_0_rgba(255,255,255,0.07),inset_0_0_0_1px_rgba(255,255,255,0.03),0_1px_2px_rgba(0,0,0,0.4)]",
                             span { class: "inline-block h-2 w-2 shrink-0 rounded-full {dot(d.cat)}" }
                             span { class: "min-w-0 truncate", "{d.name}" }
                         }
@@ -1271,22 +1397,28 @@ fn UploadDemo() -> Element {
             tag: "FileFilter",
             FileDropZone {
                 filter: FileFilter::new()
-                    .content_types(["image/*"])
-                    .max_size(5_000_000)
-                    .max_files(6),
+                                                    .content_types(["image/*"])
+                                                    .max_size(5_000_000)
+                                                    .max_files(6),
                 on_files: move |drop: FileDrop| {
                     accepted.write().extend(drop.files.iter().map(|f| f.name()));
                 },
                 on_rejected: move |bad: Vec<(dioxus::html::FileData, FileRejection)>| {
-                    refused.write().extend(bad.into_iter().map(|(f, why)| {
-                        let reason = match why {
-                            FileRejection::ContentType => "not an image",
-                            FileRejection::TooLarge => "over 5 MB",
-                            FileRejection::TooMany => "past the 6-file limit",
-                            FileRejection::Extension => "wrong extension",
-                        };
-                        format!("{} · {reason}", f.name())
-                    }));
+                    refused
+                        .write()
+                        .extend(
+                            bad
+                                .into_iter()
+                                .map(|(f, why)| {
+                                    let reason = match why {
+                                        FileRejection::ContentType => "not an image",
+                                        FileRejection::TooLarge => "over 5 MB",
+                                        FileRejection::TooMany => "past the 6-file limit",
+                                        FileRejection::Extension => "wrong extension",
+                                    };
+                                    format!("{} · {reason}", f.name())
+                                }),
+                        );
                 },
                 class: "flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-white/15 p-4 text-center transition data-over:border-[#D97D55] data-over:bg-[#D97D55]/15",
                 if accepted.read().is_empty() && refused.read().is_empty() {
@@ -1306,7 +1438,9 @@ fn UploadDemo() -> Element {
                     if !refused.read().is_empty() {
                         div { class: "flex flex-wrap justify-center gap-1.5",
                             for m in refused.read().clone() {
-                                span { class: "inline-flex items-center rounded-md bg-[#D97D55]/20 px-2 py-1 text-[11px] font-medium text-[#eda87f]", "{m}" }
+                                span { class: "inline-flex items-center rounded-md bg-[#D97D55]/20 px-2 py-1 text-[11px] font-medium text-[#eda87f]",
+                                    "{m}"
+                                }
                             }
                         }
                     }
@@ -1329,7 +1463,7 @@ fn ShareDemo() -> Element {
             div { class: "grid grid-cols-1 gap-4 sm:grid-cols-2",
                 ExternalDragSource {
                     content: OutboundContent::url("https://dioxuslabs.com", Some("Dioxus")),
-                    class: "flex cursor-grab items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#362f26] px-3.5 py-4 text-[13px] text-[#d9cfbc] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition hover:border-[#D97D55]/60",
+                    class: "flex cursor-grab items-center justify-between gap-3 rounded-xl bg-gradient-to-b from-[#3d352a] to-[#332c23] px-3.5 py-4 text-[13px] text-[#d9cfbc] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.03),0_1px_2px_rgba(0,0,0,0.5),0_4px_12px_-4px_rgba(0,0,0,0.4)] transition hover:-translate-y-px hover:brightness-[1.06]",
                     div { class: "min-w-0",
                         div { class: "font-medium text-[#f4e9d7]", "Dioxus" }
                         div { class: "truncate text-[11px] text-[#9c8f77]", "dioxuslabs.com" }
@@ -1338,7 +1472,8 @@ fn ShareDemo() -> Element {
                 }
                 ExternalDropZone {
                     on_drop: move |d: ExternalDrop| {
-                        dropped.set(format!("{} payload(s), {} file(s)", d.payloads.len(), d.files.len()));
+                        dropped
+                            .set(format!("{} payload(s), {} file(s)", d.payloads.len(), d.files.len()));
                     },
                     class: "flex min-h-24 items-center justify-center rounded-xl border-2 border-dashed border-white/15 p-3 text-center text-sm text-[#9c8f77] transition data-over:border-[#D97D55] data-over:bg-[#D97D55]/15 data-over:text-[#b8ab93]",
                     if dropped.read().is_empty() {

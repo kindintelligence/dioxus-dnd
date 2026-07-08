@@ -181,6 +181,30 @@ elements. Existing `[data-…="true"]` selectors keep working.
   so rows keep finger-scrolling while the dotted grip drags, and the upload
   zone gained a `FileFilter` (images, 5 MB, 6 files) that shows per-file
   rejection reasons.
+- **Fixed auto zone ids colliding with explicit ids.** `ZoneId::auto` (and
+  `DragId::auto`) drew from a counter starting at 1, and the zone registry
+  replaces records by id, so an auto id from `use_zone_id` (a `BoardSlot`, an
+  id-less `DropZone`) could land exactly on a neighboring zone's hand-picked
+  low id and silently knock it out of the registry: the zone stopped
+  highlighting and receiving drops, dependent on mount order. Auto ids now
+  start at 2^32, so any explicit id that fits in a `u32` can never collide.
+  Covered by a unit test on the id range and a runtime regression mounting
+  low-id columns full of auto-id slots.
+- Gallery card refinement: cards are borderless, defined by a top-lit
+  gradient, a 1px inset edge light and real ambient shadows, with a
+  one-pixel hover lift that presses back down on grab and accent bars that
+  bloom softly. Lists (playlist, weekly focus, podcast queue, file tree)
+  adopted the mailbox's language: contained wells with hairline dividers,
+  the grabbed row lifting out as a lit card. Sprint columns and the
+  moodboard canvas recess instead, so surfaces float and containers sink.
+  Keyboard focus shows a clay ring via `focus-visible`.
+- Gallery sprint board: insertion slots no longer grow in the layout (which
+  shifted cards under the pointer while hit-testing ran against rects cached
+  at drag start). Slots keep constant geometry and show a glowing clay
+  insertion line instead; the visible 12px gap hides a 32px hit band
+  (`pointer-events-none`, negative margins) so pointing near a seam
+  resolves to it, and the two no-op slots hugging the dragged card do not
+  light at all.
 
 ## 1.0.0
 
