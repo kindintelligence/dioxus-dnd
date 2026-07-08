@@ -192,10 +192,21 @@ fn registry_spatial_step_accepts_and_hit_test() {
             Some(ZoneId(6))
         );
         // Gutter drop just above zone 1 (outside every rect): the nearest
-        // acceptable center within max_distance wins.
+        // acceptable zone within max_distance wins.
         assert_eq!(
             reg.hit_test_closest(Point::new(20.0, 95.0), &5, 48.0),
             Some(ZoneId(1))
+        );
+        // The snap measures to the rect, not its center: a large zone whose
+        // center sits 500px away still catches a release 10px from its edge.
+        reg.register(record(
+            7,
+            Some(Rect::new(200.0, 200.0, 1000.0, 600.0)),
+            None,
+        ));
+        assert_eq!(
+            reg.hit_test_closest(Point::new(190.0, 500.0), &5, 48.0),
+            Some(ZoneId(7))
         );
 
         rsx! { div {} }
@@ -2273,7 +2284,7 @@ fn drag_sim_release_respects_acceptance_and_snap() {
     assert!(!sim.dragging(&dom), "cancel reset the drag");
     assert!(TAKEN.lock().unwrap().is_empty());
 
-    // In the gap, 40px from the accepting zone's center: snaps to it.
+    // In the gap, 20px from the accepting zone's edge: snaps to it.
     sim.pick_up(&dom, 5);
     sim.move_to(&dom, Point::new(50.0, 80.0));
     assert_eq!(sim.over(&dom), None, "gap hovers nothing");

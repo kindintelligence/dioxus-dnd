@@ -13,8 +13,8 @@
   `data-active`/`data-over` markup (via `rerender` + SSR), and your own
   model. `simulate_drag` wraps the common arc in one call;
   `release_as(DropEffect::Copy)` simulates the Ctrl-held copy drop.
-  Releases mirror the pointer gesture - exact hit, else the 48px
-  center-distance snap to the closest acceptable zone, else cancel - and
+  Releases mirror the pointer gesture - exact hit, else the 48px snap to
+  the closest acceptable zone, else cancel - and
   delivery is the *same code path* as `Draggable`'s (extracted, not
   reimplemented), so acceptance filters, closest-edge enrichment and
   settle routing all behave exactly as in production. Not simulated:
@@ -95,6 +95,16 @@
   ascend correctly, and it lives in the prelude. The gallery Standup page
   and the browser fixture now use it; the manual double-registration
   recipe stays documented on that page for three-plus worlds.
+
+### Fixed
+
+- **The 48px near-miss snap measured to the zone's center, not its
+  edge.** A pointer or touch drop released just outside a zone falls
+  back to the closest acceptable zone within 48px - but the distance ran
+  to the zone's *center*, so any zone larger than ~96px never caught a
+  near miss: release 5px beside a full-width tray and the drag
+  cancelled. `hit_test_closest` now measures to the rect's nearest
+  point. Surfaced by dogfooding the new headless driver.
 
 ### Tests
 
