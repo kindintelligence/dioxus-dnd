@@ -16,7 +16,7 @@ JavaScript of its own: everything is Rust, and the optional `web` feature
 reaches browser pointer capture through `web-sys` bindings.
 
 **[See every pattern live](https://kindintelligence.github.io/dioxus-dnd/)**:
-the gallery pairs fourteen interactive demos with plain-language
+the gallery pairs eighteen interactive demos with plain-language
 walkthroughs and API references, and it is built with this crate.
 
 ## Why this crate
@@ -224,18 +224,41 @@ Not using Tailwind? The same contract serves plain CSS: `[data-over]`,
 
 ## Accessibility (built in, not opt-in)
 
-Every `Draggable` is focusable and keyboard operable:
+Drag-and-drop is where accessibility usually goes to die: pointer-only
+interactions, silent state changes, motion nobody asked for. This crate
+treats the accessible path as the same path - every capability below works
+on every `Draggable` and `DropZone` with no extra wiring, and the pieces
+you *do* wire (labels, one `LiveRegion`) are one prop each.
+
+### Keyboard operation
+
+Every `Draggable` is focusable (`tabindex="0"`) and fully operable without
+a pointer:
 
 - **Space / Enter** picks the item up
-- **Up / Down** cycles drop zones at the current level (spatial order)
+- **Up / Down** cycles drop zones at the current level (spatial order,
+  top-to-bottom then left-to-right, so arrows match what the eye sees)
 - **Right / Left** descends into a zone's nested zones or ascends to the
   parent (nesting is detected automatically when `DropZone`s contain
-  `DropZone`s; in flat apps these fall back to next/previous)
+  `DropZone`s; in flat apps these fall back to next/previous - the
+  WAI-ARIA tree convention)
 - **Space / Enter** drops into the selected zone
-- **Escape** cancels
+- **Escape** cancels - there is no keyboard trap; focus never leaves the
+  item, and every drag can be abandoned
 
-Render one `LiveRegion::<T>` per provider to voice announcements to screen
-readers, and give `Draggable` and `DropZone` a `label`:
+Keyboard drags drive the same context as pointer drags, so zones light
+their `data-active`/`data-over` styling identically, drops deliver the
+same `DropOutcome` (with `mode: DragMode::Keyboard`), and the drop-settle
+animation and closest-edge signal degrade gracefully rather than
+misbehaving.
+
+### Screen readers
+
+Elements carry `role="button"` and `aria-roledescription="draggable"`, so
+assistive tech announces what the thing *is*. Render one `LiveRegion::<T>`
+per provider - a visually-hidden `aria-live="polite"` region - and every
+step of a keyboard drag is voiced without stealing focus, including the
+instructions:
 
 ```rust,ignore
 DndProvider::<Card> {
@@ -243,24 +266,89 @@ DndProvider::<Card> {
     Draggable::<Card> { payload: card, label: "Ship it", /* ... */ }
     DropZone::<Card>  { label: "Done", on_drop, /* ... */ }
 }
-// "Picked up Ship it. Use arrow keys to choose a drop target, ..."
-// "Over Done." then "Dropped in Done."
+// "Picked up Ship it. Use arrow keys to choose a drop target,
+//  Enter to drop, Escape to cancel."
+// "Over Done." / "Over Done, inside Sprint board." (nested zones name
+//  their parent)  then "Dropped in Done." or "Drag cancelled."
 ```
 
-For a no-drag fallback, `a11y::ReorderButtons` renders headless move-up and
-move-down buttons that emit the same `SortEvent` as dragging, so one
-`on_sort` serves both inputs. Custom flows can push their own messages with
-`dnd.announce(...)`.
+Dead ends are voiced too ("No drop targets available.", "No drop target
+selected."), and custom flows push their own messages with
+`dnd.announce(...)`. Every phrase is localizable - see
+[Localization](#localization). In virtualized lists, forward
+`aria-setsize`/`aria-posinset` so position is announced against the full
+list, not the rendered window (the gallery's *Archive* page shows this).
 
-**Localization:** every phrase the crate voices - the announcements above,
-`ReorderButtons` labels, the `SelectionCount` badge - reads a `DndStrings`
-from context, with English built in. Each field owns a whole sentence as a
-function, so translations reorder and inflect freely; provide one anywhere
+### Reordering without any drag at all
+
+`a11y::ReorderButtons` renders real move-up/move-down `<button>`s with
+localized `aria-label`s ("Move Piranesi up"), disabled at the list edges,
+emitting the same `SortEvent` as drag-reordering - so one `on_sort` serves
+pointer drags, keyboard drags, and plain button presses. This is the
+strongest fallback there is: no gesture of any kind required.
+
+### RTL layouts
+
+Pass `dir: Direction::Rtl` on the provider and keyboard navigation
+mirrors: spatial order runs right-to-left within a row, and the
+descend/ascend arrows swap so "into" is always the arrow pointing along
+reading order (the WAI-ARIA tree convention):
+
+```rust,ignore
+DndProvider::<Card> { dir: Direction::Rtl, /* ... */ }
+```
+
+### Reduced motion
+
+Everything the crate animates - `SortableList`'s live preview,
+`FlipItem`'s glide, `DragOverlay`'s drop-settle - marks its moving
+elements with `data-dnd-motion` and ships a
+`prefers-reduced-motion: reduce` override, so drags snap instead of
+gliding when the user asks the OS for less motion. Nothing to configure;
+mark your own animated elements with the same attribute to opt them in.
+(The override uses a near-zero duration rather than zero, so
+`transitionend`-driven cleanup still runs.)
+
+### Motor forgiveness
+
+Presses only become drags after an 8px movement threshold (clicks stay
+clicks), touch and pen use the same gesture as mouse, near-miss releases
+snap to the closest acceptable zone whose edge is within 48px, and
+sortables offer `touch_handle` grips so scrolling a list and dragging its
+rows don't fight.
+
+### What this means for compliance
+
+The crate covers the interaction-layer criteria a drag-and-drop feature
+usually fails. Mapping to **WCAG 2.2**:
+
+| Criterion | How it's met |
+|---|---|
+| 2.1.1 Keyboard (A) | complete keyboard path on every draggable, built in |
+| 2.1.2 No Keyboard Trap (A) | focus stays on the item; Escape always cancels |
+| 2.5.7 Dragging Movements (AA) | keyboard operation on everything, plus `ReorderButtons` as a no-gesture, single-pointer alternative for reordering |
+| 4.1.2 Name, Role, Value (A) | `role="button"` + `aria-roledescription="draggable"`, accessible names from `label` props, real buttons in `ReorderButtons` |
+| 4.1.3 Status Messages (AA) | `LiveRegion`'s polite live region announces every state change without moving focus |
+| 2.3.3 Animation from Interactions (AAA) | `prefers-reduced-motion` honored across every built-in animation |
+
+Honest scope: a library can't make your *app* compliant. You still own
+focus visibility (2.4.7), contrast and target sizes for your rendered
+items, and passing meaningful `label`s - the crate makes those the only
+things left to do.
+
+## Localization
+
+Every phrase the crate voices - the keyboard announcements,
+`ReorderButtons` labels and row fallbacks, the `SelectionCount` badge -
+reads a `DndStrings` from context, with English built in. Each field owns
+a whole sentence as a function, so translations reorder, inflect and
+pluralize freely; nothing is concatenated for them. Provide one anywhere
 above your drag UI and override only what you translate:
 
 ```rust,ignore
 use_context_provider(|| DndStrings {
-    dropped_in: Rc::new(|name| t!("dropped-in", name: name)),  // dioxus-i18n
+    picked_up: Rc::new(|name| t!("picked-up", name: name)),   // dioxus-i18n
+    dropped_in: Rc::new(|name| t!("dropped-in", name: name)),
     cancelled: Rc::new(|| t!("cancelled")),
     ..Default::default()
 });
@@ -269,26 +357,19 @@ use_context_provider(|| DndStrings {
 The crate stays dependency-free: the closures call whatever produces a
 `String` - dioxus-i18n's `t!` (shown; the Fluent-based crate the Dioxus
 docs recommend) or a `match` on your own locale signal. Have them *read*
-the locale rather than re-providing the struct on switch, and the very
-next phrase speaks the new language. The gallery's *Packing list* page
-shows the full dioxus-i18n wiring with a live English/Spanish toggle.
-Custom components can voice themselves consistently via
-`use_dnd_strings()`.
+the locale rather than re-providing the struct on switch: components
+capture `DndStrings` once at mount, but every phrase is a fresh call, so
+the very next announcement speaks the new language.
 
-**RTL layouts:** pass `dir: Direction::Rtl` on the provider and keyboard
-navigation mirrors - spatial order runs right-to-left within a row, and the
-descend/ascend arrows swap so "into" is always the arrow pointing along
-reading order (the WAI-ARIA tree convention):
-
-```rust,ignore
-DndProvider::<Card> { dir: Direction::Rtl, /* ... */ }
-```
-
-**Reduced motion:** components that animate (`SortableList`'s live preview,
-`FlipItem`'s glide) mark their moving elements with `data-dnd-motion` and
-ship a `prefers-reduced-motion` override, so drags snap instead of gliding
-when the user asks the OS for less motion. Nothing to configure; style your
-own animated elements with the same attribute to opt them in.
+Two things to pair with it: pass your item and zone `label`s through the
+same translation layer (the crate voices the names you give it), and set
+`dir: Direction::Rtl` for right-to-left locales so the keyboard's spatial
+navigation matches the mirrored layout. Custom components can voice
+themselves consistently via `use_dnd_strings()`. The gallery's *Packing
+list* page shows the full dioxus-i18n wiring - inline Fluent catalogs, a
+live English/Spanish toggle, and a visible mirror of the announcement
+channel. (`DndDebugOverlay` is intentionally not localized; it's a
+dev-only tool.)
 
 ## Touch
 
