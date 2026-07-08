@@ -26,8 +26,8 @@ use dioxus::prelude::*;
 
 use crate::core::components::merge_style;
 use crate::core::{
-    platform, transition, use_dnd, use_zone_registry, DragInputMode, DragMode, Draggable,
-    DropEffect, DropOutcome, GestureEffect, GestureEvent, GesturePhase, Point, ZoneId,
+    effective_effect, platform, transition, use_dnd, use_zone_registry, DragInputMode, DragMode,
+    Draggable, DropEffect, DropOutcome, GestureEffect, GestureEvent, GesturePhase, Point, ZoneId,
 };
 
 /// Pointer position from a pointer event, in client coordinates.
@@ -100,6 +100,11 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
     // `element_point`) - drives `DragOverlay` placement and exact
     // `CanvasDropZone` drops, instead of the bare threshold travel.
     let mut press_offset = use_signal(Point::default);
+    // Modifier keys held at drop time, sampled from the pointer events. The
+    // native path resolves Ctrl/Cmd=copy, Alt=link from the drop event's
+    // modifiers; the pointer path has no such event, so we track them here and
+    // apply the same `effective_effect` convention when the drop lands.
+    let mut mods = use_signal(Modifiers::empty);
 
     let touch_payload = payload.clone();
     let attr_payload = payload.clone();
@@ -144,6 +149,9 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
     // Resolve and deliver a drop at `point`. Shared by the normal pointer-up
     // and by the capture-free recovery in `onpointermove`.
     let mut finish_drop = move |point: Point| {
+        // Apply the modifier-key convention (Ctrl/Cmd=copy, Alt=link) held at
+        // release, matching the native `DropZone` path.
+        let effect = effective_effect(effect, *mods.peek());
         // Fast path: the topmost cached rect containing the point, if it
         // accepts the payload.
         if let Some(target) = registry.hit_test(point) {
@@ -203,6 +211,7 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
             },
             onpointermove: move |evt: PointerEvent| {
                 let at = pointer_client(&evt);
+                mods.set(evt.modifiers());
                 // Capture-free recovery: Dioxus 0.8 exposes no pointer-capture
                 // API without web-sys, so a mouse released while off this
                 // element never delivers a `pointerup` here. If it returns over
@@ -255,6 +264,7 @@ pub fn PointerDraggable<T: Clone + PartialEq + 'static>(
                 if let Some(n) = node.peek().clone() {
                     platform::release_pointer(&n, evt.pointer_id());
                 }
+                mods.set(evt.modifiers());
                 let GestureEffect::Drop { at: point } = step(
                     GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                     threshold,

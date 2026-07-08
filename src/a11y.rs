@@ -88,6 +88,12 @@ pub fn ReorderButtons(
 
     rsx! {
         span {
+            // Pressing a button must not start (or capture the pointer for) an
+            // enclosing drag surface - e.g. a `SortableList` row these are
+            // rendered inside - or the row would grab pointer capture on
+            // pointerdown and swallow the button's click. Stop the gesture at
+            // the buttons so taps stay taps and the parent still drags elsewhere.
+            onpointerdown: move |evt: PointerEvent| evt.stop_propagation(),
             ..attributes,
             button {
                 r#type: "button",

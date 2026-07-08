@@ -11,6 +11,10 @@ module.exports = defineConfig({
   use: {
     baseURL: "http://127.0.0.1:8080",
     trace: "on-first-retry",
+    // The gallery is a tall single page; a short viewport pushes lower demos
+    // off-screen where pointer coordinates don't land. Give tests room, and
+    // still scroll the target section into view before dragging.
+    viewport: { width: 1280, height: 1200 },
   },
   webServer: [
     {
