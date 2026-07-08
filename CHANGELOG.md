@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.1 - 2026-07-08
+
+### Fixed
+
+- **The reduced-motion stylesheet could render as visible text.** 2.3.0's
+  `<style>` override relied on the UA stylesheet's `style { display: none }`,
+  which has zero specificity - an app rule like
+  `.list > * { display: flex }` overrode it and painted the CSS source as
+  visible text at the top of sortable lists (seen in the gallery). The
+  element now carries an inline `display: none`, which outranks any
+  selector; an SSR test pins the inline-hidden form.
+
 ## 2.3.0 - 2026-07-08
 
 ### Added

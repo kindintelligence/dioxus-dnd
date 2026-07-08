@@ -1752,6 +1752,14 @@ fn animated_components_ship_the_reduced_motion_override() {
         2,
         "every row is marked: {html}"
     );
+    // The sheet must hide itself inline: the UA's `style { display: none }`
+    // has zero specificity, so an app rule like `.list > * { display: flex }`
+    // would otherwise paint the CSS source as visible text (seen in the
+    // gallery). An inline declaration outranks any selector.
+    assert!(
+        html.contains(r#"<style style="display: none;">"#),
+        "stylesheet must be inline-hidden: {html}"
+    );
 
     // FlipItems nested under a grid inherit the grid's stylesheet instead
     // of rendering their own.
@@ -2036,10 +2044,11 @@ fn grid_merges_user_style_after_layout_default() {
     }
     let html = run(app);
     // One merged style attribute: default first, user override after.
+    // (+1 for the hidden reduced-motion stylesheet the grid anchors.)
     assert_eq!(
         html.matches("style=").count(),
-        3,
-        "wrapper + 2 tiles: {html}"
+        4,
+        "wrapper + 2 tiles + hidden stylesheet: {html}"
     );
     assert!(
         html.contains(
