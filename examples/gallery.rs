@@ -23,10 +23,22 @@ fn main() {
 const ITEM: &str = "flex items-center gap-2 cursor-grab select-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition data-dragging:opacity-50 data-dragging:ring-2 data-dragging:ring-slate-300";
 const ZONE: &str = "rounded-lg border-2 border-dashed border-slate-200 p-3 min-h-24 transition space-y-2 data-active:border-slate-300 data-over:border-slate-900 data-over:bg-slate-100/60";
 
+// A reusable "just dropped" confirmation: a ring + lifted shadow that pulse
+// and settle, so a completed drop reads clearly even when the layout barely
+// moves. Add the `drop-flash` class to an element when its drop lands.
+const EFFECTS_CSS: &str = r#"
+@keyframes drop-flash {
+  0%   { box-shadow: 0 0 0 3px rgba(15,23,42,0.20), 0 12px 26px -6px rgba(15,23,42,0.35); }
+  100% { box-shadow: 0 0 0 0 rgba(15,23,42,0),   0 1px 3px 0 rgba(15,23,42,0); }
+}
+.drop-flash { animation: drop-flash 550ms cubic-bezier(0.22, 1, 0.36, 1); }
+"#;
+
 #[component]
 fn App() -> Element {
     rsx! {
         document::Script { src: "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" }
+        style { {EFFECTS_CSS} }
         div { class: "min-h-screen bg-slate-50 text-slate-900 antialiased",
             div { class: "mx-auto max-w-5xl px-6 py-14 space-y-8",
                 header { class: "space-y-1",
@@ -42,6 +54,7 @@ fn App() -> Element {
                 AccessibleReorderDemo {}
                 GridDemo {}
                 FlipDemo {}
+                FilterFlipDemo {}
                 BoardDemo {}
                 AutoScrollDemo {}
                 TreeDemo {}
@@ -102,16 +115,22 @@ fn CardsDemo() -> Element {
         m.insert(DONE, vec![]);
         m
     });
+    // Card that just landed, so it flashes in its new zone (reusing the same
+    // `drop-flash` effect as the auto-scroll list).
+    let mut flashed = use_signal(|| None::<u32>);
     let move_card = move |o: DropOutcome<Card>| {
+        let id = o.payload.id;
         let mut b = bins.write();
         for cards in b.values_mut() {
-            cards.retain(|c| c.id != o.payload.id);
+            cards.retain(|c| c.id != id);
         }
         b.entry(o.to).or_default().push(o.payload);
+        drop(b);
+        flashed.set(Some(id));
     };
 
     rsx! {
-        Section { title: "Cards", note: "Move cards between two zones. The ghost follows the cursor.",
+        Section { title: "Cards", note: "Move cards between two zones. The ghost follows the cursor; the card flashes when it lands.",
             DndProvider::<Card> {
                 div { class: "grid grid-cols-2 gap-4",
                     for (name, zone) in [("To do", TODO), ("Done", DONE)] {
@@ -127,7 +146,10 @@ fn CardsDemo() -> Element {
                                     zone,
                                     input: DragInputMode::Pointer,
                                     label: card.title.clone(),
-                                    class: ITEM,
+                                    class: if flashed() == Some(card.id) { format!("{ITEM} drop-flash") } else { ITEM.to_string() },
+                                    // Clear the flash when any card is picked up, so the
+                                    // next drop re-triggers the animation cleanly.
+                                    on_drag_start: move |_| flashed.set(None),
                                     "{card.title}"
                                 }
                             }
@@ -589,25 +611,111 @@ fn FlipDemo() -> Element {
     }
 }
 
+// --- 12b. FLIP on a filter change (survivors reflow) -------------------------
+
+#[component]
+fn FilterFlipDemo() -> Element {
+    #[derive(Clone, PartialEq)]
+    struct Fruit {
+        id: u32,
+        name: &'static str,
+        tag: &'static str,
+    }
+    // Interleaved so filtering to one tag pulls items from scattered cells.
+    let all = use_signal(|| {
+        vec![
+            Fruit { id: 1, name: "Lemon", tag: "Citrus" },
+            Fruit { id: 2, name: "Strawberry", tag: "Berry" },
+            Fruit { id: 3, name: "Peach", tag: "Stone" },
+            Fruit { id: 4, name: "Lime", tag: "Citrus" },
+            Fruit { id: 5, name: "Blueberry", tag: "Berry" },
+            Fruit { id: 6, name: "Plum", tag: "Stone" },
+            Fruit { id: 7, name: "Orange", tag: "Citrus" },
+            Fruit { id: 8, name: "Raspberry", tag: "Berry" },
+            Fruit { id: 9, name: "Cherry", tag: "Stone" },
+        ]
+    });
+    let mut filter = use_signal(|| "All");
+    let mut epoch = use_signal(|| 0usize);
+    let dot = |tag: &str| match tag {
+        "Citrus" => "bg-amber-400",
+        "Berry" => "bg-violet-400",
+        _ => "bg-rose-400",
+    };
+    rsx! {
+        Section { title: "Filter reflow (FLIP)", note: "Filter the set and the surviving tiles glide to fill the gaps - the same FlipItem, driven by a filter change instead of a shuffle.",
+            div { class: "space-y-3",
+                div { class: "flex flex-wrap gap-2",
+                    for t in ["All", "Citrus", "Berry", "Stone"] {
+                        button {
+                            class: if filter() == t {
+                                "rounded-lg border border-slate-900 bg-slate-900 px-3 py-1 text-sm text-white"
+                            } else {
+                                "rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm text-slate-700 transition hover:bg-slate-50"
+                            },
+                            onclick: move |_| {
+                                if filter() != t {
+                                    filter.set(t);
+                                    epoch += 1;
+                                }
+                            },
+                            "{t}"
+                        }
+                    }
+                }
+                div { class: "grid grid-cols-3 gap-2",
+                    for f in all.read().iter().filter(|f| filter() == "All" || f.tag == filter()).cloned() {
+                        // Stable key per fruit so a survivor keeps its DOM node
+                        // across the filter change and FlipItem can glide it.
+                        FlipItem {
+                            key: "{f.id}",
+                            epoch: epoch(),
+                            class: "flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm",
+                            span { class: "inline-block h-2 w-2 shrink-0 rounded-full {dot(f.tag)}" }
+                            "{f.name}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // --- 13. auto-scrolling container --------------------------------------------
 
 #[component]
 fn AutoScrollDemo() -> Element {
-    let rows = use_signal(|| (1..=24).map(|n| format!("Row {n:02}")).collect::<Vec<_>>());
+    let mut rows = use_signal(|| (1..=24).map(|n| format!("Row {n:02}")).collect::<Vec<_>>());
+    // Index of the row that just landed, so it can flash.
+    let mut dropped = use_signal(|| None::<usize>);
     rsx! {
-        Section { title: "Auto-scroll", note: "Pick up a row and drag toward the top or bottom edge - the container scrolls itself, ramped by how close you are.",
-            DndProvider::<String> {
-                AutoScroll {
-                    class: "max-h-44 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2",
-                    for row in rows.read().iter().cloned() {
-                        PointerDraggable::<String> {
-                            payload: row.clone(),
-                            input: DragInputMode::Pointer,
-                            label: row.clone(),
-                            class: ITEM,
-                            "{row}"
+        Section { title: "Auto-scroll", note: "Reorder a long list; drag toward the top or bottom edge and the container scrolls itself. The row flashes where it lands so the drop is obvious.",
+            AutoScroll {
+                class: "max-h-44 overflow-y-auto rounded-lg border border-slate-200 p-2",
+                SortableList {
+                    len: rows.read().len(),
+                    input: DragInputMode::Pointer,
+                    on_sort: move |ev: SortEvent| {
+                        apply_sort(&mut rows.write(), ev);
+                        dropped.set(Some(ev.to));
+                    },
+                    class: "space-y-2 [&>[data-dragging]]:opacity-40",
+                    render: move |ix: usize| {
+                        let flash = if dropped() == Some(ix) { "drop-flash" } else { "" };
+                        rsx! {
+                            div {
+                                class: "rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm {flash}",
+                                // Reset once the flash finishes so the same row
+                                // can flash again on its next drop.
+                                onanimationend: move |_| {
+                                    if dropped() == Some(ix) {
+                                        dropped.set(None);
+                                    }
+                                },
+                                "{rows.read()[ix]}"
+                            }
                         }
-                    }
+                    },
                 }
             }
         }
