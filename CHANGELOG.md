@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.1 - 2026-07-08
+
+Docs-only patch. The README packaged into 2.0.0 still carried a stale
+pre-release warning line and a malformed crates.io badge link, which
+rendered on crates.io and the docs.rs front page. This release ships the
+refreshed README: fixed badges, the 2.0 compatibility table, a prominent
+link to the live gallery, highlighted code fences, and a precise claim
+about JavaScript (the library ships none of its own; the optional `web`
+feature uses `web-sys` bindings for pointer capture).
+
 ## 2.0.0 - 2026-07-08
 
 The pointer-first release. In-app drag and drop now runs entirely on pointer
