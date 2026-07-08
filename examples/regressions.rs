@@ -30,6 +30,7 @@ fn App() -> Element {
         AccessibleReorderFixture {}
         NativeBoundaryFixture {}
         BridgeFixture {}
+        StaleRectsFixture {}
     }
 }
 
@@ -431,6 +432,51 @@ fn BridgeFixture() -> Element {
                         "log: {log.read().join(\",\")}"
                     }
                 }
+            }
+        }
+    }
+}
+
+// --- stale rects: hit-testing tracks zones that auto-scroll under a drag ------
+// Zone rects are cached at drag start; AutoScroll moves the zones mid-drag.
+// The rect-refresh channel re-measures after every scroll, so hover and the
+// drop land on the zone the user actually sees - not where it sat at pickup.
+
+#[component]
+fn StaleRectsFixture() -> Element {
+    let mut landed = use_signal(|| "none".to_string());
+    rsx! {
+        section {
+            h2 { "Stale rects" }
+            DndProvider::<u32> {
+                AutoScroll {
+                    class: "stale-scroll",
+                    style: "margin-top:12px; max-height:180px; overflow-y:auto; \
+                            width:300px; border:1px solid #ccc;",
+                    // The drag source lives inside the scroll container (as a
+                    // list item would), so captured pointer moves bubble
+                    // through the container and drive its autoscroll.
+                    Draggable::<u32> {
+                        payload: 1u32,
+                        label: "parcel",
+                        id: "stale-drag",
+                        style: "height:50px; padding:10px; border-bottom:1px solid #333; \
+                                background:#fff; cursor:grab; user-select:none; \
+                                display:flex; align-items:center;",
+                        "drag the parcel"
+                    }
+                    for i in 0..8u32 {
+                        DropZone::<u32> {
+                            id: ZoneId(3000 + i as u64),
+                            on_drop: move |_o: DropOutcome<u32>| landed.set(format!("zone {i}")),
+                            class: "stale-zone",
+                            style: "height:70px; border-bottom:1px solid #eee; \
+                                    display:flex; align-items:center; justify-content:center;",
+                            "zone {i}"
+                        }
+                    }
+                }
+                div { id: "stale-status", "data-landed": "{landed}", "landed: {landed}" }
             }
         }
     }

@@ -20,7 +20,7 @@ use dioxus::html::geometry::PixelsVector2D;
 use dioxus::html::{MountedData, ScrollBehavior};
 use dioxus::prelude::*;
 
-use crate::core::{Point, Rect};
+use crate::core::{Point, Rect, RectRefresh};
 
 /// Which axes to auto-scroll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -124,6 +124,11 @@ pub fn AutoScroll(
     // In-flight guard so a burst of dragover events doesn't queue a pile of
     // overlapping async scrolls.
     let busy = use_signal(|| false);
+    // Scrolling this container moves every drop zone inside it, so cached
+    // hit-test rects go stale the moment we scroll. The provider tree's
+    // rect-refresh channel fixes that; optional because AutoScroll also
+    // serves native-boundary pages with no provider at all.
+    let refresh = use_hook(try_consume_context::<RectRefresh>);
 
     let scroll_for = move |point: Point| {
         let Some(m) = mounted.peek().clone() else {
@@ -146,6 +151,12 @@ pub fn AutoScroll(
                                 ScrollBehavior::Instant,
                             )
                             .await;
+                        // The zones just moved under the drag: re-measure
+                        // them so hover and the eventual drop hit what the
+                        // user sees, not where things sat at pickup.
+                        if let Some(refresh) = refresh {
+                            refresh.refresh_all();
+                        }
                     }
                 }
             }
@@ -157,6 +168,15 @@ pub fn AutoScroll(
         div {
             onmounted: move |evt: Event<MountedData>| {
                 mounted.set(Some(evt.data()));
+            },
+            // Any scroll of this container - ours above, or the user's own
+            // wheel/trackpad mid-drag - moves the zones inside it. Ping the
+            // provider tree to re-measure; self-gated thunks make this free
+            // while no drag is in flight.
+            onscroll: move |_| {
+                if let Some(refresh) = refresh {
+                    refresh.refresh_all();
+                }
             },
             // Native boundary drags: dragover fires continuously while
             // hovering. Note: no prevent_default here - drop permission stays

@@ -2,9 +2,9 @@
 
 use dioxus::prelude::*;
 
-use super::registry::ZoneRegistry;
+use super::registry::{RectRefresh, ZoneRegistry};
 use super::state::{DndContext, DragState};
-use super::types::{Point, ZoneId};
+use super::types::{DragId, Point, ZoneId};
 
 /// Provide a `DndContext<T>` (and its zone registry) to this component's
 /// subtree. Call once, high up (or use the
@@ -12,8 +12,52 @@ use super::types::{Point, ZoneId};
 pub fn use_dnd_provider<T: Clone + 'static>() -> DndContext<T> {
     let state = use_store(DragState::<T>::default);
     let announcement = use_signal(String::new);
-    use_context_provider(|| ZoneRegistry::<T>::from_signal(Signal::new(Vec::new())));
-    use_context_provider(move || DndContext::from_parts(state, announcement))
+    let registry = use_context_provider(|| ZoneRegistry::<T>::from_signal(Signal::new(Vec::new())));
+    let ctx = use_context_provider(move || DndContext::from_parts(state, announcement));
+
+    // One rect-refresh channel per provider *tree*: the outermost provider
+    // creates it, nested providers inherit and re-provide the same one. A
+    // scroll surface anywhere below then reaches every registry above it
+    // through a single type-erased handle.
+    let bus = use_hook(|| {
+        // Plain context lookup (not the memoizing hook - we're inside one).
+        try_consume_context::<RectRefresh>()
+            .unwrap_or_else(|| RectRefresh::from_signal(Signal::new(Vec::new())))
+    });
+    use_context_provider(|| bus);
+    // Re-measure this registry on ping - but only mid-drag. Rects are
+    // measured fresh at every pickup, so an idle provider has nothing to
+    // keep current, and the gate makes scroll-event pings free while idle.
+    let key = use_hook(move || {
+        let key = DragId::auto().0;
+        let mut bus = bus;
+        bus.register(
+            key,
+            Callback::new(move |_| {
+                if ctx.dragging() {
+                    registry.refresh_rects();
+                }
+            }),
+        );
+        key
+    });
+    use_drop(move || {
+        let mut bus = bus;
+        bus.unregister(key);
+    });
+
+    ctx
+}
+
+/// The provider tree's [`RectRefresh`] channel: ping `refresh_all()` after
+/// you move layout under a live drag (scrolling a custom container,
+/// collapsing a panel) so hit-testing and `data-over` track the new
+/// geometry. [`crate::autoscroll::AutoScroll`] pings it for you.
+///
+/// # Panics
+/// Panics if no ancestor provided a drag context.
+pub fn use_rect_refresh() -> RectRefresh {
+    use_context()
 }
 
 /// Grab the nearest `DndContext<T>` from context.

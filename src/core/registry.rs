@@ -281,6 +281,81 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 }
 
+/// A payload-type-erased "re-measure your zones" channel, shared by every
+/// registry under one provider tree.
+///
+/// Cached client rects go stale the moment layout moves under a live drag -
+/// scrolling being the everyday case. Registries are per payload type, but
+/// the things that move layout (an auto-scrolling container, your own
+/// scroll surface, a collapsing panel) shouldn't need to know any payload
+/// type to say "geometry changed". Each provider registers a thunk here
+/// that re-measures its own registry **only while it has a drag in
+/// flight**, so pinging the channel from every scroll event costs nothing
+/// while idle.
+///
+/// [`crate::autoscroll::AutoScroll`] pings this automatically after every
+/// scroll it performs (and on any other scroll of its container); grab the
+/// channel with [`crate::core::hooks::use_rect_refresh`] to wire up custom
+/// layout mutators.
+pub struct RectRefresh {
+    thunks: Signal<Vec<(u64, Callback<()>)>>,
+}
+
+impl Copy for RectRefresh {}
+impl Clone for RectRefresh {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl PartialEq for RectRefresh {
+    fn eq(&self, other: &Self) -> bool {
+        self.thunks == other.thunks
+    }
+}
+
+impl RectRefresh {
+    /// Wrap an existing signal. Prefer [`crate::core::hooks::use_dnd_provider`],
+    /// which creates one per provider *tree* (nested providers inherit and
+    /// re-provide the outermost channel).
+    pub fn from_signal(thunks: Signal<Vec<(u64, Callback<()>)>>) -> Self {
+        Self { thunks }
+    }
+
+    /// Ask every provider in the tree to re-measure its zones. Providers
+    /// without a drag in flight ignore the ping, so this is safe to call
+    /// from high-frequency sources like scroll events.
+    pub fn refresh_all(&self) {
+        for (_, thunk) in self.thunks.peek().iter() {
+            thunk.call(());
+        }
+    }
+
+    /// Number of registered providers. Diagnostics and tests.
+    pub fn len(&self) -> usize {
+        self.thunks.peek().len()
+    }
+
+    /// Whether any provider is registered.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Add (or replace, by key) a provider's re-measure thunk.
+    pub(crate) fn register(&mut self, key: u64, thunk: Callback<()>) {
+        let mut thunks = self.thunks.write();
+        if let Some(existing) = thunks.iter_mut().find(|(k, _)| *k == key) {
+            existing.1 = thunk;
+        } else {
+            thunks.push((key, thunk));
+        }
+    }
+
+    /// Remove a provider's thunk (call when the provider unmounts).
+    pub(crate) fn unregister(&mut self, key: u64) {
+        self.thunks.write().retain(|(k, _)| *k != key);
+    }
+}
+
 /// Sort zones spatially: measured rects by (top, left), unmeasured last in
 /// their original relative order.
 fn spatial_sort<T: Clone + 'static>(zones: &mut [ZoneRecord<T>]) {

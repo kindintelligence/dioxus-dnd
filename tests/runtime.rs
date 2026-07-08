@@ -1622,6 +1622,108 @@ fn board_and_selectable_draggables_do_not_render_native_attrs() {
     );
 }
 
+// --- Rect refresh channel --------------------------------------------------
+//
+// One type-erased "re-measure your zones" channel per provider *tree*:
+// nested providers inherit the outermost channel instead of creating their
+// own, so a scroll surface anywhere below reaches every registry with one
+// handle - and a provider unmounting takes its thunk with it.
+
+#[derive(Clone, Props)]
+struct RefreshChannelProps {
+    phase: Shared<u8>,
+    observed: Shared<Vec<(u8, usize)>>,
+}
+
+impl PartialEq for RefreshChannelProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.phase, &other.phase) && Arc::ptr_eq(&self.observed, &other.observed)
+    }
+}
+
+fn refresh_channel_app(props: RefreshChannelProps) -> Element {
+    let phase = *props.phase.lock().unwrap();
+    let observed = props.observed.clone();
+    rsx! {
+        DndProvider::<u8> {
+            if phase == 0 {
+                DndProvider::<u16> {
+                    InnerRefreshProbe {}
+                }
+            }
+            OuterRefreshProbe { phase, observed }
+        }
+    }
+}
+
+#[component]
+fn InnerRefreshProbe() -> Element {
+    // Seen from inside the nested provider: the same shared channel, with
+    // one thunk per provider. A per-provider channel would read 1 here.
+    let bus = use_rect_refresh();
+    assert_eq!(bus.len(), 2, "nested providers must share one channel");
+    rsx! { div {} }
+}
+
+#[derive(Clone, Props)]
+struct OuterRefreshProbeProps {
+    phase: u8,
+    observed: Shared<Vec<(u8, usize)>>,
+}
+
+impl PartialEq for OuterRefreshProbeProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.phase == other.phase && Arc::ptr_eq(&self.observed, &other.observed)
+    }
+}
+
+#[allow(non_snake_case)]
+fn OuterRefreshProbe(props: OuterRefreshProbeProps) -> Element {
+    let bus = use_rect_refresh();
+    props
+        .observed
+        .lock()
+        .unwrap()
+        .push((props.phase, bus.len()));
+    // Pinging is always safe, dragging or not - idle thunks are no-ops.
+    bus.refresh_all();
+    rsx! { div {} }
+}
+
+#[test]
+fn rect_refresh_channel_is_shared_and_unregisters_on_unmount() {
+    let phase = Arc::new(Mutex::new(0u8));
+    let observed: Shared<Vec<(u8, usize)>> = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        refresh_channel_app,
+        RefreshChannelProps {
+            phase: phase.clone(),
+            observed: observed.clone(),
+        },
+    );
+
+    dom.rebuild_in_place();
+    assert_eq!(
+        observed.lock().unwrap().last(),
+        Some(&(0, 2)),
+        "both providers registered on one channel"
+    );
+
+    // Unmount the inner provider; its thunk must leave the channel.
+    *phase.lock().unwrap() = 1;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    // One more settled pass so the probe observes the post-unmount state.
+    *phase.lock().unwrap() = 2;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    assert_eq!(
+        observed.lock().unwrap().last(),
+        Some(&(2, 1)),
+        "the unmounted provider's thunk is gone"
+    );
+}
+
 // --- Bridge zones: one box registered in two type-worlds ------------------
 //
 // The documented cross-type pattern (README "Mixing payload types", the
