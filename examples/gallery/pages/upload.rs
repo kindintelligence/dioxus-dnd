@@ -11,37 +11,87 @@ pub fn UploadPage() -> Element {
         PageIntro {
             kicker: "Beyond the window",
             title: "Upload",
-            lead: "FileDropZone is the one drop where the payload arrives in the native event rather than through context: real files from the desktop, filtered before your handler ever runs.",
+            lead: "Files come from outside your app, so this is the first pattern that crosses the browser boundary: FileDropZone speaks the native drag protocol, filters what arrives, and hands your code real files. No provider, no payload type.",
         }
         UploadDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "FileFilter is a builder: extensions, content_types, max_size, max_files. Accepted files reach on_files as a FileDrop; everything else reaches on_rejected as (FileData, FileRejection) pairs, so the reason (wrong type, too large, too many) is yours to show."
-                }
-                p {
-                    "MIME matching is strict where it matters: image/* matches the slash-delimited prefix, structured suffixes like */*+json work, parameters and case are ignored, and bogus types like imageevil/png do not sneak through."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "The file rides the event.",
+                        "OS file drops are the one case where the payload arrives in the native browser event rather than through Rust context. FileDropZone handles the drag-over ceremony the browser requires and exposes data-over for hover styling.",
+                    ),
+                    (
+                        "Filter before your code runs.",
+                        "FileFilter is a builder: allowed extensions, allowed MIME types, a size cap, a count cap. Files that pass reach on_files as a FileDrop; the rest reach on_rejected paired with the reason, so honest feedback costs a match statement.",
+                    ),
+                    (
+                        "Read where you run.",
+                        "On web, read contents with read_bytes, read_string or byte_stream. On desktop, FileData::path gives the real filesystem path. The same handler compiles for both.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "The zone is fully headless: this demo's dashed border, hover tint and result chips are all page styling on top of the data-over attribute and the two callbacks."
+                }
+            }
+            DioxusNote {
+                p {
+                    "Event handlers can be async: on_files here could await read_bytes for each file directly. Dioxus spawns the future for you; there is no separate effect system to route file reads through."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "FileDropZone props",
+                rows: vec![
+                    ("on_files", "EventHandler<FileDrop>, required", "The accepted files of a drop, with client and element drop coordinates."),
+                    ("filter", "Option<FileFilter>", "Acceptance rules; everything is accepted when omitted."),
+                    ("on_rejected", "EventHandler<Vec<(FileData, FileRejection)>>", "The files that failed, each paired with why."),
+                    ("on_hover", "EventHandler<bool>", "True on drag enter, false on leave, when styling needs more than data-over."),
+                ],
+            }
+            PropsTable {
+                title: "FileFilter builder",
+                rows: vec![
+                    (".extensions([\"png\", \"jpg\"])", "", "Allow-list by file extension; case-insensitive, leading dot optional."),
+                    (".content_types([\"image/*\"])", "", "Allow-list by MIME type. Supports exact types, image/* wildcards, */* for any typed file, and structured suffixes like application/*+json."),
+                    (".max_size(5_000_000)", "", "Reject files over this many bytes."),
+                    (".max_files(6)", "", "Accept at most this many per drop; extras reject as TooMany."),
+                ],
+            }
+            PropsTable {
+                title: "FileRejection variants",
+                rows: vec![
+                    ("Extension", "", "Name didn't end in an allowed extension."),
+                    ("ContentType", "", "Reported MIME type didn't match the allow-list (missing types fail a restricted filter)."),
+                    ("TooLarge", "", "Bigger than max_size."),
+                    ("TooMany", "", "Arrived after the max_files quota was already full."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
                 notes: vec![
                     (
                         "Advisory, not a security boundary:",
-                        "names, types and sizes are attacker-controllable; validate real bytes server-side.",
+                        "names, types and sizes are attacker-controllable; a renamed executable can claim to be a PNG. Validate real bytes server-side.",
                     ),
                     (
-                        "data-over highlights the zone",
-                        "during a native hover, same contract as in-app zones.",
+                        "MIME matching is strict where it matters:",
+                        "wildcards match whole slash-delimited parts, so imageevil/png never sneaks past image/*; parameters and case are ignored.",
                     ),
-                    ("Web reads bytes, desktop reads paths;", "the same handler compiles for both."),
+                    (
+                        "Rejections don't consume slots:",
+                        "a file bounced on type doesn't count against max_files, so valid files behind it still land.",
+                    ),
                     (
                         "Windows desktop file drops have webview quirks;",
-                        "test your target and consider an input fallback.",
+                        "test your target and consider an input element fallback.",
                     ),
                 ],
             }
@@ -99,15 +149,15 @@ fn UploadDemo() -> Element {
                                 }),
                         );
                 },
-                class: "flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-white/15 p-4 text-center transition data-over:border-[#D97D55] data-over:bg-[#D97D55]/15",
+                class: "flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#7A776C]/30 p-4 text-center transition data-over:border-[#1C4A38] data-over:bg-[#1C4A38]/15",
                 if accepted.read().is_empty() && refused.read().is_empty() {
-                    p { class: "text-sm font-medium text-[#b8ab93]", "Drop images here to upload" }
-                    p { class: "text-[12px] text-[#9c8f77]", "Up to 6 images, 5 MB each" }
+                    p { class: "text-sm font-medium text-[#45423B]", "Drop images here to upload" }
+                    p { class: "text-[12px] text-[#7A776C]", "Up to 6 images, 5 MB each" }
                 } else {
                     if !accepted.read().is_empty() {
                         div { class: "flex flex-wrap justify-center gap-1.5",
                             for n in accepted.read().clone() {
-                                span { class: "inline-flex items-center gap-1.5 rounded-md bg-[#B8C4A9]/20 px-2 py-1 text-[11px] font-medium text-[#c9d4ba]",
+                                span { class: "inline-flex items-center gap-1.5 rounded-md bg-[#6C9984]/20 px-2 py-1 text-[11px] font-medium text-[#1C4A38]",
                                     span { DocGlyph {} }
                                     "{n}"
                                 }
@@ -117,7 +167,7 @@ fn UploadDemo() -> Element {
                     if !refused.read().is_empty() {
                         div { class: "flex flex-wrap justify-center gap-1.5",
                             for m in refused.read().clone() {
-                                span { class: "inline-flex items-center rounded-md bg-[#D97D55]/20 px-2 py-1 text-[11px] font-medium text-[#eda87f]",
+                                span { class: "inline-flex items-center rounded-md bg-[#F1D9D1] px-2 py-1 text-[11px] font-medium text-[#8B3A2E]",
                                     "{m}"
                                 }
                             }

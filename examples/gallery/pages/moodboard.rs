@@ -11,36 +11,82 @@ pub fn MoodboardPage() -> Element {
         PageIntro {
             kicker: "Structure",
             title: "Moodboard",
-            lead: "CanvasDropZone is the free-position primitive for whiteboards, node editors and floor planners: drop anywhere and you get back a corrected top-left position, not a slot index.",
+            lead: "CanvasDropZone is the free-position primitive for whiteboards, node editors and floor planners. A drop doesn't mean \"slot 3\" here; it means \"exactly there\", and the zone hands you a corrected top-left position ready to write into your model.",
         }
         MoodboardDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "A completed CanvasDrop gives you two points: pointer, the raw canvas-relative pointer position, and position, which is pointer minus the grab offset (where inside the element you picked it up), then snapped and clamped if you configured SnapGrid or Bounds. Writing position back into your model is the whole loop."
-                }
-                p {
-                    "Bounds clamps the top-left point only; use Bounds::clamp_item with the element's size when the whole item must stay inside."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "Position, not order.",
+                        "A completed drop delivers a CanvasDrop with two points, both relative to the canvas: pointer is the raw release position, and position is the corrected top-left where the element should land.",
+                    ),
+                    (
+                        "The grab offset does the polish.",
+                        "position starts as pointer minus grab: where inside the element you originally picked it up. That is why a note lands exactly where its ghost was, instead of jumping so its corner meets the cursor tip.",
+                    ),
+                    (
+                        "Then snap, then clamp.",
+                        "If you configure a SnapGrid the position rounds to the grid; if you configure Bounds it clamps inside. The order is fixed (grab correction, snap, clamp) so results are predictable. Writing position back into your model is the whole loop.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "The notes are ordinary Draggables positioned absolutely from your own model. The canvas doesn't own their layout; it only reports where each drop should put them, which keeps pan/zoom layers and custom rendering entirely in your hands."
+                }
+            }
+            DioxusNote {
+                p {
+                    "The inline style interpolates model values straight into rsx: left and top come from note.x and note.y. There is no separate styling system to learn; a signal write to those fields moves the note on the next render."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "CanvasDropZone props",
+                rows: vec![
+                    ("on_drop", "EventHandler<CanvasDrop<T>>, required", "The completed drop with corrected position."),
+                    ("snap", "Option<SnapGrid>", "Round positions to a square grid; SnapGrid(16.0) snaps to 16px."),
+                    ("bounds", "Option<Bounds>", "Clamp the top-left into width by height. See clamp_item when the whole element must stay inside."),
+                    ("keyboard", "CanvasKeyboardPlacement = Center", "Where keyboard-driven drops land: the zone center, the origin, or a fixed point."),
+                    ("id / label", "Option<ZoneId> / Option<String>", "Identity and screen-reader name, as on every zone."),
+                ],
+            }
+            PropsTable {
+                title: "CanvasDrop<T> fields",
+                rows: vec![
+                    ("payload", "T", "The dragged value."),
+                    ("position", "Point", "Corrected top-left: pointer minus grab, snapped and clamped. Write this into your model."),
+                    ("pointer", "Point", "The raw canvas-relative release position, untouched, when you need your own math."),
+                ],
+            }
+            PropsTable {
+                title: "Geometry helpers",
+                rows: vec![
+                    ("client_to_canvas / canvas_to_client", "(Point, Rect) -> Point", "Convert between viewport and canvas-local coordinates."),
+                    ("canvas_position(pointer, grab, snap, bounds)", "-> Point", "The exact correction pipeline the zone applies, public for previews and custom flows."),
+                    ("Bounds::clamp_item(p, w, h)", "-> Point", "Clamp so a whole w by h element stays inside, not just its corner."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
                 notes: vec![
                     (
-                        "The grab offset does the polish:",
-                        "items land where you dropped them visually, not offset by where you grabbed.",
-                    ),
-                    (
                         "Keyboard placement is a policy:",
-                        "Center (default), Origin, or Fixed(point) via the keyboard prop.",
+                        "Center (default), Origin, or Fixed(point) via the keyboard prop, so canvas drops stay keyboard-accessible.",
                     ),
                     (
-                        "client_to_canvas and friends are public",
-                        "for wiring custom pan, zoom or preview interactions.",
+                        "Pan and zoom stay yours:",
+                        "CanvasViewport and the screen/world helpers in core convert coordinates for zoomed planes; the zone itself stays deliberately simple.",
+                    ),
+                    (
+                        "data-active marks the canvas",
+                        "while any drag is in flight, for the dashed \"you can drop here\" outline this demo shows.",
                     ),
                     (
                         "Native boundary drops need their own zone:",
@@ -80,14 +126,14 @@ struct Note {
     y: f64,
 }
 
-/// Soft palette tints for sticky notes, keyed by id. Deliberately kept light
-/// on the midnight page: real paper stickies, dark ink, pinned to a dark board.
+/// Soft paper tints for sticky notes, keyed by id: warm pastels with dark
+/// ink, pinned to the parchment board.
 fn note_color(id: u32) -> &'static str {
     const C: [&str; 4] = [
-        "bg-[#f0d6c6]",
-        "bg-[#cfe0e3]",
-        "bg-[#dde5d1]",
-        "bg-[#f4e9d7]",
+        "bg-[#E8D4BE]",
+        "bg-[#D9E4EC]",
+        "bg-[#E4ECDD]",
+        "bg-[#E9DDB8]",
     ];
     C[id as usize % C.len()]
 }
@@ -143,13 +189,13 @@ fn MoodboardDemo() -> Element {
                             n.y = d.position.y;
                         }
                     },
-                    class: "relative h-56 overflow-hidden rounded-xl bg-[#26211a] bg-[radial-gradient(#3f372b_1px,transparent_1px)] [background-size:16px_16px] ring-1 ring-white/5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] transition data-active:ring-[#B8C4A9]/60",
+                    class: "relative h-56 overflow-hidden rounded-xl bg-[#EEEADF] bg-[radial-gradient(#D7D4C9_1px,transparent_1px)] [background-size:16px_16px] ring-1 ring-[#E8E5D9] shadow-[inset_0_1px_2px_rgba(26,24,21,0.07)] transition data-active:ring-[#6C9984]/60",
                     for note in notes.read().clone() {
                         Draggable::<Note> {
                             payload: note.clone(),
                             label: note.label.clone(),
                             style: "position: absolute; left: {note.x}px; top: {note.y}px;",
-                            class: "w-36 cursor-grab select-none rounded-lg p-3 text-[12px] font-medium leading-snug text-[#4a4235] shadow-[0_6px_18px_-6px_rgba(0,0,0,0.5)] ring-1 ring-black/25 transition hover:-translate-y-0.5 data-dragging:opacity-60 {note_color(note.id)}",
+                            class: "w-36 cursor-grab select-none rounded-lg p-3 text-[12px] font-medium leading-snug text-[#2C2A25] shadow-[0_6px_18px_-6px_rgba(26,24,21,0.10)] ring-1 ring-black/25 transition hover:-translate-y-0.5 data-dragging:opacity-60 {note_color(note.id)}",
                             span { class: "mb-1.5 block h-1.5 w-1.5 rounded-full bg-black/20" }
                             div { "{note.label}" }
                         }

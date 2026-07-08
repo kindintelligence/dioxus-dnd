@@ -13,40 +13,85 @@ pub fn NewsletterBuilderPage() -> Element {
         PageIntro {
             kicker: "Organize",
             title: "Newsletter builder",
-            lead: "The file-manager convention, for free: a plain drag moves a block, holding Cmd or Ctrl drops a copy, and apply_clone_or_move applies whichever happened to your model.",
+            lead: "Users already know this convention from their file manager: a plain drag moves, a drag with Ctrl or Cmd held drops a copy. dioxus-dnd resolves which one happened and hands you the answer; apply_clone_or_move turns it into the right model update.",
         }
         NewsletterDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "During any drag the library resolves the effective drop effect from the held modifiers: Ctrl or Cmd forces Copy, Alt forces Link, otherwise the source's base effect applies. The resolved value arrives in DropOutcome::effect."
-                }
-                p {
-                    "apply_clone_or_move takes a HashMap<ZoneId, Vec<T>> model, an identity function so a move can remove the item from its source, and a clone hook that assigns a fresh id when the drop was a copy."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "The modifier decides the effect.",
+                        "While a drag is in flight, the held modifier keys are sampled on every pointer move. At release, Ctrl or Cmd resolves the effect to Copy and Alt to Link; otherwise the Draggable's base effect stands (Move, unless you set the effect prop).",
+                    ),
+                    (
+                        "The answer arrives in the outcome.",
+                        "Your on_drop handler reads DropOutcome::effect. At this point nothing has happened to your data: the library reports what the user asked for and leaves the interpretation to you.",
+                    ),
+                    (
+                        "apply_clone_or_move interprets it.",
+                        "Give it your HashMap of zone id to Vec model, a key function, and a clone hook. Move removes the matching item from the source zone and appends it to the target. Copy leaves the source alone and passes the item through the clone hook first, which is where you assign a fresh id.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "One handler covers both gestures. The key function tells a move which item to remove (matching by id, not by pointer equality), and the clone hook only runs on copies, so a copied block gets its own identity and the palette keeps the original."
+                }
+            }
+            DioxusNote {
+                p {
+                    "zones.write() returns a guard that lets you mutate the value inside a signal; when the guard drops, everything reading that signal re-renders. next_id is also a signal, so next_id += 1 works from inside the closure and persists across renders."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "DropEffect variants",
+                rows: vec![
+                    ("Move", "default", "The item leaves its source and lands in the target. What most drags mean."),
+                    ("Copy", "", "The target receives a duplicate; the source keeps the original. Forced by Ctrl or Cmd at release."),
+                    ("Link", "", "A reference-style drop, forced by Alt. Rare, but the vocabulary matches the platform convention."),
+                    ("None", "", "Drops disabled. Never overridden by modifier keys."),
+                ],
+            }
+            PropsTable {
+                title: "apply_clone_or_move arguments",
+                rows: vec![
+                    ("zones", "&mut HashMap<ZoneId, Vec<T>>", "Your model: one Vec per zone. An unknown target zone is created rather than dropping the item."),
+                    ("outcome", "DropOutcome<T>", "The drop as delivered; from, to and effect steer what happens."),
+                    ("key", "Fn(&T) -> K", "Extracts each item's identity so a move can find and remove the original. Matches every item with the payload's key."),
+                    ("clone_item", "FnMut(T) -> T", "Runs only on Copy. Assign the fresh id here."),
+                ],
+            }
+            PropsTable {
+                title: "Related helpers",
+                rows: vec![
+                    ("effective_effect(base, modifiers)", "-> DropEffect", "The same modifier resolution the library applies, public for custom handlers."),
+                    ("apply_list_clone_or_move(source, target, outcome, key, clone_item)", "", "The two-Vec version: pass the source and target lists directly, or None for a source-less palette drop."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
                 notes: vec![
                     (
-                        "effective_effect is public",
-                        "if you need the same modifier resolution inside a custom handler.",
-                    ),
-                    (
-                        "Two plain lists instead of a map?",
-                        "apply_list_clone_or_move takes the source and target Vecs directly.",
-                    ),
-                    (
                         "Modifiers are sampled on every pointer move,",
-                        "so the state held at the moment of release is what wins.",
+                        "so the state held at the moment of release is what wins, not what was held at pickup.",
                     ),
                     (
-                        "A base effect of DropEffect::None",
-                        "disables drops entirely and is never overridden by modifiers.",
+                        "Dropping back onto the source zone",
+                        "removes and re-appends, sending the item to the end of its own list. Use a sortable or board slots when in-place order matters.",
+                    ),
+                    (
+                        "Keys should be unique within a zone.",
+                        "A move prunes every source item whose key matches the payload's, so duplicate keys disappear together.",
+                    ),
+                    (
+                        "The keyboard path plays too:",
+                        "a keyboard drop resolves with the base effect, and your handler branches on DropOutcome::effect the same way.",
                     ),
                 ],
             }
@@ -119,7 +164,7 @@ fn NewsletterDemo() -> Element {
                             label: name,
                             on_drop,
                             class: ZONE,
-                            p { class: "mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9c8f77]",
+                            p { class: "mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7A776C]",
                                 "{name}"
                             }
                             for card in zones.read().get(&zone).cloned().unwrap_or_default() {
@@ -134,7 +179,7 @@ fn NewsletterDemo() -> Element {
                                 }
                             }
                             if zone == STAGE && zones.read().get(&zone).map(|v| v.is_empty()).unwrap_or(true) {
-                                p { class: "py-3 text-center text-[12px] text-[#6d6150]",
+                                p { class: "py-3 text-center text-[12px] text-[#BBB8AE]",
                                     "Drop blocks to compose your email"
                                 }
                             }

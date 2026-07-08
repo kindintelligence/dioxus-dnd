@@ -11,40 +11,86 @@ pub fn SharePage() -> Element {
         PageIntro {
             kicker: "Beyond the window",
             title: "Share",
-            lead: "The app boundary, both directions: ExternalDragSource writes real DataTransfer formats other applications understand, and ExternalDropZone classifies whatever arrives from outside.",
+            lead: "The app boundary in both directions. ExternalDragSource writes real DataTransfer formats that other tabs and applications understand; ExternalDropZone classifies whatever the outside world drags in. This is the only place your content meets the native drag protocol.",
         }
         ShareDemo {}
         DocBlock { title: "How it works",
-            Prose {
-                p {
-                    "OutboundContent covers text, links (written as text/uri-list plus text/plain plus text/html so every receiver finds a format it likes), rich HTML with a plain-text fallback, and raw custom format pairs."
-                }
-                p {
-                    "Inbound, ExternalDrop hands you classified payloads (urls, text, html) plus any files; the classify helper is public if you want the same logic elsewhere."
-                }
+            Steps {
+                steps: vec![
+                    (
+                        "Outbound: write every format that fits.",
+                        "OutboundContent describes what leaves. A url is written as text/uri-list, text/plain, and (when titled) a text/html anchor, so URL bars, editors and rich targets each find a representation they like. Text, HTML with a plain fallback, and raw custom pairs cover the rest.",
+                    ),
+                    (
+                        "Inbound: classify what arrives.",
+                        "ExternalDropZone decodes the drop into ExternalPayload values, most specific first: urls parsed out of uri-lists, HTML, plain text, plus any files. The url(), text() and best() helpers pull out what you want in one call.",
+                    ),
+                    (
+                        "Treat inbound as hostile.",
+                        "External HTML and URLs are attacker-controlled. Sanitize markup before rendering it and check URL schemes before navigating. Outbound is guarded for you: generated anchors escape their content and drop the href entirely for javascript:, data: and vbscript: schemes.",
+                    ),
+                ],
             }
         }
         DocBlock { title: "Use it",
             CodeBlock { code: SNIPPET }
+            Prose {
+                p {
+                    "Neither component needs a provider: the browser is the transport here, not the shared context. Try dragging the card into your URL bar, a text editor, or another browser entirely."
+                }
+            }
+            DioxusNote {
+                p {
+                    "This is deliberately the opposite of the in-app pages: payloads are strings in standard formats because the receiving application is not yours. Everywhere inside your app, skip the serialization and let typed Rust values travel through context instead."
+                }
+            }
+        }
+        DocBlock { title: "The API",
+            PropsTable {
+                title: "ExternalDragSource props",
+                rows: vec![
+                    ("content", "OutboundContent, required", "What to place on the outbound DataTransfer."),
+                    ("effect", "DropEffect = Copy", "Advertised to the receiving application; Copy is what drag-out almost always means."),
+                    ("disabled", "bool = false", "Turn the source off without unmounting."),
+                ],
+            }
+            PropsTable {
+                title: "OutboundContent variants",
+                rows: vec![
+                    ("Text(String)", "", "Plain text."),
+                    ("Url or url(url, title)", "", "A link, written in three formats; the constructor takes an optional human title for the HTML anchor."),
+                    ("Html", "html, fallback_text", "Rich content plus the plain-text version for targets that don't take HTML."),
+                    ("Custom(Vec<(format, data)>)", "", "Raw pairs written verbatim, in order, for proprietary formats."),
+                ],
+            }
+            PropsTable {
+                title: "ExternalDropZone and ExternalDrop",
+                rows: vec![
+                    ("on_drop", "EventHandler<ExternalDrop>, required", "Fired with the classified payloads and files; empty drops are swallowed."),
+                    ("on_hover", "EventHandler<bool>", "Enter/leave signal beyond the data-over attribute."),
+                    ("ExternalDrop", "payloads, files, client, element", "All representations offered (most specific first), any files, and where the drop landed."),
+                    ("url() / text() / best()", "-> Option", "Convenience accessors for the first URL, first plain text, or the most specific payload."),
+                ],
+            }
         }
         DocBlock { title: "Good to know",
             ApiNotes {
                 notes: vec![
                     (
                         "Boundary components stay native:",
-                        "this is DataTransfer territory, where pointer events cannot reach.",
-                    ),
-                    (
-                        "Outbound defaults to Copy,",
-                        "which is what dragging out of an app almost always means.",
+                        "files, outside content and drag-out require DataTransfer, which pointer events cannot reach. Everything inside your app should use the typed context instead.",
                     ),
                     (
                         "Typed payloads across windows:",
-                        "the serde feature adds external::typed::store and retrieve, wire-compatible with dioxus-html's own.",
+                        "the serde feature adds external::typed::store and retrieve for JSON payloads between two of your own windows, wire-compatible with dioxus-html's own helpers.",
                     ),
                     (
-                        "Firefox quirk handled:",
-                        "drags always set data so the gesture actually starts.",
+                        "classify is public",
+                        "when you need the same DataTransfer decoding in a custom handler.",
+                    ),
+                    (
+                        "Dangerous schemes lose their href:",
+                        "an outbound javascript: url still ships as plain text, but the generated HTML anchor refuses to make it clickable.",
                     ),
                 ],
             }
@@ -76,19 +122,19 @@ fn ShareDemo() -> Element {
             div { class: "grid grid-cols-1 gap-4 sm:grid-cols-2",
                 ExternalDragSource {
                     content: OutboundContent::url("https://dioxuslabs.com", Some("Dioxus")),
-                    class: "flex cursor-grab items-center justify-between gap-3 rounded-xl bg-gradient-to-b from-[#3d352a] to-[#332c23] px-3.5 py-4 text-[13px] text-[#d9cfbc] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),inset_0_0_0_1px_rgba(255,255,255,0.03),0_1px_2px_rgba(0,0,0,0.5),0_4px_12px_-4px_rgba(0,0,0,0.4)] transition hover:-translate-y-px hover:brightness-[1.06]",
+                    class: "flex cursor-grab items-center justify-between gap-3 rounded-xl bg-gradient-to-b from-[#FBFAF6] to-[#F6F3EC] px-3.5 py-4 text-[13px] text-[#2C2A25] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.05),0_1px_2px_rgba(26,24,21,0.10),0_4px_12px_-4px_rgba(26,24,21,0.08)] transition hover:-translate-y-px hover:brightness-[1.06]",
                     div { class: "min-w-0",
-                        div { class: "font-medium text-[#f4e9d7]", "Dioxus" }
-                        div { class: "truncate text-[11px] text-[#9c8f77]", "dioxuslabs.com" }
+                        div { class: "font-medium text-[#1A1815]", "Dioxus" }
+                        div { class: "truncate text-[11px] text-[#7A776C]", "dioxuslabs.com" }
                     }
-                    span { class: "text-[#B8A98C]", "↗" }
+                    span { class: "text-[#B88B2F]", "↗" }
                 }
                 ExternalDropZone {
                     on_drop: move |d: ExternalDrop| {
                         dropped
                             .set(format!("{} payload(s), {} file(s)", d.payloads.len(), d.files.len()));
                     },
-                    class: "flex min-h-24 items-center justify-center rounded-xl border-2 border-dashed border-white/15 p-3 text-center text-sm text-[#9c8f77] transition data-over:border-[#D97D55] data-over:bg-[#D97D55]/15 data-over:text-[#b8ab93]",
+                    class: "flex min-h-24 items-center justify-center rounded-xl border-2 border-dashed border-[#7A776C]/30 p-3 text-center text-sm text-[#7A776C] transition data-over:border-[#1C4A38] data-over:bg-[#1C4A38]/15 data-over:text-[#45423B]",
                     if dropped.read().is_empty() {
                         "Drop a link or text here"
                     } else {
