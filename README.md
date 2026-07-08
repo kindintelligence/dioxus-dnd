@@ -104,6 +104,7 @@ to their wrapper `div`.
 | `autoscroll` | edge-scrolling containers (`AutoScroll`) | n/a |
 | `a11y` | screen-reader announcements (`LiveRegion`), no-drag reordering (`ReorderButtons`) | n/a |
 | `animate` | FLIP reorder transitions (`FlipItem`, experimental) | n/a |
+| `debug` | dev-only zone inspector (`DndDebugOverlay`) | n/a |
 
 ## How it works
 
@@ -556,6 +557,25 @@ The gallery's *Standup* page shows it live. For *three or more* worlds,
 write the same double registration yourself - everything it uses is public
 (`use_zone_registry`, `use_zone_id`, `ZoneRecord`, `ParentZone`), and the
 Standup page documents the recipe.
+
+## Debug overlay (dev-only)
+
+When a zone won't light up or a drop lands somewhere surprising, render
+`DndDebugOverlay::<T>` inside the provider: every registered zone draws as
+a tinted, labeled outline pinned over the page, rejecting zones dim and go
+dashed while a drag is in flight, the hovered zone fills live (pointer and
+keyboard alike), and a status chip counts zones the registry hasn't
+measured. What it draws *is* the registry - a missing or misplaced outline
+means hit-testing sees exactly the same wrong thing.
+
+It is a **development tool**: unstyled chrome over your UI, not localized.
+Gate it out of release builds yourself:
+
+```rust,ignore
+if cfg!(debug_assertions) {
+    DndDebugOverlay::<Card> {}
+}
+```
 
 ## Examples and website
 

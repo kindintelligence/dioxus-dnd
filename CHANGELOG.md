@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Debug overlay (dev-only).** `DndDebugOverlay<T>` draws every zone
+  registered in a provider as a tinted outline pinned over the page -
+  stable per-id colors, the zone's label and id in a tag, live `data-over`
+  highlighting for pointer and keyboard drags alike, and per-zone
+  acceptance while a drag is in flight (rejecting zones dim and go
+  dashed). A status chip reports the census, including zones the registry
+  hasn't measured (which draw no outline - if the inspector can't see a
+  zone, neither can hit-testing, and now that's visible). Click-through
+  by design, so it never changes the interaction it inspects; it also
+  re-measures rects while idle so outlines don't wait for a drag.
+  Supporting API: `ZoneRegistry::records()`, a subscribing read of every
+  registered zone. Clearly marked dev-only: gate it behind
+  `cfg!(debug_assertions)` or your own flag.
+
 - **Localizable announcements.** Every phrase the crate voices now reads a
   `DndStrings` from context - keyboard announcements ("Picked up {name}…",
   "Dropped in {name}.", "Drag cancelled."), `ReorderButtons` aria-labels,
@@ -68,6 +82,10 @@
 
 ### Tests
 
+- Runtime: the debug overlay draws one outline per measured zone with its
+  label, marks the hovered zone and per-zone acceptance during a drag,
+  skips unmeasured zones while counting them in the status chip, and
+  renders no drag markers while idle.
 - Unit: the built-in English phrases are pinned. Runtime: a provided
   `DndStrings` reading a locale localizes `ReorderButtons` aria-labels and
   the `SelectionCount` badge in SSR output for both languages, while the
