@@ -177,8 +177,9 @@ than replacing it - your declarations win per property, the functional
 ones survive. So grid spacing is just `class: "gap-2"`, and custom column
 tracks are `style: "grid-template-columns: 2fr 1fr 1fr;"`.
 
-See `examples/tailwind.rs` for all of this in one place (`dx serve
---example tailwind --platform web --features web`).
+See the gallery (`dx serve --example gallery --platform web --features
+web`) for all of this in practice: every pattern page styles the library's
+data attributes with Tailwind.
 
 Not using Tailwind? The same contract serves plain CSS: `[data-over]`,
 `[data-intent="into"]`, `[data-sort-handle]`, and so on.
@@ -460,29 +461,20 @@ Nested `DropZone`s discover their parents automatically through context,
 which is what powers hierarchical keyboard traversal. No configuration
 needed.
 
-## Live showcase
+## Live gallery
 
-`examples/showcase.rs` is a full landing page whose centerpiece is a live
-playground: one interactive demo per pattern, with an "outcome tape" that
-prints every `DropOutcome` the library delivers. It is designed to deploy
-as-is as the project website:
+`examples/gallery/` is the project website: a multi-page site with one page
+per pattern, each pairing a live demo with a plain-language walkthrough and
+an API reference. It deploys as-is to GitHub Pages:
 
 ```sh
-dx serve --example showcase --platform web --features web
+dx serve --example gallery --platform web --features web
 ```
 
 There is also a focused board example:
 
 ```sh
 dx serve --example kanban --platform web --features web
-```
-
-And a focused canvas example that keeps the core headless while using
-`CanvasDropZone` snapping and `Bounds::clamp_item` for item-aware bounds,
-with app-owned handles and edges layered on top:
-
-```sh
-dx serve --example canvas --platform web --features web
 ```
 
 ## Browser regression checks
@@ -498,11 +490,13 @@ npm install
 npm run test:web
 ```
 
-The spec checks sortable overlay cleanup, pointer canvas grab-offset
-placement, the focused canvas workflow (connect handles, move a node, create
-a node from the palette, keep nodes inside bounds), focused canvas pan/zoom
-movement, keyboard canvas placement, and native boundary paths for file
-drops, external text/link drops and drag-out payload formats.
+The spec drives the headless fixtures in `examples/regressions.rs`: the
+sortable overlay ghost and its cleanup, releases outside a list or grid
+committing no reorder, autoscroll following edge drags (and stopping when
+the pointer leaves), canvas grab-offset placement, drop fall-through past
+rejecting zones, the Ctrl-drag copy convention, reorder buttons inside
+sortable rows, and the native boundary paths for file drops, external
+text/link drops and drag-out payload formats.
 
 ## Feature flags
 
@@ -516,7 +510,7 @@ drops, external text/link drops and drag-out payload formats.
   your styled `DragOverlay`. Off by default: the core stays dependency-free,
   and mouse pointer-drag falls back to a best-effort reconciliation (see
   [Platform notes](#platform-notes)). Enable it for web builds:
-  `dx serve --example tailwind --platform web --features web`, or
+  `dx serve --example gallery --platform web --features web`, or
   `features = ["web"]` in your `Cargo.toml`. Touch and pen never need it.
 
 ## Platform notes

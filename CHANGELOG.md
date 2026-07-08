@@ -1,216 +1,101 @@
 # Changelog
 
-## Unreleased
+## 2.0.0 - 2026-07-08
 
-Tailwind-ready styling pass. The library stays headless; drag state is now
-uniformly exposed as **presence-based data attributes** - present while
-active, *absent* otherwise (previously boolean attributes rendered as
-`="false"` when inactive) - so Tailwind variants like
-`data-dragging:opacity-50` and CSS `[data-dragging]` match only active
-elements. Existing `[data-…="true"]` selectors keep working.
+The pointer-first release. In-app drag and drop now runs entirely on pointer
+events and keyboard input with typed Rust payloads; native browser drag is
+reserved for the app boundary, where `DataTransfer` is the only transport.
+Styling is Tailwind-ready through presence-based data attributes, and the
+project website is a new multi-page gallery that teaches every pattern.
 
-- New state attributes: `data-over` + `data-active` on `DropZone`
-  (highlight the hovered zone / reveal targets while a compatible drag is
-  in flight - for pointer, touch and keyboard drags alike), `data-over` on
-  `FileDropZone` and `ExternalDropZone` (no more `on_hover` wiring for the
-  classic highlight), `data-dragging` + `data-disabled` on `Draggable` and
-  `PointerDraggable`, `data-active` on `CanvasDropZone`.
-- New input policy: `DragInputMode::{Pointer, Native, Hybrid}`. Core
-  `Draggable` now has `native: false` for keyboard-only/native-off wrappers,
-  and `PointerDraggable` has an `input` prop for choosing native, pointer, or
-  compatibility behavior.
-- `SortableList` and `SortableGrid` now default to pointer events for mouse,
-  touch and pen, avoiding the browser's native drag image during reorders.
-  Set `input: DragInputMode::Native` or `Hybrid` to opt back into HTML5 drag.
-- Now presence-based: `data-dragging` / `data-drop-target` on
-  `SortableList` and `SortableGrid` items, `data-active` on `BoardSlot`,
-  `data-selected` on `SelectableDraggable`, `data-intent` on
-  `TreeNodeTarget` (absent instead of `=""` when not hovered).
-- New `item_class` prop on `SortableGrid`: classes for the
-  library-rendered tile wrappers - the elements that carry `data-dragging`
-  / `data-drop-target`. `SortableList` row wrappers are styled from the
-  list root with child selectors such as `[&>[data-drop-target]]:...`.
-- `DragOverlay` now forwards attributes (`class`, …) to its wrapper, so
-  the drag ghost styles directly (`class: "rotate-3 scale-105 shadow-xl"`).
-- Forwarded `style` props are now **merged after** functional inline
-  styles instead of replacing them: `touch-action: none` on
-  `PointerDraggable` (previously any user `style` silently broke touch
-  dragging), positioning on `DragOverlay`, and the `display: grid` layout
-  on `SortableGrid` (per-property overrides like custom
-  `grid-template-columns` win; previously SSR emitted two conflicting
-  `style` attributes).
-- **Fixed native-drag hover misfiring when rows/rows' content have child
-  elements**: `SortableList`'s midpoint test and `TreeNodeTarget`'s intent
-  bands used drag-event element offsets, which browsers report relative to
-  the *child under the cursor* (a grip icon, a text div) - so a neighbor
-  row could light up the moment the pointer grazed its edge, and tree
-  drops could land with a different intent than the hovered band showed.
-  Both now hit-test client coordinates against rects measured at drag
-  start, matching the pointer path (the sortable also re-measures at native
-  drag start, so it's no longer stale after scrolling).
-- **Fixed the live preview squashing rows together when styling adds
-  margins/gaps between them**: displaced rows translated by the bare row
-  size, overlapping by the margin mid-drag. The step is now the measured
-  slot pitch (distance between consecutive row origins, which includes
-  margin/gap).
-- New `examples/tailwind.rs`: cards, sortable list with a touch grip, tree
-  intents and file drop, styled entirely with utility classes.
-- README: new "Styling (Tailwind-ready)" section with the full attribute
-  table, ghost styling, and `group-data-*` / `in-data-*` recipes for
-  styling children of state-carrying wrappers.
-- New **`web` feature**: native pointer capture via `web-sys` (pinned to the
-  version `dioxus-web` uses) for `SortableList`, `SortableGrid` and
-  `PointerDraggable`. On press the drag source grabs the pointer, so a mouse
-  reorder/drag stays glued to it even when the cursor leaves - release
-  anywhere commits. Off by default; the core stays dependency-free. All
-  `web-sys` is isolated to one feature-gated `core::platform` module.
-- **Fixed mouse pointer-drags aborting when the cursor left the drag
-  surface.** `SortableList` moved its move/up handling to the container and
-  cancelled on `pointerleave`; without pointer capture (which Dioxus 0.8
-  does not expose) a mouse straying off the list silently dropped the drag.
-  The eager `pointerleave` cancel is gone, and when the `web` feature is off
-  a capture-free fallback reconciles a mouse released outside via its
-  held-button state. `PointerDraggable` shares the same recovery.
-- Sortable example fix: the touch grip now carries the `cursor-grab`
-  affordance instead of the whole row advertising as draggable.
-- The pointer/`web` drag path now reaches every in-app component:
-  `BoardItem` and `SelectableDraggable` gained an `input: DragInputMode`
-  prop (forwarded to their inner `PointerDraggable`), and `CanvasDropZone`
-  now registers as a drop zone so `PointerDraggable` (touch, pen, and mouse
-  under `web`) can drop onto it - previously canvas accepted native HTML5
-  drags only. Native and pointer drops place the element identically.
-- Breaking: `DropOutcome` gained a `grab` field (pointer offset within the
-  dragged element at pickup); `element - grab` is the element's landing
-  top-left. `PointerDraggable` now records the real grab offset (from the
-  press point within the element) instead of the bare threshold travel, so
-  the `DragOverlay` ghost is held at the grab point - matching the native
-  path - and canvas drops land exactly.
-- New `SortableList::overlay` prop: callers can render a lightweight,
-  fixed-position ghost that follows the pointer while the in-flow source row
-  becomes the live gap. The overlay wrapper is sized from the measured source
-  row, so a headless overlay can look exactly like the original row. Native
-  HTML5 drags keep the browser drag image unchanged.
-- **Fixed a `SortableGrid` mouse-drag hang** in the dependency-free build: a
-  mouse released outside the grid left the drag stuck forever (the grid
-  lacked the held-button recovery `SortableList` already had). The grid now
-  recovers on pointer re-entry, and its container gates pointer input by
-  type like the list does.
-- The sortable touch grip no longer hard-codes `cursor`/width inline, so
-  `[data-sort-handle]` classes (cursor, size, colour) actually apply; only
-  functional styles (`touch-action`, `user-select`, centring) stay inline.
-- `CanvasDropZone` now reads `snap`/`bounds` through signals, so runtime
-  changes to them apply to pointer and keyboard drops, not just native
-  mouse drops.
-- `PointerDraggable`, `BoardItem` and `SelectableDraggable` now default to
-  pointer events for mouse, touch and pen. Native drag is still available
-  through `DragInputMode::Native` or `Hybrid`, and the native boundary
-  components (`FileDropZone`, `ExternalDropZone`, `ExternalDragSource`,
-  `external::typed`, plain `Draggable`) are unchanged.
-- Browser regressions now cover the native boundary too: synthetic
-  `DataTransfer` file drops, external text/link drops and drag-out payload
-  formats are checked through the Dioxus-served gallery.
-- `CanvasDropZone` now syncs label changes into the zone registry, matching
-  `DropZone`, and the README documents canvas pointer/position semantics
-  plus helper APIs (`canvas_position`, `client_to_canvas`,
-  `canvas_to_client`, `Bounds::clamp_item`, `Bounds::clamp_rect`) and the
-  existing modifier chain for richer constraints.
-- Keyboard drops now deliver zone-relative `DropOutcome::element` from the
-  selected target's center instead of always reporting `(0, 0)`, so keyboard
-  drops into `CanvasDropZone` land in the canvas rather than at origin.
-- Breaking: `DropOutcome` now carries `mode: DragMode`, so drop handlers can
-  tell whether a completed drop came from pointer, native or keyboard input.
-  Manual `DropOutcome` literals must add the appropriate mode, for example
-  `mode: DragMode::Pointer` in pointer-drop tests.
-- `CanvasDropZone` now has `keyboard: CanvasKeyboardPlacement` for explicit
-  keyboard placement. The default `Center` policy preserves the current
-  selected-target center behavior; `Origin` and `Fixed(Point)` are available
-  for apps that want deterministic keyboard placement.
-- New `examples/canvas.rs`: a focused node-editor style demo using
-  `CanvasDropZone`, `PointerDraggable`, `SnapGrid` and
-  `Bounds::clamp_item` for snap grid and item-aware bounds while keeping the
-  canvas API headless. Handles and edges are example state layered on top of
-  the drop primitive.
-- `BoardSlot` now registers as a real zone, so precise board insertion slots
-  work through the pointer and keyboard paths, not just native HTML drag.
-  Slots also expose `data-over` while hovered and default to an "Insert at
-  position N" registry label for keyboard announcements.
-- `apply_move` now adjusts same-column forward insertions after removing the
-  source item. Moving a card from index 0 to slot 3 now lands in the intended
-  slot instead of one position too far down.
-- `AutoScroll` now works for default mouse pointer drags by using held-button
-  pointer state, while passive mouse hover near an edge stays inert. An
-  optional `active` prop lets callers explicitly force or suppress
-  pointer-move scrolling when they track drag state themselves.
-- Browser regressions now serve the showcase example and cover autoscroll in
-  the real sortable demo: passive hover does not scroll, and dragging the
-  sortable handle near the edge increases `scrollTop`.
-- `TreeNodeTarget` now keeps its one-time zone registry callback current
-  across rerenders. Updated `node`, `label`, `accepts`, `row_height` and
-  `on_drop` props are mirrored through signals, so pointer and keyboard
-  registry drops report the current target, current intent bands and current
-  acceptance rules.
-- Tree coverage now locks down the pure helpers and registry behavior:
-  `NodeId::from`, intent quarter boundaries, out-of-range offsets, parent-map
-  cycle safety, dynamic tree target props, and exact-intent rechecking after
-  the registry-level "any intent accepts" filter.
-- `FileFilter::content_types` now has a real MIME matcher instead of prefix
-  matching. It supports exact types, `type/*`, `*/*`,
-  `application/*+json` and `*/*+json`, with case-insensitive comparison and
-  file-side MIME parameters ignored. Malformed media types, accidental
-  subtype-only wildcards such as `*/json`, and bogus prefixes such as
-  `imageevil/png` are rejected.
-- `FileFilter::extensions` now trims whitespace and accepts a leading dot, so
-  `.png`, `png` and mixed-case extensions normalize to the same rule.
-- Gallery rework (`examples/gallery.rs`): three demos grew into real
-  interfaces. The file manager is now a mailbox that triages multi-select
-  stacks and branches on `DropOutcome::effect` (a Cmd-drop on the Receipts
-  label files a copy and keeps the originals in the inbox). The content
-  calendar is now a sprint board with `BoardSlot` insertion gaps that open
-  between cards, plus a WIP limit: a full column stops lighting up and
-  refuses the drop. The flat tree is now a real reparenting file tree with
-  indent guides, folders-only `Into` acceptance, and `would_create_cycle`
-  keeping a dragged folder out of its own subtree.
-- Gallery midnight theme: the whole page now wears the mailbox panel's dark
-  umber palette (page #211c15, cards #2b2620, items #362f26) with
-  `color-scheme: dark`, black-based shadows and white-alpha borders. Two
-  deliberate exceptions: moodboard sticky notes stay pastel with dark ink,
-  and photo tiles stay vivid, with the album's drop target brightening
-  instead of dimming.
-- Gallery accessibility and touch: every in-app `DndProvider` now renders a
-  `LiveRegion`, the auto-scrolling podcast queue uses `touch_handle: true`
-  so rows keep finger-scrolling while the dotted grip drags, and the upload
-  zone gained a `FileFilter` (images, 5 MB, 6 files) that shows per-file
-  rejection reasons.
-- **Fixed auto zone ids colliding with explicit ids.** `ZoneId::auto` (and
-  `DragId::auto`) drew from a counter starting at 1, and the zone registry
-  replaces records by id, so an auto id from `use_zone_id` (a `BoardSlot`, an
-  id-less `DropZone`) could land exactly on a neighboring zone's hand-picked
-  low id and silently knock it out of the registry: the zone stopped
-  highlighting and receiving drops, dependent on mount order. Auto ids now
-  start at 2^32, so any explicit id that fits in a `u32` can never collide.
-  Covered by a unit test on the id range and a runtime regression mounting
-  low-id columns full of auto-id slots.
-- Gallery card refinement: cards are borderless, defined by a top-lit
-  gradient, a 1px inset edge light and real ambient shadows, with a
-  one-pixel hover lift that presses back down on grab and accent bars that
-  bloom softly. Lists (playlist, weekly focus, podcast queue, file tree)
-  adopted the mailbox's language: contained wells with hairline dividers,
-  the grabbed row lifting out as a lit card. Sprint columns and the
-  moodboard canvas recess instead, so surfaces float and containers sink.
-  Keyboard focus shows a clay ring via `focus-visible`.
-- Gallery sprint board: insertion slots no longer grow in the layout (which
-  shifted cards under the pointer while hit-testing ran against rects cached
-  at drag start). Slots keep constant geometry and show a glowing clay
-  insertion line instead; the visible 12px gap hides a 32px hit band
-  (`pointer-events-none`, negative margins) so pointing near a seam
-  resolves to it, and the two no-op slots hugging the dragged card do not
-  light at all.
-- Gallery sidebar: a detached floating navigation card, pinned on the left
-  from lg up and an off-canvas drawer below that, opened with a
-  double-chevron button and dismissed by the flipped chevrons, the scrim,
-  or any link. Group kickers and demo links scroll smoothly to anchor ids
-  that `Section` and `GroupLabel` derive from their visible titles, so new
-  sections need no wiring beyond their name.
+### Breaking: one input model
+
+- In-app components are pointer + keyboard only. Removed `PointerDraggable`,
+  `DragInputMode`, `DragMode::Native`, `Draggable::native`, the `input`
+  props on sortable/grid/board/multiselect components, and every in-app
+  native `ondrag*` branch (`DropZone`, `SortableList`, `SortableGrid`,
+  `BoardSlot`, `TreeNodeTarget`, `CanvasDropZone`). `Draggable` is now the
+  one in-app drag source, and there is no mode to choose.
+- Native `DataTransfer` remains exactly where the app boundary requires it:
+  `FileDropZone`, `ExternalDropZone`, `ExternalDragSource`,
+  `external::typed`, and `AutoScroll`'s dragover listener.
+- `DropOutcome` gained two fields: `mode: DragMode` (`Pointer` or
+  `Keyboard`) and `grab: Point` (the pointer offset inside the element at
+  pickup; `element - grab` is the landing top-left). Manual `DropOutcome`
+  literals must add both.
+- `ZoneId::auto` and `DragId::auto` now start at 2^32 so auto-generated ids
+  can never collide with explicit `u32`-range ids and silently replace a
+  neighboring zone in the registry (previously dependent on mount order).
+
+### Styling: presence-based data attributes
+
+- Drag state is exposed as attributes that are present while active and
+  absent otherwise, so Tailwind variants like `data-dragging:opacity-50`
+  and CSS `[data-over]` selectors match only active elements: `data-over` +
+  `data-active` on `DropZone`, `FileDropZone` and `ExternalDropZone`,
+  `data-dragging` + `data-disabled` on `Draggable`, `data-dragging` +
+  `data-drop-target` on sortable/grid items, `data-active` + `data-over` on
+  `BoardSlot`, `data-selected` on `SelectableDraggable`, `data-intent` on
+  `TreeNodeTarget`, `data-active` on `CanvasDropZone`, and
+  `data-sort-handle` on touch grips.
+- Forwarded `style` props merge after functional inline styles instead of
+  replacing them, so `touch-action`, overlay positioning and the grid's
+  `display: grid` survive while your declarations win per property.
+- New `item_class` prop on `SortableGrid` for the library-rendered tile
+  wrappers; `DragOverlay` forwards `class` and friends to the ghost.
+
+### Pointer path
+
+- New `web` feature: real pointer capture via `web-sys`, so a mouse drag
+  stays glued to its source when the cursor leaves it. Off by default; the
+  core stays dependency-free with a held-button recovery fallback, and a
+  formal gesture state machine (`transition`, `GesturePhase`,
+  `GestureEvent`, `GestureEffect`) drives every drag.
+- New `SortableList::overlay` prop: a fixed-position ghost sized from the
+  measured source row while the in-flow row becomes the live gap.
+- Live preview translates rows by the measured slot pitch (margins and gaps
+  included) so spacing never squashes mid-drag; hover hit-tests client
+  coordinates against rects measured at drag start.
+- A release outside a list or grid commits no reorder, and a drop over a
+  rejecting zone falls through to an accepting zone stacked beneath it.
+  Missed drops re-measure zones and retry within 48px for touch.
+- `AutoScroll` follows default mouse pointer drags via held-button state,
+  never scrolls on passive hover, stops when the pointer leaves the
+  container, and takes an optional `active` gate.
+- `Ctrl`/`Cmd` at release resolves pointer drops to `Copy` and `Alt` to
+  `Link` (`effective_effect` is public); keyboard drops report the selected
+  zone's center in `DropOutcome::element` and honor
+  `CanvasKeyboardPlacement` (`Center`, `Origin`, `Fixed`).
+- `BoardSlot` registers as a real zone (pointer, touch and keyboard can
+  target it) and `apply_move` adjusts same-column forward insertions.
+- `TreeNodeTarget`, `BoardSlot` and `CanvasDropZone` mirror changing props
+  through signals so their one-time registry callbacks always read current
+  values.
+- `FileFilter::content_types` gained a real MIME matcher (exact types,
+  `type/*`, `*/*`, structured `*+json` suffixes, parameters and case
+  ignored, malformed patterns rejected), and `extensions` normalizes dots,
+  case and whitespace.
+
+### The gallery website
+
+- `examples/gallery/` replaces the showcase, tailwind and canvas examples:
+  a multi-page site with one page per pattern (fourteen in all), each
+  pairing a live demo with a numbered walkthrough, an annotated snippet, a
+  "New to Dioxus?" callout and a real API reference. Deployed to GitHub
+  Pages by CI.
+- The design follows the KI-U paper system: paper and ink scales, one
+  forest-green accent, earth tones used sparingly, Poppins for UI text and
+  Geist Mono for code, no glow shadows. Code panels are inverse-ink with a
+  homegrown Rust/rsx highlighter (no JavaScript highlighter).
+- The landing page hero is itself a demo: draggable paper scraps on a
+  `CanvasDropZone`.
+- Removed `examples/showcase.rs`, `examples/tailwind.rs` and
+  `examples/canvas.rs`. The Playwright suite now drives headless fixtures
+  in `examples/regressions.rs` on a single dev server, covering overlay
+  geometry and cleanup, outside-release cancellation for lists and grids,
+  autoscroll edge behavior, canvas grab-offset placement, drop
+  fall-through, the Ctrl-drag copy convention, reorder buttons inside
+  sortable rows, and the native boundary paths.
 
 ## 1.0.0
 
