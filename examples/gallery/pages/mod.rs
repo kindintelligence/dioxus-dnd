@@ -10,6 +10,7 @@ pub mod reading_list;
 pub mod share;
 pub mod shuffle;
 pub mod sprint_board;
+pub mod standup;
 pub mod upload;
 pub mod weekly_focus;
 
@@ -25,5 +26,6 @@ pub use reading_list::*;
 pub use share::*;
 pub use shuffle::*;
 pub use sprint_board::*;
+pub use standup::*;
 pub use upload::*;
 pub use weekly_focus::*;

@@ -34,7 +34,8 @@ pub mod prelude {
         use_dnd, use_dnd_provider, use_zone_id, use_zone_registry, world_delta_to_screen,
         world_to_screen, CanvasViewport, DndContext, DndProvider, DragId, DragMode, DragModifier,
         DragOverlay, DragState, Draggable, DropEffect, DropOutcome, DropZone, GestureEffect,
-        GestureEvent, GesturePhase, ModifierCtx, Point, Rect, ZoneId, ZoneRecord, ZoneRegistry,
+        GestureEvent, GesturePhase, ModifierCtx, ParentZone, Point, Rect, ZoneId, ZoneRecord,
+        ZoneRegistry,
     };
     pub use crate::dragout::{ExternalDragSource, OutboundContent};
     pub use crate::external::{classify, ExternalDrop, ExternalDropZone, ExternalPayload};

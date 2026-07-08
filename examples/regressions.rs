@@ -29,6 +29,7 @@ fn App() -> Element {
         CopyMoveFixture {}
         AccessibleReorderFixture {}
         NativeBoundaryFixture {}
+        BridgeFixture {}
     }
 }
 
@@ -310,6 +311,126 @@ fn AccessibleReorderFixture() -> Element {
                         }
                     }
                 },
+            }
+        }
+    }
+}
+
+// --- bridge: the same ZoneId registered in two payload worlds -----------------
+// The documented cross-type pattern (README "Mixing payload types", gallery
+// "Standup"): tickets (&str) and people (u32) drag in separate providers; one
+// shared box registers in both registries and each drop arrives through its
+// own typed callback. A world's other zones stay dark for the foreign drag.
+
+#[component]
+fn DualZone(
+    on_ticket: EventHandler<DropOutcome<&'static str>>,
+    on_person: EventHandler<DropOutcome<u32>>,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    let dnd_a = use_dnd::<&'static str>();
+    let dnd_b = use_dnd::<u32>();
+    let mut reg_a = use_zone_registry::<&'static str>();
+    let mut reg_b = use_zone_registry::<u32>();
+    let zone_id = use_zone_id();
+    let mounted = use_signal(|| None::<std::rc::Rc<dioxus::html::MountedData>>);
+    let rect = use_signal(|| None::<Rect>);
+    use_hook(move || {
+        reg_a.register(ZoneRecord {
+            id: zone_id,
+            parent: None,
+            label: Some("bridge".into()),
+            on_drop: Callback::new(move |o| on_ticket.call(o)),
+            accepts: None,
+            mounted,
+            rect,
+        });
+        reg_b.register(ZoneRecord {
+            id: zone_id,
+            parent: None,
+            label: Some("bridge".into()),
+            on_drop: Callback::new(move |o| on_person.call(o)),
+            accepts: None,
+            mounted,
+            rect,
+        });
+    });
+    use_drop(move || {
+        reg_a.unregister(zone_id);
+        reg_b.unregister(zone_id);
+    });
+    rsx! {
+        div {
+            "data-active": if dnd_a.dragging() || dnd_b.dragging() { "true" },
+            "data-over": if dnd_a.over() == Some(zone_id) || dnd_b.over() == Some(zone_id) { "true" },
+            onmounted: move |evt: Event<dioxus::html::MountedData>| {
+                let mut mounted = mounted;
+                mounted.set(Some(evt.data()));
+            },
+            ..attributes,
+            {children}
+        }
+    }
+}
+
+#[component]
+fn BridgeFixture() -> Element {
+    let mut log = use_signal(Vec::<String>::new);
+    rsx! {
+        section {
+            h2 { "Bridge zone" }
+            DndProvider::<&'static str> {
+                DndProvider::<u32> {
+                    div { style: "display:flex; gap:12px;",
+                        Draggable::<&'static str> {
+                            payload: "DND-41",
+                            label: "ticket",
+                            id: "bridge-ticket",
+                            style: "width:120px; padding:10px; border:1px solid #333; \
+                                    background:#fff; cursor:grab; user-select:none;",
+                            "ticket DND-41"
+                        }
+                        Draggable::<u32> {
+                            payload: 7u32,
+                            label: "person",
+                            id: "bridge-person",
+                            style: "width:120px; padding:10px; border:1px solid #333; \
+                                    background:#fff; cursor:grab; user-select:none;",
+                            "person #7"
+                        }
+                    }
+                    // A ticket-world-only zone: lights for ticket drags, stays
+                    // dark (and unreachable) for person drags.
+                    DropZone::<&'static str> {
+                        id: ZoneId(2001),
+                        on_drop: move |o: DropOutcome<&'static str>| {
+                            log.write().push(format!("shipped:{}", o.payload));
+                        },
+                        class: "ticket-only",
+                        style: "margin-top:16px; width:260px; min-height:50px; \
+                                border:2px dashed #999; padding:8px;",
+                        "tickets only"
+                    }
+                    // The bridge: one box, both worlds.
+                    DualZone {
+                        id: "bridge-zone",
+                        on_ticket: move |o: DropOutcome<&'static str>| {
+                            log.write().push(format!("ticket:{}", o.payload));
+                        },
+                        on_person: move |o: DropOutcome<u32>| {
+                            log.write().push(format!("person:{}", o.payload));
+                        },
+                        style: "margin-top:16px; width:260px; min-height:50px; \
+                                border:2px dashed #393; padding:8px;",
+                        "agenda (both worlds)"
+                    }
+                    div {
+                        id: "bridge-status",
+                        "data-log": log.read().join(","),
+                        "log: {log.read().join(\",\")}"
+                    }
+                }
             }
         }
     }

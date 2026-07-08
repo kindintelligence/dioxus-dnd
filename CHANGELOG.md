@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased
+
+Cross-type drops, documented and de-trapped. Providers stay monomorphic -
+that's the crate's core guarantee - but two things now make living next to
+a second provider first-class.
+
+### Added
+
+- `ZoneRegistry::contains(id)` and `ZoneRegistry::ascend(current)`. The
+  `ParentZone` context is shared across payload types, so a `DropZone<A>`
+  nested inside a `DropZone<B>` records B's id as its parent - an id that
+  only resolves in *B's* registry. `ascend` returns a zone's parent only
+  when it's registered in the same registry.
+- `ParentZone` is exported from the prelude, completing the public kit
+  (`use_zone_registry`, `use_zone_id`, `ZoneRecord`) for building custom
+  zones - including bridge zones registered in two type-worlds at once.
+- README section **Mixing payload types**: when one provider with an enum
+  payload is the answer, and when to bridge two providers by registering
+  the same `ZoneId` (ids are process-global) in both registries with shared
+  `mounted`/`rect` signals. Every drop stays typed; no erased channel.
+- Gallery page **Standup**: tickets and teammates drag in separate
+  providers; a shared agenda tray built from double registration (in ~40
+  lines of user-land code) accepts both.
+
+### Fixed
+
+- Keyboard navigation could dead-end across type-worlds: ArrowLeft from a
+  zone nested under a foreign-type zone entered the foreign parent's id,
+  which this world's registry can't resolve - announcements degraded to
+  "zone N" and Enter silently did nothing while the payload stayed held.
+  Ascend now skips unresolvable parents (falling back to the previous
+  sibling), and Enter's target resolution skips a hovered id that isn't in
+  the registry (falling back to the first acceptable zone).
+- The Playwright web server command used `--interactive false`-style flags,
+  which dx 0.7 parses as a subcommand; switched to the `=` form.
+- Zero clippy warnings again under Rust 1.96, which grew two lints since
+  2.1.0 shipped: a range assertion in the autoscroll tests
+  (`manual_range_contains`) and the gallery home's group tuple
+  (`type_complexity`, now a named `NumberedGroup` alias).
+
+### Tests
+
+- Runtime: cross-type nesting records the foreign parent but `ascend`
+  refuses it; a bridge's dual registration shares one rect between both
+  registries, hit-tests in each world, delivers each drop through its own
+  typed callback, and unregisters independently.
+- Browser: a real pointer drag from each world lands on the shared bridge
+  zone with typed delivery, while the foreign world's zones stay dark.
+
 ## 2.1.0 - 2026-07-08
 
 Retargeted to Dioxus **0.7 stable**. 2.0 depended on the `0.8.0-alpha.0`

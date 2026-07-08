@@ -46,6 +46,8 @@ enum Route {
         ProjectFilesPage {},
         #[route("/moodboard")]
         MoodboardPage {},
+        #[route("/standup")]
+        StandupPage {},
         #[route("/shuffle")]
         ShufflePage {},
         #[route("/menu")]
@@ -133,6 +135,11 @@ fn nav() -> Vec<(&'static str, &'static str, Vec<NavItem>)> {
                     title: "Moodboard",
                     blurb: "Free positioning on a canvas, with optional snap and bounds.",
                     route: Route::MoodboardPage {},
+                },
+                NavItem {
+                    title: "Standup",
+                    blurb: "Two payload worlds bridged by one shared drop zone.",
+                    route: Route::StandupPage {},
                 },
             ],
         ),
@@ -236,7 +243,7 @@ fn Shell() -> Element {
 fn Sidebar(open: Signal<bool>) -> Element {
     let mut open = open;
     let current = use_route::<Route>();
-    // Number the patterns 01..14 across all groups for the mono gutter.
+    // Number the patterns 01..15 across all groups for the mono gutter.
     let mut n = 0usize;
     let groups: Vec<(&'static str, Vec<(usize, NavItem)>)> = nav()
         .into_iter()
@@ -445,14 +452,18 @@ fn HeroBoard() -> Element {
     }
 }
 
+/// A nav group prepared for the home grid: group number, kicker, tagline,
+/// and its pages numbered continuously across all groups.
+type NumberedGroup = (usize, &'static str, &'static str, Vec<(usize, NavItem)>);
+
 /// The landing page: a two-tone display headline, the live hero board, a
 /// mono stat strip, numbered group sections matching the sidebar, and a
 /// closing statement band.
 #[component]
 fn Home() -> Element {
-    // Continue the sidebar's 01..14 numbering onto the cards.
+    // Continue the sidebar's 01..15 numbering onto the cards.
     let mut n = 0usize;
-    let groups: Vec<(usize, &'static str, &'static str, Vec<(usize, NavItem)>)> = nav()
+    let groups: Vec<NumberedGroup> = nav()
         .into_iter()
         .enumerate()
         .map(|(gi, (group, tagline, items))| {
@@ -480,7 +491,7 @@ fn Home() -> Element {
                 span { class: "block text-[#BBB8AE]", "Put it anywhere." }
             }
             p { class: "mt-5 max-w-xl text-[15px] leading-relaxed text-[#45423B]",
-                "Fourteen drag and drop patterns for Dioxus, each on its own page: a live interface you can grab, how it works underneath, and the API that drives it."
+                "Fifteen drag and drop patterns for Dioxus, each on its own page: a live interface you can grab, how it works underneath, and the API that drives it."
             }
             div { class: "mt-6 flex flex-wrap items-center gap-3",
                 Link {
@@ -505,7 +516,7 @@ fn Home() -> Element {
         HeroBoard {}
         div { class: "mt-8 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-[#E8E5D9] ring-1 ring-[#E8E5D9] shadow-[0_1px_0_rgba(26,24,21,0.04),0_1px_2px_rgba(26,24,21,0.04)] sm:grid-cols-4",
             for (value, label) in [
-                ("14", "patterns, each its own page"),
+                ("15", "patterns, each its own page"),
                 ("3", "inputs: mouse, touch, keyboard"),
                 ("0", "JavaScript in the library itself"),
                 ("MIT", "licensed, on crates.io"),
