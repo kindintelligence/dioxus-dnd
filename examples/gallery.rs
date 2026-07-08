@@ -206,7 +206,7 @@ fn SortableDemo() -> Element {
                 len: items.read().len(),
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "relative overflow-hidden [&>*]:mb-2 [&>*]:flex [&>*]:items-center [&>*]:rounded-xl [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:shadow-[0_1px_2px_rgba(28,25,23,0.04)] [&>*]:transition [&>[data-dragging]]:opacity-40 [&>[data-dragging]]:border-dashed [&>[data-drop-target]]:border-stone-900 [&>[data-drop-target]]:ring-1 [&>[data-drop-target]]:ring-stone-900/10 [&>[data-drop-target]]:shadow-[0_8px_20px_-8px_rgba(28,25,23,0.22)]",
+                class: "relative overflow-hidden [&>*]:mb-2 [&>*]:flex [&>*]:items-center [&>*]:rounded-xl [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:shadow-[0_1px_2px_rgba(28,25,23,0.04)] [&>*]:transition [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:scale-[1.02] [&>[data-dragging]]:border-stone-300 [&>[data-dragging]]:shadow-[0_16px_34px_-10px_rgba(28,25,23,0.35),0_4px_10px_-4px_rgba(28,25,23,0.16)] [&>[data-drop-target]]:border-stone-900 [&>[data-drop-target]]:ring-1 [&>[data-drop-target]]:ring-stone-900/10",
                 overlay: move |ix: usize| rsx! { "{items.read()[ix]}" },
                 render: move |ix: usize| rsx! { "{items.read()[ix]}" },
             }
@@ -227,7 +227,7 @@ fn GridDemo() -> Element {
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut tiles.write(), ev),
                 class: "gap-2",
-                item_class: "flex items-center justify-center rounded-xl border border-stone-200 bg-white p-6 text-[13px] text-stone-700 cursor-grab select-none shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition hover:-translate-y-px hover:border-stone-300 hover:shadow-[0_6px_16px_-4px_rgba(28,25,23,0.14)] data-dragging:opacity-40 data-dragging:border-dashed data-drop-target:border-stone-900 data-drop-target:ring-1 data-drop-target:ring-stone-900/15 data-drop-target:shadow-[0_12px_26px_-8px_rgba(28,25,23,0.30)]".to_string(),
+                item_class: "flex items-center justify-center rounded-xl border border-stone-200 bg-white p-6 text-[13px] text-stone-700 cursor-grab select-none shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition hover:-translate-y-px hover:border-stone-300 hover:shadow-[0_6px_16px_-4px_rgba(28,25,23,0.14)] data-dragging:relative data-dragging:z-10 data-dragging:scale-[1.03] data-dragging:border-stone-300 data-dragging:shadow-[0_18px_38px_-10px_rgba(28,25,23,0.38),0_5px_12px_-4px_rgba(28,25,23,0.18)] data-drop-target:border-stone-900 data-drop-target:ring-1 data-drop-target:ring-stone-900/15".to_string(),
                 render: move |ix: usize| rsx! { "{tiles.read()[ix]}" },
             }
         }
@@ -579,7 +579,7 @@ fn AccessibleReorderDemo() -> Element {
                 len: items.read().len(),
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:rounded-xl [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:shadow-[0_1px_2px_rgba(28,25,23,0.04)] [&>*]:transition [&>[data-dragging]]:opacity-40 [&>[data-dragging]]:border-dashed [&>[data-drop-target]]:border-stone-900 [&>[data-drop-target]]:ring-1 [&>[data-drop-target]]:ring-stone-900/10",
+                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:rounded-xl [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:shadow-[0_1px_2px_rgba(28,25,23,0.04)] [&>*]:transition [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:scale-[1.02] [&>[data-dragging]]:border-stone-300 [&>[data-dragging]]:shadow-[0_16px_34px_-10px_rgba(28,25,23,0.35),0_4px_10px_-4px_rgba(28,25,23,0.16)] [&>[data-drop-target]]:border-stone-900 [&>[data-drop-target]]:ring-1 [&>[data-drop-target]]:ring-stone-900/10",
                 render: move |ix: usize| rsx! {
                     span { "{items.read()[ix]}" }
                     ReorderButtons {
@@ -718,7 +718,7 @@ fn AutoScrollDemo() -> Element {
                         apply_sort(&mut rows.write(), ev);
                         dropped.set(Some(ev.to));
                     },
-                    class: "space-y-2 [&>[data-dragging]]:opacity-40",
+                    class: "space-y-2 [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]>*]:scale-[1.02] [&>[data-dragging]>*]:border-stone-300 [&>[data-dragging]>*]:shadow-[0_16px_34px_-10px_rgba(28,25,23,0.35),0_4px_10px_-4px_rgba(28,25,23,0.16)]",
                     render: move |ix: usize| {
                         let flash = if dropped() == Some(ix) { "drop-flash" } else { "" };
                         rsx! {
