@@ -20,8 +20,8 @@ fn main() {
 }
 
 // Shared tokens, reused everywhere - warm neutrals, hairline borders, soft shadows.
-const ITEM: &str = "flex items-center gap-2 cursor-grab select-none rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition data-dragging:opacity-50 data-dragging:ring-2 data-dragging:ring-stone-200 hover:border-stone-300";
-const ZONE: &str = "rounded-xl border border-dashed border-stone-300 p-3.5 min-h-24 transition space-y-2.5 data-active:border-stone-300 data-active:bg-stone-50/60 data-over:border-stone-900 data-over:bg-stone-50";
+const ITEM: &str = "flex items-center gap-2 cursor-grab select-none rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.05)] transition duration-150 hover:-translate-y-px hover:border-stone-300 hover:shadow-[0_5px_16px_-5px_rgba(28,25,23,0.15)] active:cursor-grabbing data-dragging:opacity-40 data-dragging:border-dashed data-dragging:shadow-none data-dragging:hover:translate-y-0";
+const ZONE: &str = "rounded-xl border border-dashed border-stone-300 p-3.5 min-h-24 transition space-y-2.5 data-active:border-stone-300 data-active:bg-stone-50/60 data-over:border-solid data-over:border-stone-900 data-over:bg-stone-50 data-over:ring-4 data-over:ring-stone-900/5 data-over:shadow-[inset_0_1px_2px_rgba(28,25,23,0.05)]";
 
 // Base typography plus a reusable "just dropped" confirmation: a ring + lifted
 // shadow that pulse and settle, so a completed drop reads clearly even when the
@@ -34,10 +34,11 @@ html {
   text-rendering: optimizeLegibility;
 }
 @keyframes drop-flash {
-  0%   { box-shadow: 0 0 0 3px rgba(28,25,23,0.16), 0 14px 28px -8px rgba(28,25,23,0.30); }
+  0%   { box-shadow: 0 0 0 3px rgba(28,25,23,0.14), 0 22px 42px -10px rgba(28,25,23,0.42); }
+  55%  { box-shadow: 0 0 0 1px rgba(28,25,23,0.05), 0 6px 16px -6px rgba(28,25,23,0.18); }
   100% { box-shadow: 0 0 0 0 rgba(28,25,23,0),    0 1px 2px 0 rgba(28,25,23,0); }
 }
-.drop-flash { animation: drop-flash 600ms cubic-bezier(0.22, 1, 0.36, 1); }
+.drop-flash { animation: drop-flash 620ms cubic-bezier(0.22, 1, 0.36, 1); }
 "#;
 
 #[component]
@@ -175,7 +176,7 @@ fn CardsDemo() -> Element {
                     }
                 }
                 DragOverlay::<Card> {
-                    class: "pointer-events-none rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm shadow-lg",
+                    class: "pointer-events-none rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] font-medium text-stone-900 shadow-[0_24px_48px_-12px_rgba(28,25,23,0.45),0_8px_16px_-8px_rgba(28,25,23,0.22)] rotate-[-3deg] scale-[1.05]",
                     CardGhost {}
                 }
             }
@@ -205,7 +206,7 @@ fn SortableDemo() -> Element {
                 len: items.read().len(),
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "relative overflow-hidden [&>*]:mb-2 [&>*]:flex [&>*]:items-center [&>*]:rounded-lg [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3 [&>*]:py-2 [&>*]:text-sm [&>*]:cursor-grab [&>*]:select-none [&>*]:shadow-sm [&>*]:transition [&>[data-dragging]]:opacity-35 [&>[data-drop-target]]:border-stone-300 [&>[data-drop-target]]:bg-stone-50",
+                class: "relative overflow-hidden [&>*]:mb-2 [&>*]:flex [&>*]:items-center [&>*]:rounded-xl [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:cursor-grab [&>*]:select-none [&>*]:shadow-[0_1px_2px_rgba(28,25,23,0.04)] [&>*]:transition [&>[data-dragging]]:opacity-40 [&>[data-dragging]]:border-dashed [&>[data-drop-target]]:border-stone-900 [&>[data-drop-target]]:ring-1 [&>[data-drop-target]]:ring-stone-900/10 [&>[data-drop-target]]:shadow-[0_8px_20px_-8px_rgba(28,25,23,0.22)]",
                 overlay: move |ix: usize| rsx! { "{items.read()[ix]}" },
                 render: move |ix: usize| rsx! { "{items.read()[ix]}" },
             }
@@ -226,7 +227,7 @@ fn GridDemo() -> Element {
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut tiles.write(), ev),
                 class: "gap-2",
-                item_class: "flex items-center justify-center rounded-lg border border-stone-200 bg-white p-6 text-sm text-stone-700 cursor-grab select-none shadow-sm transition data-dragging:opacity-50 data-drop-target:border-stone-900 data-drop-target:ring-2 data-drop-target:ring-stone-900".to_string(),
+                item_class: "flex items-center justify-center rounded-xl border border-stone-200 bg-white p-6 text-[13px] text-stone-700 cursor-grab select-none shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition hover:-translate-y-px hover:border-stone-300 hover:shadow-[0_6px_16px_-4px_rgba(28,25,23,0.14)] data-dragging:opacity-40 data-dragging:border-dashed data-drop-target:border-stone-900 data-drop-target:ring-1 data-drop-target:ring-stone-900/15 data-drop-target:shadow-[0_12px_26px_-8px_rgba(28,25,23,0.30)]".to_string(),
                 render: move |ix: usize| rsx! { "{tiles.read()[ix]}" },
             }
         }
@@ -275,7 +276,7 @@ fn BoardDemo() -> Element {
                             id: col,
                             label: name,
                             on_move: move |mv: MoveEvent<Card>| apply_move(&mut board.write(), mv),
-                            class: "rounded-lg border border-stone-200 bg-stone-50 p-3 min-h-32 space-y-2 data-active:bg-stone-100/70",
+                            class: "rounded-xl border border-stone-200 bg-stone-100/50 p-3 min-h-32 space-y-2.5 transition data-active:border-stone-300 data-active:bg-stone-100 data-active:ring-4 data-active:ring-stone-900/5",
                             p { class: "text-xs font-medium uppercase tracking-wide text-stone-400", "{name}" }
                             for (ix, card) in board.read().get(&col).cloned().unwrap_or_default().into_iter().enumerate() {
                                 BoardItem::<Card> {
@@ -319,10 +320,10 @@ fn TreeDemo() -> Element {
                             on_drop: move |ev: TreeDropEvent<String>| {
                                 msg.set(format!("{} → {:?} {}", ev.payload, ev.intent, ev.target.0));
                             },
-                            class: "border-b border-stone-100 px-3 py-2 text-sm text-stone-700 transition
-                                    data-[intent=before]:shadow-[inset_0_2px_0_0_#0f172a]
-                                    data-[intent=after]:shadow-[inset_0_-2px_0_0_#0f172a]
-                                    data-[intent=into]:bg-stone-100",
+                            class: "border-b border-stone-100 px-3.5 py-2.5 text-[13px] text-stone-700 transition
+                                    data-[intent=before]:shadow-[inset_0_2px_0_0_#1c1917]
+                                    data-[intent=after]:shadow-[inset_0_-2px_0_0_#1c1917]
+                                    data-[intent=into]:bg-stone-100 data-[intent=into]:shadow-[inset_0_0_0_9999px_rgba(28,25,23,0.03)]",
                             "{name}"
                         }
                     }
@@ -381,14 +382,14 @@ fn CanvasDemo() -> Element {
                             n.y = d.position.y;
                         }
                     },
-                    class: "relative h-56 rounded-lg border border-stone-200 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px] data-active:border-stone-300",
+                    class: "relative h-56 rounded-xl border border-stone-200 bg-[radial-gradient(#e7e5e4_1px,transparent_1px)] [background-size:16px_16px] transition data-active:border-stone-300 data-active:ring-4 data-active:ring-stone-900/5",
                     for node in nodes.read().clone() {
                         PointerDraggable::<Node> {
                             payload: node.clone(),
                             input: DragInputMode::Pointer,
                             label: node.label.clone(),
                             style: "position: absolute; left: {node.x}px; top: {node.y}px;",
-                            class: "cursor-grab select-none rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm shadow-sm data-dragging:opacity-50",
+                            class: "cursor-grab select-none rounded-xl border border-stone-200 bg-white px-3 py-1.5 text-[13px] font-medium shadow-[0_1px_2px_rgba(28,25,23,0.06)] transition hover:-translate-y-px hover:border-stone-300 hover:shadow-[0_8px_18px_-5px_rgba(28,25,23,0.20)] data-dragging:opacity-50 data-dragging:shadow-[0_16px_32px_-10px_rgba(28,25,23,0.35)]",
                             "{node.label}"
                         }
                     }
@@ -441,7 +442,7 @@ fn MultiSelectDemo() -> Element {
                     }
                 }
                 DragOverlay::<Vec<u32>> {
-                    class: "pointer-events-none rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm shadow-lg",
+                    class: "pointer-events-none rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] font-medium text-stone-900 shadow-[0_24px_48px_-12px_rgba(28,25,23,0.45),0_8px_16px_-8px_rgba(28,25,23,0.22)] rotate-[-3deg] scale-[1.05]",
                     SelectionCount::<u32> {}
                 }
             }
@@ -578,7 +579,7 @@ fn AccessibleReorderDemo() -> Element {
                 len: items.read().len(),
                 input: DragInputMode::Pointer,
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:rounded-lg [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3 [&>*]:py-2 [&>*]:text-sm [&>[data-dragging]]:opacity-50 [&>[data-drop-target]]:border-stone-900",
+                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:rounded-xl [&>*]:border [&>*]:border-stone-200 [&>*]:bg-white [&>*]:px-3.5 [&>*]:py-2.5 [&>*]:text-[13px] [&>*]:shadow-[0_1px_2px_rgba(28,25,23,0.04)] [&>*]:transition [&>[data-dragging]]:opacity-40 [&>[data-dragging]]:border-dashed [&>[data-drop-target]]:border-stone-900 [&>[data-drop-target]]:ring-1 [&>[data-drop-target]]:ring-stone-900/10",
                 render: move |ix: usize| rsx! {
                     span { "{items.read()[ix]}" }
                     ReorderButtons {
@@ -722,7 +723,7 @@ fn AutoScrollDemo() -> Element {
                         let flash = if dropped() == Some(ix) { "drop-flash" } else { "" };
                         rsx! {
                             div {
-                                class: "rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.04)] {flash}",
+                                class: "rounded-xl border border-stone-200 bg-white px-3.5 py-2.5 text-[13px] text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.04)] transition hover:border-stone-300 hover:shadow-[0_4px_12px_-4px_rgba(28,25,23,0.14)] {flash}",
                                 // Reset once the flash finishes so the same row
                                 // can flash again on its next drop.
                                 onanimationend: move |_| {
