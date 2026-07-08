@@ -56,6 +56,8 @@ enum Route {
         MenuPage {},
         #[route("/packing-list")]
         PackingListPage {},
+        #[route("/archive")]
+        ArchivePage {},
         #[route("/upload")]
         UploadPage {},
         #[route("/share")]
@@ -175,6 +177,15 @@ fn nav() -> Vec<(&'static str, &'static str, Vec<NavItem>)> {
                 title: "Packing list",
                 blurb: "Announcements and labels localized live with dioxus-i18n.",
                 route: Route::PackingListPage {},
+            }],
+        ),
+        (
+            "Scale",
+            "Ten thousand rows, one scrollbar.",
+            vec![NavItem {
+                title: "Archive",
+                blurb: "Drag-and-drop inside a 10,000-row virtualized list.",
+                route: Route::ArchivePage {},
             }],
         ),
         (

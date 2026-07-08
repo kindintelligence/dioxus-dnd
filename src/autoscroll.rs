@@ -1,11 +1,24 @@
 //! Auto-scroll: when a drag hovers near the edge of a scrollable container,
 //! scroll it - the missing piece for long lists and tall boards.
 //!
-//! Implemented entirely through Dioxus's `MountedData` (no JS eval):
-//! `dragover` (native boundary drags) and active `pointermove` events (in-app
-//! pointer drags via [`crate::core::Draggable`]) feed pointer positions; when the
+//! Scrolling and measuring go through Dioxus's `MountedData`: `dragover`
+//! (native boundary drags) and active `pointermove` events (in-app pointer
+//! drags via [`crate::core::Draggable`]) feed pointer positions; when the
 //! pointer sits within `threshold` px of an edge, the container is scrolled
 //! by up to `speed` px per event, scaled by proximity.
+//!
+//! Scroll *observation* (the rect-refresh ping and the `on_scroll` prop)
+//! rides the events that cause or accompany scrolling - wheel, pointer
+//! contact moves, and the auto-scrolls this component performs - each of
+//! which samples the offset through `MountedData` and reports when it
+//! changed. It has to work this way: dioxus-web 0.7 never delivers
+//! element-level `scroll` events to `onscroll` handlers, and its eval
+//! channel drops messages that resolve after the receiver parked, so
+//! neither a Rust `onscroll` nor a JS listener bridge can carry the
+//! signal. The known blind spot is a scroll no event accompanies (a
+//! programmatic `scroll-to-index` with the pointer at rest) - the code
+//! that initiates one should update its own state, and the next pointer
+//! or wheel activity trues everything up.
 //!
 //! ```text
 //! AutoScroll {
@@ -118,6 +131,14 @@ pub fn AutoScroll(
     /// pointer contact heuristic.
     #[props(default)]
     active: Option<bool>,
+    /// Fired with the container's scroll offset when a sample sees it
+    /// changed - after the auto-scroll's own scrolling, a wheel/trackpad
+    /// scroll, or pointer movement over the container - following the
+    /// rect-refresh ping. Drive a windowed (virtualized) list from
+    /// `offset.y`. See the module docs for how observation works and its
+    /// one blind spot.
+    #[props(default)]
+    on_scroll: Option<EventHandler<Point>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
@@ -131,6 +152,34 @@ pub fn AutoScroll(
     // channel; without one (self-contained sortables, native pages) we
     // anchor a channel ourselves so the components inside can register.
     let refresh = use_rect_refresh_provider();
+    // Last offset `sample` saw, deduplicating pings and on_scroll reports.
+    let last_offset = use_signal(Point::default);
+
+    // The observer: read the offset, and when it moved, ping the
+    // rect-refresh channel and report to on_scroll. Called from every
+    // event that can cause or accompany scrolling; the dedup makes the
+    // common nothing-changed case one cheap async read.
+    let sample = move || {
+        let Some(m) = mounted.peek().clone() else {
+            return;
+        };
+        let mut last_offset = last_offset;
+        spawn(async move {
+            if let Ok(o) = m.get_scroll_offset().await {
+                let now = Point::new(o.x, o.y);
+                if *last_offset.peek() != now {
+                    last_offset.set(now);
+                    // The zones inside just moved: re-measure (free while
+                    // no drag is in flight), then let the app re-slice its
+                    // window.
+                    refresh.refresh_all();
+                    if let Some(h) = &on_scroll {
+                        h.call(now);
+                    }
+                }
+            }
+        });
+    };
 
     let scroll_for = move |point: Point| {
         let Some(m) = mounted.peek().clone() else {
@@ -155,8 +204,10 @@ pub fn AutoScroll(
                             .await;
                         // Everything just moved under the drag: re-measure
                         // so hover and the eventual drop hit what the user
-                        // sees, not where things sat at pickup.
+                        // sees, not where things sat at pickup - and report
+                        // the new offset so a windowed list re-slices.
                         refresh.refresh_all();
+                        sample();
                     }
                 }
             }
@@ -168,14 +219,15 @@ pub fn AutoScroll(
         div {
             onmounted: move |evt: Event<MountedData>| {
                 mounted.set(Some(evt.data()));
+                // Report the initial offset (restored scroll positions
+                // exist) so windowing starts aligned.
+                sample();
             },
-            // Any scroll of this container - ours above, or the user's own
-            // wheel/trackpad mid-drag - moves the zones inside it. Ping the
-            // provider tree to re-measure; self-gated thunks make this free
-            // while no drag is in flight.
-            onscroll: move |_| {
-                refresh.refresh_all();
-            },
+            // Wheel and trackpad scrolling, idle or mid-drag. Wheel events
+            // go to the element under the cursor regardless of pointer
+            // capture, and the sample's async offset read resolves after
+            // the browser applied the scroll this event causes.
+            onwheel: move |_| sample(),
             // Native boundary drags: dragover fires continuously while
             // hovering. Note: no prevent_default here - drop permission stays
             // the business of the zones inside.
@@ -195,6 +247,10 @@ pub fn AutoScroll(
                     let c = evt.client_coordinates();
                     scroll_for(Point::new(c.x, c.y));
                 }
+                // Sample on every move, contact or hover: it trues up the
+                // window after scrollbar drags and programmatic scrolls
+                // the moment the pointer stirs.
+                sample();
             },
             ..attributes,
             {children}

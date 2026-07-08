@@ -4,6 +4,21 @@
 
 ### Added
 
+- **Virtualized-list support, proven at 10,000 rows.** New gallery page
+  **Archive** (Scale group): every row of a windowed 10k-row list is a
+  `DropZone`, zones register/unregister as the list recycles, and drops
+  land correctly even on rows that scrolled into existence mid-drag -
+  pointer and keyboard alike. Two changes make it work. `DropZone` and
+  `BridgeDropZone` now *measure themselves on mount* instead of waiting
+  for the drag-start measurement or a scroll ping, so a zone mounting
+  mid-drag is hit-testable the moment it exists (this also gives idle
+  apps initial rects). And `AutoScroll` gained an `on_scroll` prop
+  reporting the container's offset (sampled through `MountedData` after
+  events it can observe - its own edge-scrolling above all) for driving a
+  window. For user scrolls, drive the window from `onvisible` on the
+  rendered rows - see the README's "Virtualized lists" section for the
+  pattern, and the found-bug note below for why.
+
 - **Headless test driver.** `dioxus_dnd::test` runs whole drag
   interactions inside a `VirtualDom` - in CI, no browser. Mount a
   `DragSimProbe<T>` in the provider under test, grab the captured
@@ -98,6 +113,21 @@
 
 ### Fixed
 
+- **Zones mounting mid-drag were invisible to hit-testing.** Rects were
+  only measured at drag start and on rect-refresh pings, both of which
+  run before a newly recycled virtual-list row renders - so a drop on a
+  row that appeared mid-drag missed it. Zones now measure on mount
+  (browser regression pins the recycled-row drop).
+- **dioxus-web 0.7 never delivers element scroll events**, found while
+  building the virtual-list demo: `onscroll` handlers on scrollable
+  elements simply don't fire (bisected against a plain div), and the eval
+  channel drops JS→Rust messages that resolve after the receiver parked,
+  so a listener-bridge can't carry the signal either. This crate's 2.3.0
+  claim that `onscroll` covered wheel scrolling mid-drag was therefore
+  never true on web; the auto-scroll path (which pings explicitly) always
+  worked. Wheel and scrollbar coverage now comes from the `onvisible`
+  row-sentinel pattern (see the Archive page) and `on_scroll` sampling;
+  the dead `onscroll` handler is gone.
 - **The 48px near-miss snap measured to the zone's center, not its
   edge.** A pointer or touch drop released just outside a zone falls
   back to the closest acceptable zone within 48px - but the distance ran
@@ -108,6 +138,9 @@
 
 ### Tests
 
+- Browser: a drop lands on a virtual row recycled in mid-drag (the whole
+  visible window replaced after pickup - red without measure-on-mount),
+  and a keyboard drag walks the mounted window and drops on a row.
 - Runtime (dogfooding the new driver): a full pointer arc asserting the
   mid-flight `data-active`/`data-over` markup and the delivered outcome;
   releases respecting acceptance (rejecting zone cancels) and the 48px
