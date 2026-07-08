@@ -1,4 +1,4 @@
-name: Deploy showcase
+name: Deploy gallery
 
 on:
   push:
@@ -30,14 +30,14 @@ jobs:
       - name: Install Dioxus CLI
         run: cargo install dioxus-cli --version 0.8.0-alpha.0 --locked
 
-      - name: Build showcase
-        run: dx build --example showcase --platform web --features web --release --base-path /dioxus-dnd/
+      - name: Build gallery
+        run: dx build --example gallery --platform web --features web --release --base-path /dioxus-dnd/
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: target/dx/showcase/release/web/public
+          path: target/dx/gallery/release/web/public
 
   deploy:
     runs-on: ubuntu-latest
