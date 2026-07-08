@@ -558,6 +558,24 @@ write the same double registration yourself - everything it uses is public
 (`use_zone_registry`, `use_zone_id`, `ZoneRecord`, `ParentZone`), and the
 Standup page documents the recipe.
 
+## Virtualized lists
+
+Rows can be zones and zones can churn: a windowed (virtualized) list
+registers a `DropZone` per rendered row and unregisters it on recycle, and
+the registry keeps up - zones measure themselves the moment they mount, so
+a row that scrolls into view *mid-drag* is hit-testable immediately. Give
+rows stable index-derived ids (`ZoneId(BASE + index)`) so a recycled row
+re-registers as itself.
+
+Two practical notes for the windowing itself. dioxus-web 0.7 delivers no
+element-level scroll events, so drive your window from `onvisible` on the
+rendered rows (each crossing of the container's clip reports an
+IntersectionObserver rect that, with the row's canvas position, recovers
+the scroll offset - Dioxus's documented virtual-list tool) plus
+`AutoScroll`'s `on_scroll` for its own edge-scrolling during drags. The
+gallery's *Archive* page runs the full pattern at 10,000 rows, keyboard
+navigation included.
+
 ## Debug overlay (dev-only)
 
 When a zone won't light up or a drop lands somewhere surprising, render

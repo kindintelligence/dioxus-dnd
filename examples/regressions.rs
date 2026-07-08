@@ -34,6 +34,7 @@ fn App() -> Element {
         SettleFixture {}
         EdgeFixture {}
         VoiceFixture {}
+        VirtualFixture {}
     }
 }
 
@@ -614,6 +615,112 @@ fn VoiceFixture() -> Element {
                     style: "margin-top:12px; width:260px; min-height:50px; \
                             border:2px dashed #999; padding:8px;",
                     "shelf"
+                }
+            }
+        }
+    }
+}
+
+// --- virtual list: zones recycling mid-drag stay droppable --------------------
+// A windowed list mounts/unmounts row zones as it scrolls. Rows that mount
+// MID-DRAG missed the pickup measurement and the last scroll ping (which ran
+// before they rendered), so they must measure themselves on mount to be
+// hit-testable - the regression this fixture pins. AutoScroll's on_scroll
+// drives the windowing; its internal ping keeps moved rows fresh.
+
+const VROWS: usize = 1000;
+const VROW_H: f64 = 30.0;
+const VVIEW_H: f64 = 210.0;
+const VBASE: u64 = 30_000;
+
+#[component]
+fn VirtualFixture() -> Element {
+    let mut scroll_top = use_signal(|| 0.0f64);
+    let mut scrolls = use_signal(|| 0u32);
+    let mut landed = use_signal(|| "none".to_string());
+    // The container's mounted handle, for turning a row's viewport position
+    // back into a scroll offset (the wrapper shares the container's top).
+    let container = use_signal(|| None::<std::rc::Rc<dioxus::html::MountedData>>);
+    let first = ((scroll_top() / VROW_H) as usize).saturating_sub(4);
+    let last = (first + (VVIEW_H / VROW_H).ceil() as usize + 8).min(VROWS);
+
+    rsx! {
+        section {
+            h2 { "Virtual list" }
+            DndProvider::<&'static str> {
+                LiveRegion::<&'static str> {}
+                Draggable::<&'static str> {
+                    payload: "tag",
+                    label: "tag",
+                    id: "virtual-drag",
+                    style: "width:120px; padding:10px; border:1px solid #333; \
+                            background:#fff; cursor:grab; user-select:none;",
+                    "tag"
+                }
+                div {
+                    style: "margin-top:12px;",
+                    onmounted: move |evt: Event<dioxus::html::MountedData>| {
+                        let mut container = container;
+                        container.set(Some(evt.data()));
+                    },
+                    AutoScroll {
+                        class: "virtual-scroll",
+                        style: "height:{VVIEW_H}px; overflow-y:auto; \
+                                width:320px; border:1px solid #ccc; box-sizing:border-box;",
+                        on_scroll: move |offset: Point| {
+                            scrolls += 1;
+                            scroll_top.set(offset.y);
+                        },
+                        div { style: "position: relative; height: {VROWS as f64 * VROW_H}px;",
+                            div { style: "position: absolute; top: 0; left: 0; width: 100%; \
+                                          transform: translateY({first as f64 * VROW_H}px);",
+                                for ix in first..last {
+                                    DropZone::<&'static str> {
+                                        key: "{ix}",
+                                        id: ZoneId(VBASE + ix as u64),
+                                        label: format!("Row {ix}"),
+                                        on_drop: move |o: DropOutcome<&'static str>| {
+                                            landed.set(format!("row:{ix}:{}", o.payload));
+                                        },
+                                        style: "height:{VROW_H}px; box-sizing:border-box; \
+                                                border-bottom:1px solid #eee; padding:4px 8px;",
+                                        // Rendered rows are their own scroll sentinels: any
+                                        // crossing of the container's clip edge fires, and the
+                                        // entry rect + the row's canvas position recover the
+                                        // offset - IntersectionObserver-driven, so it works for
+                                        // wheel, scrollbar and programmatic scrolls alike, idle
+                                        // or mid-drag (dioxus 0.7's documented virtual-list
+                                        // pattern; scroll events never reach dioxus-web).
+                                        div {
+                                            style: "height:100%;",
+                                            onvisible: move |evt: VisibleEvent| {
+                                                let Ok(r) = evt.data().get_bounding_client_rect() else {
+                                                    return;
+                                                };
+                                                let row_y = r.origin.y;
+                                                let mut scroll_top = scroll_top;
+                                                spawn(async move {
+                                                    let Some(c) = container.peek().clone() else { return };
+                                                    if let Ok(cr) = c.get_client_rect().await {
+                                                        let s = (ix as f64 * VROW_H) - (row_y - cr.origin.y);
+                                                        scroll_top.set(s.max(0.0));
+                                                    }
+                                                });
+                                            },
+                                            "Row {ix}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                div {
+                    id: "virtual-status",
+                    "data-landed": landed(),
+                    "data-window": "{first}..{last}",
+                    "data-scrolls": "{scrolls}",
+                    "landed: {landed} window: {first}..{last}"
                 }
             }
         }

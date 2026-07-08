@@ -604,8 +604,25 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
             "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
             "data-edge": live_edge(),
             onmounted: move |evt: Event<MountedData>| {
+                let m: Rc<MountedData> = evt.data();
                 let mut mounted = mounted;
-                mounted.set(Some(evt.data()));
+                let mut rect = rect;
+                mounted.set(Some(m.clone()));
+                // Measure immediately, not just at drag start: a zone that
+                // mounts mid-drag (a virtualized list recycling rows under
+                // the pointer) missed the pickup measurement, and the last
+                // scroll ping ran before this row rendered. Hit-testing
+                // must see the zone as soon as it exists.
+                spawn(async move {
+                    if let Ok(r) = m.get_client_rect().await {
+                        rect.set(Some(Rect::new(
+                            r.origin.x,
+                            r.origin.y,
+                            r.size.width,
+                            r.size.height,
+                        )));
+                    }
+                });
             },
             ..attributes,
             {children}
@@ -718,8 +735,23 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
             "data-over": if (dnd_a.over() == Some(zone_id) && acceptable_a())
                 || (dnd_b.over() == Some(zone_id) && acceptable_b()) { "true" },
             onmounted: move |evt: Event<MountedData>| {
+                let m: Rc<MountedData> = evt.data();
                 let mut mounted = mounted;
-                mounted.set(Some(evt.data()));
+                let mut rect = rect;
+                mounted.set(Some(m.clone()));
+                // Same as DropZone: measure at mount so a bridge appearing
+                // mid-drag is immediately hit-testable in both worlds (the
+                // rect signal is shared, so one measurement serves both).
+                spawn(async move {
+                    if let Ok(r) = m.get_client_rect().await {
+                        rect.set(Some(Rect::new(
+                            r.origin.x,
+                            r.origin.y,
+                            r.size.width,
+                            r.size.height,
+                        )));
+                    }
+                });
             },
             ..attributes,
             {children}

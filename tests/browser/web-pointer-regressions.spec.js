@@ -734,3 +734,65 @@ test("keyboard announcements speak the provided DndStrings locale", async ({ pag
   await page.keyboard.press("Escape");
   await expect(voice).toHaveText("Arrastre cancelado.");
 });
+
+// Virtualized list: rows mount and unmount as the window scrolls. A row that
+// mounts MID-DRAG (recycled in by a wheel scroll while the payload is in
+// flight) missed both the pickup measurement and the last scroll ping - it
+// must still take the drop, because zones measure themselves on mount.
+test("drops land on virtual rows recycled in mid-drag", async ({ page }) => {
+  await openFixtures(page);
+
+  const sec = await section(page, "Virtual list");
+  await sec.scrollIntoViewIfNeeded();
+  const scroll = sec.locator(".virtual-scroll");
+  const status = sec.locator("#virtual-status");
+
+  const from = await sec.locator("#virtual-drag").boundingBox();
+  const box = await scroll.boundingBox();
+
+  // Pick the tag up and enter the list.
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 15 });
+
+  // Scroll deep into the list mid-drag (wheel or scroll-to-index): the
+  // entire visible window is now rows that did not exist at pickup. The
+  // rows crossing the container's clip fire onvisible, which recovers the
+  // offset - scroll events never reach dioxus-web, and pointer events
+  // retarget to the captured drag source.
+  await scroll.evaluate((node) => {
+    node.scrollTop = 3000;
+  });
+  await expect(status).toHaveAttribute("data-window", /^9[0-9]\.\./);
+
+  // Hover a freshly mounted row (a nudge so hit-testing re-runs against
+  // its mount-time measurement), then drop.
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 2);
+  await page.waitForTimeout(100);
+  const midRow = Math.floor((3000 + box.height / 2) / 30);
+  await expect(scroll.getByText(`Row ${midRow}`, { exact: true })).toBeVisible();
+  await page.mouse.up();
+
+  // The drop landed on the recycled row under the pointer.
+  await expect(status).toHaveAttribute("data-landed", `row:${midRow}:tag`);
+});
+
+// Keyboard drags reach virtual rows too: only the mounted window is
+// registered, and arrows walk it in spatial order.
+test("keyboard drop lands on a mounted virtual row", async ({ page }) => {
+  await openFixtures(page);
+
+  const sec = await section(page, "Virtual list");
+  await sec.scrollIntoViewIfNeeded();
+  const status = sec.locator("#virtual-status");
+  const voice = sec.locator('[role="status"]');
+
+  await sec.locator("#virtual-drag").focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowDown");
+  await expect(voice).toHaveText("Over Row 0.");
+  await page.keyboard.press("ArrowDown");
+  await expect(voice).toHaveText("Over Row 1.");
+  await page.keyboard.press("Enter");
+  await expect(status).toHaveAttribute("data-landed", "row:1:tag");
+});
