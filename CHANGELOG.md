@@ -13,17 +13,29 @@
   runs only while it has a drag in flight, and `AutoScroll` pings the
   channel after every scroll it performs and on any other scroll of its
   container (wheel/trackpad mid-drag). Custom layout mutators can ping it
-  too via the new `use_rect_refresh()` hook. Known remaining gap:
-  `SortableList`'s internal row cache measures pre-displacement layout on
-  purpose, so it needs scroll *compensation* rather than re-measurement -
-  tracked separately.
+  too via the new `use_rect_refresh()` hook.
+- **Sortables and grids track scrolling too.** `SortableList` and
+  `SortableGrid` are self-contained (no provider), so `AutoScroll` now
+  *anchors* the refresh channel when it's the outermost participant and
+  they join it. The grid re-measures plainly (tiles never transform), but
+  the list can't: its rows carry live-preview transforms, often
+  mid-transition, so `get_client_rect` reads displaced, interpolated boxes
+  no subtraction can reliably invert. Instead the list *re-anchors*: the
+  wrapper never transforms and rows never move within it mid-drag, so one
+  wrapper measurement per ping gives the exact distance every cached base
+  slot shifted. Pings from unrelated scroll surfaces measure zero movement
+  and no-op; overlapping pings coalesce so the final scroll position is
+  never left unapplied.
 
 ### Tests
 
-- Runtime: nested providers share one refresh channel and a provider's
-  thunk unregisters on unmount. Browser: a drag that auto-scrolls its
-  container hovers and drops on the zone that scrolled into place
-  (verified red without the fix, green with it).
+- Runtime: nested providers share one refresh channel, a provider's thunk
+  unregisters on unmount, and `AutoScroll` anchors the channel for
+  provider-less sortables/grids. Browser: a drag that auto-scrolls its
+  container hovers and drops on the *zone* that scrolled into place, and a
+  sortable row dropped after auto-scrolling lands at the slot computed
+  from the live scroll offset (both verified red without the fix, green
+  with it).
 
 ## 2.2.0 - 2026-07-08
 

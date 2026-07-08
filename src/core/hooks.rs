@@ -19,34 +19,51 @@ pub fn use_dnd_provider<T: Clone + 'static>() -> DndContext<T> {
     // creates it, nested providers inherit and re-provide the same one. A
     // scroll surface anywhere below then reaches every registry above it
     // through a single type-erased handle.
+    use_rect_refresh_provider();
+    // Re-measure this registry on ping - but only mid-drag. Rects are
+    // measured fresh at every pickup, so an idle provider has nothing to
+    // keep current, and the gate makes scroll-event pings free while idle.
+    use_rect_refresh_thunk(move |_| {
+        if ctx.dragging() {
+            registry.refresh_rects();
+        }
+    });
+
+    ctx
+}
+
+/// Create-or-inherit the tree's [`RectRefresh`] channel and provide it to
+/// descendants. The outermost participant (a `DndProvider`, an
+/// [`crate::autoscroll::AutoScroll`]) owns the signal; everyone below
+/// shares it, so self-contained components like `SortableList` can join
+/// even with no provider anywhere.
+pub(crate) fn use_rect_refresh_provider() -> RectRefresh {
     let bus = use_hook(|| {
         // Plain context lookup (not the memoizing hook - we're inside one).
         try_consume_context::<RectRefresh>()
             .unwrap_or_else(|| RectRefresh::from_signal(Signal::new(Vec::new())))
     });
     use_context_provider(|| bus);
-    // Re-measure this registry on ping - but only mid-drag. Rects are
-    // measured fresh at every pickup, so an idle provider has nothing to
-    // keep current, and the gate makes scroll-event pings free while idle.
-    let key = use_hook(move || {
-        let key = DragId::auto().0;
-        let mut bus = bus;
-        bus.register(
-            key,
-            Callback::new(move |_| {
-                if ctx.dragging() {
-                    registry.refresh_rects();
-                }
-            }),
-        );
-        key
+    bus
+}
+
+/// Register a re-measure thunk on the tree's channel for this component's
+/// lifetime; it leaves the channel on unmount. Quietly does nothing when no
+/// channel exists above (nothing could ever ping it). The thunk must gate
+/// itself on its own drag state - pings arrive for every scroll.
+pub(crate) fn use_rect_refresh_thunk(thunk: impl FnMut(()) + 'static) {
+    let joined = use_hook(move || {
+        try_consume_context::<RectRefresh>().map(|mut bus| {
+            let key = DragId::auto().0;
+            bus.register(key, Callback::new(thunk));
+            (bus, key)
+        })
     });
     use_drop(move || {
-        let mut bus = bus;
-        bus.unregister(key);
+        if let Some((mut bus, key)) = joined {
+            bus.unregister(key);
+        }
     });
-
-    ctx
 }
 
 /// The provider tree's [`RectRefresh`] channel: ping `refresh_all()` after

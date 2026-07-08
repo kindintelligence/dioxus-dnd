@@ -569,3 +569,66 @@ test("drops land on the zone that auto-scrolled into place", async ({ page }) =>
   await page.mouse.up();
   await expect(sec.locator("#stale-status")).toHaveAttribute("data-landed", expected);
 });
+
+// SortableList's row rects are measured at drag start; autoscroll shifts
+// the rows under the pointer mid-drag. The compensated re-measure (base
+// slot = transformed measurement minus the preview displacement we applied)
+// must make the drop land where the user sees it: dropping at 70% depth of
+// slot t - computed from the live scroll offset - puts the dragged row at
+// index t, not at the slot that USED to be there before scrolling.
+test("sortable reorders against rows that auto-scrolled into place", async ({ page }) => {
+  await openFixtures(page);
+
+  const demo = await section(page, "Autoscroll");
+  const scroll = demo.locator(".list-scroll");
+  await scroll.scrollIntoViewIfNeeded();
+  await scroll.evaluate((node) => {
+    node.scrollTop = 0;
+  });
+
+  const rowTexts = () => demo.locator("[data-sort-content]").allInnerTexts();
+  expect((await rowTexts())[0]).toBe("Unload the truck");
+
+  // Slot geometry before any drag: pitch from the first two rows, and the
+  // first slot's client top at scrollTop = 0.
+  const contents = demo.locator("[data-sort-content]");
+  const r0 = await contents.nth(0).boundingBox();
+  const r1 = await contents.nth(1).boundingBox();
+  const pitch = r1.y - r0.y;
+  const box = await scroll.boundingBox();
+
+  // Pick up row 0 by its handle, park at the bottom edge until the list
+  // has scrolled well past a couple of slots.
+  const handle = scroll.locator("[data-sort-handle]").first();
+  const hb = await handle.boundingBox();
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  const edgeX = box.x + box.width / 2;
+  const edgeY = box.y + box.height - 4;
+  await page.mouse.move(edgeX, edgeY, { steps: 12 });
+  let jiggle = 0;
+  await expect
+    .poll(async () => {
+      jiggle = 1 - jiggle;
+      await page.mouse.move(edgeX + jiggle, edgeY);
+      return scroll.evaluate((node) => node.scrollTop);
+    })
+    .toBeGreaterThan(120);
+
+  // Leave the edge band so scrolling stops, let in-flight scroll tasks
+  // settle, then read the final offset the drop must be judged against.
+  await page.mouse.move(edgeX, box.y + box.height / 2, { steps: 4 });
+  await page.waitForTimeout(250);
+  const scrolled = await scroll.evaluate((node) => node.scrollTop);
+
+  // Choose the slot whose 70% depth sits nearest the container middle and
+  // drop exactly there: past the midpoint, so the crossing rule adopts it.
+  const midY = box.y + box.height / 2;
+  const t = Math.max(1, Math.round((midY - (r0.y - scrolled)) / pitch - 0.7));
+  const dropY = r0.y - scrolled + (t + 0.7) * pitch;
+  await page.mouse.move(edgeX, dropY, { steps: 6 });
+  await page.mouse.up();
+
+  const after = await rowTexts();
+  expect(after[t]).toBe("Unload the truck");
+});
