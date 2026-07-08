@@ -596,6 +596,46 @@ dx serve --example kanban --platform web --features web
 
 ## Testing
 
+**Your drag-and-drop is unit-testable.** The drag state machine is plain
+Rust over signals, so `dioxus_dnd::test` runs whole pointer interactions
+inside a `VirtualDom` - in CI, no browser. Mount a `DragSimProbe` in your
+test app, place the zone rects (the headless stand-in for layout - which
+makes tests deterministic), and drive:
+
+```rust,ignore
+use dioxus_dnd::test::{drag_sim, rerender, simulate_drag, DragSimProbe};
+
+fn test_app() -> Element {
+    rsx! {
+        DndProvider::<Card> {
+            DragSimProbe::<Card> {}
+            Shelves {}   // the component under test
+        }
+    }
+}
+
+let mut dom = VirtualDom::new(test_app);
+dom.rebuild_in_place();
+let mut sim = drag_sim::<Card>();
+
+sim.place(&dom, FINISHED, Rect::new(0.0, 100.0, 200.0, 80.0));
+sim.pick_up_from(&dom, card.clone(), Some(READING));
+sim.move_to(&dom, Point::new(100.0, 140.0));
+assert_eq!(sim.over(&dom), Some(FINISHED));
+rerender(&mut dom);
+assert!(dioxus_ssr::render(&dom).contains("data-over"));
+
+assert_eq!(sim.release(&dom), Some(FINISHED));  // your on_drop just ran
+// ...assert your model moved the card.
+```
+
+Or the whole arc in one line:
+`simulate_drag(&mut dom, card, Some(READING), &[Point::new(100.0, 140.0)])`.
+Drops run the *production* delivery path - acceptance filters, the 48px
+near-miss snap, closest-edge enrichment, `DropOutcome` construction - and
+`release_as(&dom, DropEffect::Copy)` simulates the Ctrl-held copy. This
+crate's own runtime tests drive the same simulator.
+
 The Rust tests cover pure state, SSR output and geometry helpers. Pointer
 capture is browser behavior, so the web path also has Playwright
 regressions driving the headless fixtures in `examples/regressions.rs`:

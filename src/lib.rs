@@ -15,6 +15,7 @@ pub mod files;
 pub mod grid;
 pub mod multiselect;
 pub mod sortable;
+pub mod test;
 pub mod tree;
 
 /// One-stop import: `use dioxus_dnd::prelude::*;`

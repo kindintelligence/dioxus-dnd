@@ -5,6 +5,7 @@
 
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::*;
+use dioxus_dnd::test::{drag_sim, rerender, simulate_drag, DragSimProbe};
 use std::sync::{Arc, Mutex};
 
 type Shared<T> = Arc<Mutex<T>>;
@@ -2158,6 +2159,172 @@ fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
     assert!(
         !html.contains("data-over"),
         "idle zone must not be over: {html}"
+    );
+}
+
+// --- Headless test driver: dioxus_dnd::test ---------------------------------
+
+/// The full pointer arc through the driver: pick up, hover (with the
+/// data-attributes users style reacting mid-flight), release, handler runs
+/// with the production outcome.
+#[test]
+fn drag_sim_drives_a_full_pointer_arc() {
+    static LANDED: Mutex<Vec<(String, Option<ZoneId>)>> = Mutex::new(Vec::new());
+
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<String> {
+                DragSimProbe::<String> {}
+                DropZone::<String> {
+                    id: ZoneId(71),
+                    label: "Reading",
+                    on_drop: move |o: DropOutcome<String>| {
+                        LANDED.lock().unwrap().push((o.payload, o.from))
+                    },
+                    "reading"
+                }
+                DropZone::<String> {
+                    id: ZoneId(72),
+                    label: "Finished",
+                    on_drop: move |o: DropOutcome<String>| {
+                        LANDED.lock().unwrap().push((o.payload, o.from))
+                    },
+                    "finished"
+                }
+            }
+        }
+    }
+
+    LANDED.lock().unwrap().clear();
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<String>();
+
+    // Headless layout: the test owns the geometry.
+    sim.place(&dom, ZoneId(71), Rect::new(0.0, 0.0, 100.0, 40.0));
+    sim.place(&dom, ZoneId(72), Rect::new(0.0, 60.0, 100.0, 40.0));
+
+    sim.pick_up_from(&dom, "book".to_string(), Some(ZoneId(71)));
+    assert!(sim.dragging(&dom));
+    rerender(&mut dom);
+    assert!(
+        dioxus_ssr::render(&dom).contains("data-active"),
+        "zones lit on pickup"
+    );
+
+    sim.move_to(&dom, Point::new(50.0, 80.0));
+    assert_eq!(sim.over(&dom), Some(ZoneId(72)));
+    rerender(&mut dom);
+    assert!(
+        dioxus_ssr::render(&dom).contains("data-over"),
+        "hovered zone highlighted"
+    );
+
+    assert_eq!(sim.release(&dom), Some(ZoneId(72)));
+    assert!(!sim.dragging(&dom));
+    rerender(&mut dom);
+    assert!(
+        !dioxus_ssr::render(&dom).contains("data-active"),
+        "zones unlit after the drop"
+    );
+    assert_eq!(
+        *LANDED.lock().unwrap(),
+        vec![("book".to_string(), Some(ZoneId(71)))]
+    );
+}
+
+/// Releases mirror the pointer gesture's forgiveness: a rejecting zone
+/// under the pointer doesn't take the drop, a near miss within 48px snaps
+/// to the closest acceptable zone, and a far miss cancels.
+#[test]
+fn drag_sim_release_respects_acceptance_and_snap() {
+    static TAKEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                DragSimProbe::<u32> {}
+                DropZone::<u32> {
+                    id: ZoneId(73),
+                    accepts: move |_p: u32| false,
+                    on_drop: move |o: DropOutcome<u32>| TAKEN.lock().unwrap().push(o.payload),
+                    "rejects"
+                }
+                DropZone::<u32> {
+                    id: ZoneId(74),
+                    on_drop: move |o: DropOutcome<u32>| TAKEN.lock().unwrap().push(o.payload),
+                    "accepts"
+                }
+            }
+        }
+    }
+
+    TAKEN.lock().unwrap().clear();
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<u32>();
+    sim.place(&dom, ZoneId(73), Rect::new(0.0, 0.0, 100.0, 40.0));
+    sim.place(&dom, ZoneId(74), Rect::new(0.0, 100.0, 100.0, 40.0));
+
+    // Over the rejecting zone, 80px from the accepting one: cancels.
+    sim.pick_up(&dom, 5);
+    sim.move_to(&dom, Point::new(50.0, 20.0));
+    assert_eq!(sim.release(&dom), None);
+    assert!(!sim.dragging(&dom), "cancel reset the drag");
+    assert!(TAKEN.lock().unwrap().is_empty());
+
+    // In the gap, 40px from the accepting zone's center: snaps to it.
+    sim.pick_up(&dom, 5);
+    sim.move_to(&dom, Point::new(50.0, 80.0));
+    assert_eq!(sim.over(&dom), None, "gap hovers nothing");
+    assert_eq!(sim.release(&dom), Some(ZoneId(74)), "48px snap");
+    assert_eq!(*TAKEN.lock().unwrap(), vec![5]);
+}
+
+/// The one-line arc, and proof the driver ends in the production drop
+/// path: the receiving zone's closest-edge enrichment and an explicit
+/// copy effect both arrive in the outcome.
+#[test]
+fn simulate_drag_delivers_production_outcomes() {
+    static GOT: Mutex<Vec<(u32, Option<Edge>, DropEffect)>> = Mutex::new(Vec::new());
+
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                DragSimProbe::<u32> {}
+                DropZone::<u32> {
+                    id: ZoneId(75),
+                    edge: EdgeSet::Vertical,
+                    on_drop: move |o: DropOutcome<u32>| {
+                        GOT.lock().unwrap().push((o.payload, o.edge, o.effect))
+                    },
+                    "tray"
+                }
+            }
+        }
+    }
+
+    GOT.lock().unwrap().clear();
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<u32>();
+    sim.place(&dom, ZoneId(75), Rect::new(0.0, 0.0, 200.0, 50.0));
+
+    // One line, low in the zone: lands with the edge the zone computed.
+    let landed = simulate_drag(&mut dom, 9u32, None, &[Point::new(100.0, 45.0)]);
+    assert_eq!(landed, Some(ZoneId(75)));
+
+    // Granular arc with a forced copy effect.
+    sim.pick_up(&dom, 10);
+    sim.move_to(&dom, Point::new(100.0, 5.0));
+    assert_eq!(sim.release_as(&dom, DropEffect::Copy), Some(ZoneId(75)));
+
+    assert_eq!(
+        *GOT.lock().unwrap(),
+        vec![
+            (9, Some(Edge::Bottom), DropEffect::Move),
+            (10, Some(Edge::Top), DropEffect::Copy),
+        ]
     );
 }
 

@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Headless test driver.** `dioxus_dnd::test` runs whole drag
+  interactions inside a `VirtualDom` - in CI, no browser. Mount a
+  `DragSimProbe<T>` in the provider under test, grab the captured
+  `DragSim<T>`, `place` the zone rects (the headless stand-in for layout,
+  which makes tests deterministic instead of flaky), then `pick_up` /
+  `move_to` / `release`, asserting `over()`, the rendered
+  `data-active`/`data-over` markup (via `rerender` + SSR), and your own
+  model. `simulate_drag` wraps the common arc in one call;
+  `release_as(DropEffect::Copy)` simulates the Ctrl-held copy drop.
+  Releases mirror the pointer gesture - exact hit, else the 48px
+  center-distance snap to the closest acceptable zone, else cancel - and
+  delivery is the *same code path* as `Draggable`'s (extracted, not
+  reimplemented), so acceptance filters, closest-edge enrichment and
+  settle routing all behave exactly as in production. Not simulated:
+  pointer capture, auto-scroll, and pre-snap re-measurement.
+
 - **Debug overlay (dev-only).** `DndDebugOverlay<T>` draws every zone
   registered in a provider as a tinted outline pinned over the page -
   stable per-id colors, the zone's label and id in a tag, live `data-over`
@@ -82,6 +98,12 @@
 
 ### Tests
 
+- Runtime (dogfooding the new driver): a full pointer arc asserting the
+  mid-flight `data-active`/`data-over` markup and the delivered outcome;
+  releases respecting acceptance (rejecting zone cancels) and the 48px
+  snap; `simulate_drag` landing with the receiving zone's closest-edge
+  enrichment and a forced copy effect - proof the driver ends in the
+  production drop path.
 - Runtime: the debug overlay draws one outline per measured zone with its
   label, marks the hovered zone and per-zone acceptance during a drag,
   skips unmeasured zones while counting them in the status chip, and
