@@ -37,8 +37,9 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::components::merge_style;
+use crate::core::hooks::use_rect_refresh_thunk;
 use crate::core::{platform, transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
-use crate::sortable::{list_bounds, ReorderMode, SortEvent};
+use crate::sortable::{list_bounds, refresh_rects, ReorderMode, SortEvent};
 
 fn pointer_client(evt: &PointerEvent) -> Point {
     let c = evt.client_coordinates();
@@ -114,6 +115,14 @@ pub fn SortableGrid(
     // the one containing the pointer.
     let rects = use_signal(HashMap::<usize, Rect>::new);
     let mounteds = use_signal(HashMap::<usize, Rc<MountedData>>::new);
+    // Tiles never transform mid-drag, so a scroll ping is a plain
+    // re-measure (see the compensated variant in `sortable` for why lists
+    // differ).
+    use_rect_refresh_thunk(move |_| {
+        if drag_from.peek().is_some() {
+            refresh_rects(mounteds, rects);
+        }
+    });
     let mut gesture = use_signal(|| GesturePhase::Idle);
     let mut step = move |event: GestureEvent| -> GestureEffect {
         let (next, fx) = transition(*gesture.peek(), event, 8.0);
@@ -134,17 +143,7 @@ pub fn SortableGrid(
                 .or(fallback_ix)
                 .filter(|&i| i != ix);
             over.set(next);
-            for (i, m) in mounteds.peek().clone() {
-                let mut rects = rects;
-                spawn(async move {
-                    if let Ok(r) = m.get_client_rect().await {
-                        rects.write().insert(
-                            i,
-                            Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
-                        );
-                    }
-                });
-            }
+            refresh_rects(mounteds, rects);
         }
         GestureEffect::Track { at } => {
             let next = rects

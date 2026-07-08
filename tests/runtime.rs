@@ -1724,6 +1724,41 @@ fn rect_refresh_channel_is_shared_and_unregisters_on_unmount() {
     );
 }
 
+/// Self-contained components need no DndProvider, so `AutoScroll` anchors
+/// the rect-refresh channel itself when it's the outermost participant -
+/// a `SortableList` (and `SortableGrid`) inside joins it, which is what
+/// lets autoscrolled sortables re-measure mid-drag.
+#[test]
+fn autoscroll_anchors_the_refresh_channel_for_sortables() {
+    fn app() -> Element {
+        rsx! {
+            AutoScroll {
+                SortableList {
+                    len: 3,
+                    on_sort: move |_| {},
+                    render: move |ix: usize| rsx! { "row {ix}" },
+                }
+                SortableGrid {
+                    len: 4,
+                    cols: 2,
+                    on_sort: move |_| {},
+                    render: move |ix: usize| rsx! { "tile {ix}" },
+                }
+                ChannelProbe {}
+            }
+        }
+    }
+    #[component]
+    fn ChannelProbe() -> Element {
+        let bus = try_use_context::<RectRefresh>().expect("AutoScroll anchors a channel");
+        assert_eq!(bus.len(), 2, "the list and the grid each joined");
+        // Pinging with no drag in flight is a no-op, not a panic.
+        bus.refresh_all();
+        rsx! { div {} }
+    }
+    run(app);
+}
+
 // --- Bridge zones: one box registered in two type-worlds ------------------
 //
 // The documented cross-type pattern (README "Mixing payload types", the

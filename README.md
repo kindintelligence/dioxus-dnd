@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![Dioxus 0.7](https://img.shields.io/badge/dioxus-0.7-0E6B63)](https://dioxuslabs.com)
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
-[![Tests](https://img.shields.io/badge/tests-127%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-130%20passing-brightgreen.svg)](CHANGELOG.md)
 
 **Pick it up. Put it anywhere.** Modular, accessible drag and drop for
 [Dioxus](https://dioxuslabs.com): one small core, one module per drop
@@ -346,15 +346,17 @@ AutoScroll { style: "max-height: 300px; overflow-y: auto;",
 }
 ```
 
-Scrolling moves the zones inside the container, so `AutoScroll` also pings
-the provider tree's rect-refresh channel after every scroll (its own or the
-user's wheel mid-drag): every registry re-measures its zones, and hover
-highlighting and the eventual drop land on the zone the user actually sees,
-not where it sat at pickup. If you move layout under a live drag some other
-way - a custom scroll surface, a collapsing panel - grab the channel
-yourself with `use_rect_refresh()` and call `refresh_all()` from your event.
-Providers without a drag in flight ignore the ping, so it's free to call
-from high-frequency sources.
+Scrolling moves everything inside the container, so `AutoScroll` also pings
+the rect-refresh channel after every scroll (its own or the user's wheel
+mid-drag): drop-zone registries re-measure, and `SortableList` /
+`SortableGrid` - which need no provider; `AutoScroll` anchors the channel
+for them - re-anchor their cached row slots against the wrapper's movement.
+Hover highlighting and the eventual drop land on what the user actually
+sees, not where things sat at pickup. If you move layout under a live drag
+some other way - a custom scroll surface, a collapsing panel - grab the
+channel yourself with `use_rect_refresh()` and call `refresh_all()` from
+your event. Participants without a drag in flight ignore the ping, so it's
+free to call from high-frequency sources.
 
 ## Modifier keys
 
@@ -517,7 +519,8 @@ committing no reorder, autoscroll edge behavior, canvas grab-offset
 placement, drop fall-through past rejecting zones, the Ctrl-drag copy
 convention, reorder buttons inside sortable rows, the native boundary
 paths, a bridge zone receiving typed drops from two payload worlds, and
-drops landing on zones that auto-scrolled into place mid-drag.
+drops landing on zones - and sortable slots - that auto-scrolled into
+place mid-drag.
 
 ```sh
 cargo test

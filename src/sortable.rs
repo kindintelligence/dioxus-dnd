@@ -35,6 +35,7 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::components::overlay_style;
+use crate::core::hooks::use_rect_refresh_thunk;
 use crate::core::{platform, transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
 
 fn pointer_client(evt: &PointerEvent) -> Point {
@@ -107,7 +108,7 @@ fn slot_pitch(rects: &HashMap<usize, Rect>, ix: usize, axis: Axis) -> Option<f64
     })
 }
 
-fn refresh_rects(
+pub(crate) fn refresh_rects(
     mounteds: Signal<HashMap<usize, Rc<MountedData>>>,
     rects: Signal<HashMap<usize, Rect>>,
 ) {
@@ -122,6 +123,85 @@ fn refresh_rects(
             }
         });
     }
+}
+
+/// Shift every cached rect by `(dx, dy)`. Pure, for testability.
+fn shift_rects(rects: &mut HashMap<usize, Rect>, dx: f64, dy: f64) {
+    for rect in rects.values_mut() {
+        rect.x += dx;
+        rect.y += dy;
+    }
+}
+
+/// Track scrolling mid-drag by re-anchoring, not re-measuring. Rows carry
+/// live-preview transforms (often mid-transition), so `get_client_rect` on
+/// a row reads a displaced, interpolated box that no subtraction can
+/// reliably invert. The list *wrapper* never transforms, and rows never
+/// move within it during a drag - so one measurement of the wrapper gives
+/// the exact distance everything shifted, and the cached base slots move
+/// with it. A ping from an unrelated scroll surface measures zero movement
+/// and is a no-op.
+///
+/// `busy`/`pending` coalesce overlapping pings: two concurrent shifts
+/// racing the same anchor would double-count, and simply dropping a ping
+/// could leave the *final* scroll position unapplied.
+fn reanchor_rects(
+    container: Signal<Option<Rc<MountedData>>>,
+    anchor: Signal<Option<Point>>,
+    rects: Signal<HashMap<usize, Rect>>,
+    busy: Signal<bool>,
+    pending: Signal<bool>,
+) {
+    let Some(m) = container.peek().clone() else {
+        return;
+    };
+    if *busy.peek() {
+        let mut pending = pending;
+        pending.set(true);
+        return;
+    }
+    let mut busy = busy;
+    busy.set(true);
+    spawn(async move {
+        let mut anchor = anchor;
+        let mut rects = rects;
+        let mut pending = pending;
+        loop {
+            if let Ok(r) = m.get_client_rect().await {
+                let new = Point::new(r.origin.x, r.origin.y);
+                // Read the anchor *after* the await: another task may have
+                // applied a shift while we were measuring.
+                if let Some(old) = *anchor.peek() {
+                    let (dx, dy) = (new.x - old.x, new.y - old.y);
+                    if dx != 0.0 || dy != 0.0 {
+                        shift_rects(&mut rects.write(), dx, dy);
+                    }
+                }
+                anchor.set(Some(new));
+            }
+            if *pending.peek() {
+                pending.set(false);
+            } else {
+                break;
+            }
+        }
+        busy.set(false);
+    });
+}
+
+/// Capture the wrapper's current origin as the shift baseline. Runs
+/// alongside every full row measurement (drag start), so subsequent
+/// [`reanchor_rects`] pings shift from a matching snapshot.
+fn capture_anchor(container: Signal<Option<Rc<MountedData>>>, anchor: Signal<Option<Point>>) {
+    let Some(m) = container.peek().clone() else {
+        return;
+    };
+    let mut anchor = anchor;
+    spawn(async move {
+        if let Ok(r) = m.get_client_rect().await {
+            anchor.set(Some(Point::new(r.origin.x, r.origin.y)));
+        }
+    });
 }
 
 /// Which row should be the drop target while a pointer drag from row `from`
@@ -268,6 +348,20 @@ pub fn SortableList(
             .unwrap_or(40.0)
     };
 
+    // Mid-drag scrolls (an AutoScroll above, or anything pinging the tree's
+    // rect-refresh channel) move the rows under the pointer. Re-anchor the
+    // cached slots against the wrapper's movement - see `reanchor_rects`
+    // for why this beats re-measuring the (transformed) rows.
+    let container = use_signal(|| None::<Rc<MountedData>>);
+    let anchor = use_signal(|| None::<Point>);
+    let reanchor_busy = use_signal(|| false);
+    let reanchor_pending = use_signal(|| false);
+    use_rect_refresh_thunk(move |_| {
+        if drag_from.peek().is_some() {
+            reanchor_rects(container, anchor, rects, reanchor_busy, reanchor_pending);
+        }
+    });
+
     // Drags run the same formal gesture machine as `Draggable`. `over` (the
     // drop target) is resolved synchronously on every tracked move - no
     // derived effect - so the gap never lags the pointer.
@@ -291,8 +385,10 @@ pub fn SortableList(
                 over.set(pointer_target(&rects.peek(), ix, None, at, axis));
                 // Client rects go stale when the list scrolls or layout shifts;
                 // re-measure every row at drag start so hit-testing runs against
-                // the current (pre-displacement) slots.
+                // the current (pre-displacement) slots, and re-baseline the
+                // wrapper anchor the scroll-tracking shifts run from.
                 refresh_rects(mounteds, rects);
+                capture_anchor(container, anchor);
             }
             GestureEffect::Track { at } => {
                 let Some(from) = *drag_from.peek() else {
@@ -384,6 +480,10 @@ pub fn SortableList(
 
     rsx! {
         div {
+            onmounted: move |evt: Event<MountedData>| {
+                let mut container = container;
+                container.set(Some(evt.data()));
+            },
             onpointermove: move |evt: PointerEvent| {
                 let at = pointer_client(&evt);
                 // Recovery for a mouse released while the cursor sat outside the
@@ -475,6 +575,7 @@ pub fn SortableList(
                         evt.prevent_default();
                         evt.stop_propagation();
                         refresh_rects(mounteds, rects);
+                        capture_anchor(container, anchor);
                         press_from.set(Some(ix));
                         press_at.set(Some(pointer_client(&evt)));
                         // Capture on the stable row wrapper so a mouse drag
@@ -513,6 +614,7 @@ pub fn SortableList(
                                 evt.prevent_default();
                                 evt.stop_propagation();
                                 refresh_rects(mounteds, rects);
+                                capture_anchor(container, anchor);
                                 press_from.set(Some(ix));
                                 press_at.set(Some(pointer_client(&evt)));
                                 // Capture on the row wrapper (not the grip): it is
@@ -650,6 +752,28 @@ mod swap_tests {
         assert_eq!(v, vec![4, 2, 3, 1]);
         apply_swap(&mut v, SortEvent { from: 9, to: 0 });
         assert_eq!(v, vec![4, 2, 3, 1]);
+    }
+}
+
+#[cfg(test)]
+mod shift_rects_tests {
+    use super::*;
+
+    /// Scroll tracking moves every cached base slot by exactly the
+    /// wrapper's movement, preserving sizes and relative spacing - which is
+    /// all `pointer_target`'s model needs to stay correct mid-scroll.
+    #[test]
+    fn shift_moves_all_slots_uniformly() {
+        let mut rects: HashMap<usize, Rect> = (0..3)
+            .map(|i| (i, Rect::new(10.0, i as f64 * 40.0, 200.0, 40.0)))
+            .collect();
+        // Container scrolled down 130px: content moved up by 130.
+        shift_rects(&mut rects, 0.0, -130.0);
+        for i in 0..3 {
+            assert_eq!(rects[&i], Rect::new(10.0, i as f64 * 40.0 - 130.0, 200.0, 40.0));
+        }
+        // Pitch is preserved exactly.
+        assert_eq!(slot_pitch(&rects, 1, Axis::Vertical), Some(40.0));
     }
 }
 
