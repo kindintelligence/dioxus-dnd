@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![Dioxus 0.7](https://img.shields.io/badge/dioxus-0.7-0E6B63)](https://dioxuslabs.com)
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
-[![Tests](https://img.shields.io/badge/tests-130%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen.svg)](CHANGELOG.md)
 
 **Pick it up. Put it anywhere.** Modular, accessible drag and drop for
 [Dioxus](https://dioxuslabs.com): one small core, one module per drop
@@ -236,6 +236,21 @@ For a no-drag fallback, `a11y::ReorderButtons` renders headless move-up and
 move-down buttons that emit the same `SortEvent` as dragging, so one
 `on_sort` serves both inputs. Custom flows can push their own messages with
 `dnd.announce(...)`.
+
+**RTL layouts:** pass `dir: Direction::Rtl` on the provider and keyboard
+navigation mirrors - spatial order runs right-to-left within a row, and the
+descend/ascend arrows swap so "into" is always the arrow pointing along
+reading order (the WAI-ARIA tree convention):
+
+```rust,ignore
+DndProvider::<Card> { dir: Direction::Rtl, /* ... */ }
+```
+
+**Reduced motion:** components that animate (`SortableList`'s live preview,
+`FlipItem`'s glide) mark their moving elements with `data-dnd-motion` and
+ship a `prefers-reduced-motion` override, so drags snap instead of gliding
+when the user asks the OS for less motion. Nothing to configure; style your
+own animated elements with the same attribute to opt them in.
 
 ## Touch
 

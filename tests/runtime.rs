@@ -1724,6 +1724,127 @@ fn rect_refresh_channel_is_shared_and_unregisters_on_unmount() {
     );
 }
 
+// --- Reduced motion: animated components honor the OS preference -----------
+
+/// Every component that animates via inline transitions marks its moving
+/// element with `data-dnd-motion` and renders (once per subtree) a
+/// stylesheet that collapses those transitions under
+/// `prefers-reduced-motion: reduce`.
+#[test]
+fn animated_components_ship_the_reduced_motion_override() {
+    fn app() -> Element {
+        rsx! {
+            SortableList {
+                len: 2,
+                on_sort: move |_| {},
+                render: move |_| rsx! { "row" },
+            }
+        }
+    }
+    let html = run(app);
+    assert_eq!(
+        html.matches("prefers-reduced-motion").count(),
+        1,
+        "one override stylesheet: {html}"
+    );
+    assert_eq!(
+        html.matches("data-dnd-motion=true").count(),
+        2,
+        "every row is marked: {html}"
+    );
+
+    // FlipItems nested under a grid inherit the grid's stylesheet instead
+    // of rendering their own.
+    fn grid_app() -> Element {
+        rsx! {
+            SortableGrid {
+                len: 2,
+                cols: 2,
+                on_sort: move |_| {},
+                render: move |ix: usize| rsx! {
+                    FlipItem { epoch: 0, "tile {ix}" }
+                },
+            }
+        }
+    }
+    let html = run(grid_app);
+    assert_eq!(
+        html.matches("prefers-reduced-motion").count(),
+        1,
+        "grid anchors one stylesheet for its FlipItems: {html}"
+    );
+    assert_eq!(
+        html.matches("data-dnd-motion=true").count(),
+        2,
+        "each FlipItem is marked: {html}"
+    );
+}
+
+// --- RTL: keyboard order follows the visual right-to-left flow -------------
+
+/// With `Direction::Rtl`, spatial ordering within a row runs right-to-left,
+/// so keyboard stepping visits zones in the order an RTL reader sees them.
+/// The vertical order (top rows first) never changes.
+#[test]
+fn rtl_spatial_order_follows_reading_direction() {
+    fn app() -> Element {
+        use_dnd_provider::<u32>();
+        let mut reg = use_zone_registry::<u32>();
+
+        let record = |id: u64, x: f64, y: f64| ZoneRecord::<u32> {
+            id: ZoneId(id),
+            parent: None,
+            label: None,
+            on_drop: Callback::new(|_| {}),
+            accepts: None,
+            mounted: Signal::new(None),
+            rect: Signal::new(Some(Rect::new(x, y, 40.0, 40.0))),
+        };
+        // One row of three zones, then one zone on a second row.
+        reg.register(record(1, 0.0, 0.0));
+        reg.register(record(2, 50.0, 0.0));
+        reg.register(record(3, 100.0, 0.0));
+        reg.register(record(4, 0.0, 100.0));
+
+        // LTR: left-to-right within the row, then the next row.
+        assert_eq!(reg.direction(), Direction::Ltr);
+        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(1)));
+        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(2)));
+        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, 1), Some(ZoneId(4)));
+
+        // RTL: the rightmost zone comes first; rows still top-to-bottom.
+        reg.set_direction(Direction::Rtl);
+        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(3)));
+        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, 1), Some(ZoneId(2)));
+        assert_eq!(reg.step_zone(Some(ZoneId(2)), &0, 1), Some(ZoneId(1)));
+        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(4)));
+        // Sibling stepping (the arrow-key path) mirrors the same way.
+        assert_eq!(reg.step_sibling(None, &0, 1), Some(ZoneId(3)));
+
+        rsx! { div {} }
+    }
+    run(app);
+}
+
+/// The `dir` prop on `DndProvider` reaches the registry.
+#[test]
+fn provider_dir_prop_sets_registry_direction() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u8> {
+                dir: Direction::Rtl,
+                DirProbe {}
+            }
+        }
+    }
+    #[component]
+    fn DirProbe() -> Element {
+        assert_eq!(use_zone_registry::<u8>().direction(), Direction::Rtl);
+        rsx! { div {} }
+    }
+    run(app);
+}
+
 /// Self-contained components need no DndProvider, so `AutoScroll` anchors
 /// the rect-refresh channel itself when it's the outermost participant -
 /// a `SortableList` (and `SortableGrid`) inside joins it, which is what

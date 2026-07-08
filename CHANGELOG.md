@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- **RTL keyboard navigation.** `Direction::Rtl` on `DndProvider` (or
+  `ZoneRegistry::set_direction` for hook users) mirrors the keyboard
+  experience: spatial zone ordering runs right-to-left within a row, and
+  the descend/ascend arrows swap so "into" is always the arrow pointing
+  along reading order - the WAI-ARIA tree convention. LTR behavior is
+  unchanged and remains the default.
+- **`prefers-reduced-motion` support.** `SortableList`'s live preview and
+  `FlipItem`'s glide mark their moving elements with `data-dnd-motion` and
+  ship a media-query override (one `<style>` per subtree; `SortableGrid`
+  anchors it for its tiles), so drags snap instead of gliding when the
+  user asks the OS for less motion. Near-zero duration rather than zero,
+  so `transitionend` still fires. Mark your own animated elements with the
+  same attribute to opt them in.
+
 ### Fixed
 
 - **Stale hit-test rects while auto-scrolling.** Zone rects are cached at

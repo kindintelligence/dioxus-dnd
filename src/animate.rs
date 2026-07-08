@@ -38,6 +38,7 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
+use crate::a11y::use_reduced_motion_css;
 use crate::core::{Point, Rect};
 
 /// FLIP animation phase.
@@ -112,10 +113,14 @@ pub fn FlipItem(
             format!("transform: none; transition: transform {duration}ms {easing};")
         }
     };
+    // The glide is an inline transition; honor prefers-reduced-motion.
+    let reduced_motion_css = use_reduced_motion_css();
 
     rsx! {
+        {reduced_motion_css}
         div {
             style: "{style}",
+            "data-dnd-motion": true,
             onmounted: move |evt: Event<MountedData>| {
                 let mut mounted = mounted;
                 mounted.set(Some(evt.data()));

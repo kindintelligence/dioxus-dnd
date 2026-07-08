@@ -124,3 +124,36 @@ pub fn ReorderButtons(
         }
     }
 }
+
+/// The reduced-motion override: when the user asks the OS for less motion,
+/// every animated element the crate marks with `data-dnd-motion` snaps
+/// instead of gliding. Near-zero rather than zero so `transitionend` still
+/// fires for anything listening.
+pub(crate) const REDUCED_MOTION_CSS: &str = "@media (prefers-reduced-motion: reduce) { \
+     [data-dnd-motion] { transition-duration: 0.01ms !important; } }";
+
+/// Marker context: the reduced-motion stylesheet already renders somewhere
+/// above, so nested animated components skip theirs.
+#[derive(Clone, Copy)]
+pub(crate) struct MotionCssProvided;
+
+/// One `<style>` with [`REDUCED_MOTION_CSS`] per subtree: the outermost
+/// animated component renders it and marks the context; anything below
+/// gets `None`. (Sibling subtrees each render one - duplicate CSS rules
+/// are idempotent, so that's harmless.) `<style>` generates no box, so it
+/// is layout-neutral even inside grids and flex rows.
+pub(crate) fn use_reduced_motion_css() -> Option<Element> {
+    let first = use_hook(|| {
+        if try_consume_context::<MotionCssProvided>().is_some() {
+            false
+        } else {
+            provide_context(MotionCssProvided);
+            true
+        }
+    });
+    first.then(|| {
+        rsx! {
+            style { {REDUCED_MOTION_CSS} }
+        }
+    })
+}
