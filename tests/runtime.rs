@@ -2130,6 +2130,174 @@ fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
     );
 }
 
+// --- Drop-settle: the overlay glides home after a successful drop ---------
+
+/// The settling phase between "drop delivered" and "ghost gone": the payload
+/// stays readable for the ghost's content, but the drag is over for every
+/// zone and draggable.
+#[test]
+fn drop_settle_state_machine() {
+    fn app() -> Element {
+        let mut dnd = use_dnd_provider::<String>();
+        dnd.start(
+            "book".to_string(),
+            Some(ZoneId(1)),
+            Point::new(50.0, 60.0),
+            Point::new(5.0, 5.0),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        dnd.enter(ZoneId(2));
+
+        // A settling take hands the payload to the drop handler but keeps
+        // it readable, records the destination, and ends the drag.
+        let to = Rect::new(100.0, 100.0, 80.0, 40.0);
+        let (p, from) = dnd.take_settling(to).expect("payload present");
+        assert_eq!(p, "book");
+        assert_eq!(from, Some(ZoneId(1)));
+        assert!(!dnd.dragging(), "settling is not dragging");
+        assert_eq!(
+            dnd.payload().as_deref(),
+            Some("book"),
+            "ghost keeps content"
+        );
+        assert_eq!(dnd.settling(), Some(to));
+        assert_eq!(dnd.over(), None, "hover cleared at drop");
+        // The release position survives, so the overlay holds it while the
+        // glide arms.
+        assert_eq!(dnd.pointer(), Point::new(50.0, 60.0));
+        assert_eq!(dnd.grab(), Point::new(5.0, 5.0));
+
+        // finish_settle resets everything...
+        dnd.finish_settle();
+        assert_eq!(dnd.payload(), None);
+        assert_eq!(dnd.settling(), None);
+
+        // ...and is a guarded no-op otherwise: a late transitionend can't
+        // clobber a drag that started after the glide.
+        dnd.start(
+            "next".to_string(),
+            None,
+            Point::new(1.0, 1.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        dnd.finish_settle();
+        assert!(dnd.dragging());
+        assert_eq!(dnd.payload().as_deref(), Some("next"));
+
+        // Starting a new drag mid-settle interrupts the glide.
+        dnd.take_settling(to).expect("second drop");
+        assert!(dnd.settling().is_some());
+        dnd.start(
+            "third".to_string(),
+            None,
+            Point::new(1.0, 1.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        assert_eq!(dnd.settling(), None);
+        assert!(dnd.dragging());
+
+        // With no payload in flight there is nothing to settle.
+        dnd.cancel();
+        assert!(dnd.take_settling(to).is_none());
+
+        rsx! {
+            div {}
+        }
+    }
+    run(app);
+}
+
+/// Mid-settle markup: the ghost renders at the release point with the
+/// transition armed, marked for the reduced-motion override, with the
+/// override sheet in the subtree.
+#[test]
+fn settle_overlay_renders_armed_ghost_with_motion_marker() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                SettleScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn SettleScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.start(
+                7,
+                None,
+                Point::new(300.0, 200.0),
+                Point::new(8.0, 8.0),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            dnd.take_settling(Rect::new(0.0, 0.0, 100.0, 100.0));
+        });
+        rsx! {
+            DragOverlay::<u32> { settle: true, class: "ghost", "g" }
+        }
+    }
+
+    let html = run(app);
+    assert!(html.contains("data-dnd-motion"), "marked for 1.3: {html}");
+    assert!(
+        html.contains("transition: transform 200ms ease;"),
+        "transition armed on the hold frame: {html}"
+    );
+    assert!(
+        html.contains("left: 292px; top: 192px;"),
+        "held at the release point (pointer - grab): {html}"
+    );
+    assert!(
+        html.contains("prefers-reduced-motion"),
+        "override sheet rendered: {html}"
+    );
+}
+
+/// Without `settle`, a completed drop unmounts the overlay immediately -
+/// the pre-settle behavior stays the default.
+#[test]
+fn overlay_without_settle_vanishes_on_drop() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                PlainScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn PlainScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.start(
+                7,
+                None,
+                Point::new(300.0, 200.0),
+                Point::new(8.0, 8.0),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            dnd.take();
+        });
+        rsx! {
+            DragOverlay::<u32> { class: "ghost", "g" }
+        }
+    }
+
+    let html = run(app);
+    assert!(
+        !html.contains("ghost"),
+        "no ghost after a plain take: {html}"
+    );
+}
+
 #[test]
 fn grid_merges_user_style_after_layout_default() {
     fn app() -> Element {

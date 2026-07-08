@@ -27,11 +27,12 @@
 //! }
 //! ```
 //!
-//! **Snap-back on cancel** needs no Rust at all - it's a CSS recipe. Pointer
-//! drags via `Draggable` use your `DragOverlay`; give the overlay's child
-//! `transition: transform 150ms ease` and render it conditionally on
-//! `dnd.dragging()` - reverting your item's `data-dragging` styles with a
-//! transition produces the settle effect.
+//! **Drop-settle** (the ghost gliding into the receiving zone on drop) is
+//! built in: set `settle: true` on
+//! [`crate::core::components::DragOverlay`]. **Snap-back on cancel** needs
+//! no Rust at all - it's a CSS recipe: give the overlay's child
+//! `transition: transform 150ms ease` and revert your item's
+//! `data-dragging` styles with a transition.
 
 use std::rc::Rc;
 

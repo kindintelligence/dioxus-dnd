@@ -148,12 +148,20 @@ pub(crate) struct MotionCssProvided;
 /// source as visible text inside the list. An inline declaration outranks
 /// any selector, so the sheet stays invisible whatever the page styles.
 pub(crate) fn use_reduced_motion_css() -> Option<Element> {
+    use_reduced_motion_css_if(true)
+}
+
+/// [`use_reduced_motion_css`] behind a condition, for components whose
+/// animation is an opt-in prop (`DragOverlay`'s settle). When `enabled` is
+/// false the hook neither renders the sheet nor marks the context, so an
+/// inactive component doesn't make nested animated ones skip theirs.
+pub(crate) fn use_reduced_motion_css_if(enabled: bool) -> Option<Element> {
     let first = use_hook(|| {
-        if try_consume_context::<MotionCssProvided>().is_some() {
-            false
-        } else {
+        if enabled && try_consume_context::<MotionCssProvided>().is_none() {
             provide_context(MotionCssProvided);
             true
+        } else {
+            false
         }
     });
     first.then(|| {

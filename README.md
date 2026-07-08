@@ -187,8 +187,13 @@ The drag ghost styles the same way; `DragOverlay` forwards `class` to its
 wrapper while positioning stays functional:
 
 ```rust,ignore
-DragOverlay::<Card> { class: "rotate-3 scale-105 shadow-xl", GhostCard {} }
+DragOverlay::<Card> { settle: true, class: "rotate-3 scale-105 shadow-xl", GhostCard {} }
 ```
+
+`settle: true` is the drop animation: on a successful pointer drop the
+ghost glides from the release point into the receiving zone instead of
+vanishing (tune with `duration`/`easing`; honors `prefers-reduced-motion`;
+cancelled drags and keyboard drops never settle).
 
 To style *children* of a state-carrying wrapper, either mark the wrapper a
 group (`SortableGrid`'s `item_class: "group"`, or a list root selector such
