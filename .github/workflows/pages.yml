@@ -28,7 +28,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install Dioxus CLI
-        run: cargo install dioxus-cli --version 0.8.0-alpha.0 --locked
+        run: cargo install dioxus-cli --version 0.7.9 --locked
 
       - name: Build gallery
         run: dx build --example gallery --platform web --features web --release --base-path /dioxus-dnd/

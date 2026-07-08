@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 - 2026-07-08
+
+Retargeted to Dioxus **0.7 stable**. 2.0 depended on the `0.8.0-alpha.0`
+pre-release; because Cargo won't unify an `0.8` pre-release with `0.7.x`,
+that made the crate unusable in the many projects on shipped 0.7. The code
+needed no changes — only the dependency requirement moved. Verified against
+`0.7.9`: library (all features), the wasm32 web build, every gallery
+example, and the full test suite compile and pass with zero warnings. The
+crate still declares `dioxus` with `default-features = false, features =
+["minimal"]`, so it pulls in no renderer of its own. (Stores, which back the
+in-app drag state, have been part of Dioxus since 0.7.0.)
+
 ## 2.0.1 - 2026-07-08
 
 Docs-only patch. The README packaged into 2.0.0 still carried a stale
