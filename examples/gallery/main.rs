@@ -325,7 +325,7 @@ fn Sidebar(open: Signal<bool>) -> Element {
                 }
                 div { class: "mt-2 flex items-center gap-2.5",
                     code { class: "rounded bg-[#EEEADF] px-1.5 py-0.5 text-[10px] text-[#7A776C]",
-                        "v1.0.0"
+                        {concat!("v", env!("CARGO_PKG_VERSION"))}
                     }
                     a {
                         href: "https://github.com/kindintelligence/dioxus-dnd",
