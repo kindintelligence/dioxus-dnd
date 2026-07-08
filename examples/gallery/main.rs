@@ -507,7 +507,7 @@ fn Home() -> Element {
             for (value, label) in [
                 ("14", "patterns, each its own page"),
                 ("3", "inputs: mouse, touch, keyboard"),
-                ("0", "JavaScript dependencies"),
+                ("0", "JavaScript in the library itself"),
                 ("MIT", "licensed, on crates.io"),
             ] {
                 div { class: "bg-[#FBFAF6] px-4 py-3",
