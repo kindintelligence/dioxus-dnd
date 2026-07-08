@@ -705,3 +705,32 @@ test("data-edge tracks the pointer and the drop carries the edge", async ({ page
   await expect(status).toHaveAttribute("data-landed", "edge:bottom");
   await expect(zone).not.toHaveAttribute("data-edge", /.+/);
 });
+
+// Localized voice (DndStrings): the keyboard announcements read the provided
+// context, and a live locale switch changes the very next phrase - the
+// components capture the struct once but the closures read the locale.
+test("keyboard announcements speak the provided DndStrings locale", async ({ page }) => {
+  await openFixtures(page);
+
+  const sec = await section(page, "Localized voice");
+  await sec.scrollIntoViewIfNeeded();
+  const voice = sec.locator('[role="status"]');
+  const drag = sec.locator("#voice-drag");
+
+  // English pickup, arrow to the shelf, drop.
+  await drag.focus();
+  await page.keyboard.press("Enter");
+  await expect(voice).toHaveText("Picked up parcel. Use arrow keys, Enter to drop.");
+  await page.keyboard.press("ArrowDown");
+  await expect(voice).toHaveText("Over shelf.");
+  await page.keyboard.press("Enter");
+  await expect(voice).toHaveText("Dropped in shelf.");
+
+  // Switch to Spanish mid-session: the next drag speaks it.
+  await sec.locator("#voice-toggle").click();
+  await drag.focus();
+  await page.keyboard.press("Enter");
+  await expect(voice).toHaveText("Recogiste parcel. Usa las flechas, Enter para soltar.");
+  await page.keyboard.press("Escape");
+  await expect(voice).toHaveText("Arrastre cancelado.");
+});

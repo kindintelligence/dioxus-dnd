@@ -9,6 +9,7 @@ pub mod modifiers;
 pub(crate) mod platform;
 pub mod registry;
 pub mod state;
+pub mod strings;
 pub mod types;
 pub mod viewport;
 
@@ -22,6 +23,7 @@ pub use model::{apply_clone_or_move, apply_list_clone_or_move};
 pub use modifiers::{apply_modifiers, DragModifier, ModifierCtx};
 pub use registry::{RectRefresh, ZoneRecord, ZoneRegistry};
 pub use state::{DndContext, DragState};
+pub use strings::{use_dnd_strings, DndStrings};
 pub use types::{
     edge_of, effective_effect, Direction, DragId, DragMode, DropEffect, DropOutcome, Edge, EdgeSet,
     Point, Rect, ZoneId,

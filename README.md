@@ -251,6 +251,29 @@ move-down buttons that emit the same `SortEvent` as dragging, so one
 `on_sort` serves both inputs. Custom flows can push their own messages with
 `dnd.announce(...)`.
 
+**Localization:** every phrase the crate voices - the announcements above,
+`ReorderButtons` labels, the `SelectionCount` badge - reads a `DndStrings`
+from context, with English built in. Each field owns a whole sentence as a
+function, so translations reorder and inflect freely; provide one anywhere
+above your drag UI and override only what you translate:
+
+```rust,ignore
+use_context_provider(|| DndStrings {
+    dropped_in: Rc::new(|name| t!("dropped-in", name: name)),  // dioxus-i18n
+    cancelled: Rc::new(|| t!("cancelled")),
+    ..Default::default()
+});
+```
+
+The crate stays dependency-free: the closures call whatever produces a
+`String` - dioxus-i18n's `t!` (shown; the Fluent-based crate the Dioxus
+docs recommend) or a `match` on your own locale signal. Have them *read*
+the locale rather than re-providing the struct on switch, and the very
+next phrase speaks the new language. The gallery's *Packing list* page
+shows the full dioxus-i18n wiring with a live English/Spanish toggle.
+Custom components can voice themselves consistently via
+`use_dnd_strings()`.
+
 **RTL layouts:** pass `dir: Direction::Rtl` on the provider and keyboard
 navigation mirrors - spatial order runs right-to-left within a row, and the
 descend/ascend arrows swap so "into" is always the arrow pointing along

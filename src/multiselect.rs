@@ -188,8 +188,10 @@ pub fn SelectionCount<K: Clone + PartialEq + 'static>(
 ) -> Element {
     let _ = phantom;
     let dnd = use_dnd::<Vec<K>>();
+    let strings = crate::core::use_dnd_strings();
     let n = dnd.payload().map(|p| p.len()).unwrap_or(0);
+    let text = (strings.selection_count)(n);
     rsx! {
-        span { "{n} item(s)" }
+        span { "{text}" }
     }
 }

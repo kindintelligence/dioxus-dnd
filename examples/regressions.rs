@@ -33,6 +33,7 @@ fn App() -> Element {
         StaleRectsFixture {}
         SettleFixture {}
         EdgeFixture {}
+        VoiceFixture {}
     }
 }
 
@@ -552,6 +553,68 @@ fn EdgeFixture() -> Element {
                     "vertical edges"
                 }
                 div { id: "edge-status", "data-landed": landed(), "landed: {landed}" }
+            }
+        }
+    }
+}
+
+// --- localized voice: keyboard announcements read DndStrings ------------------
+// A provided DndStrings context replaces every announcement the keyboard
+// path voices, and closures that read a locale signal follow a live switch
+// with no remount - the next phrase speaks the new language.
+
+#[component]
+fn VoiceFixture() -> Element {
+    let locale = use_signal(|| "en");
+    use_context_provider(|| DndStrings {
+        picked_up: std::rc::Rc::new(move |name| match *locale.peek() {
+            "es" => format!("Recogiste {name}. Usa las flechas, Enter para soltar."),
+            _ => format!("Picked up {name}. Use arrow keys, Enter to drop."),
+        }),
+        over: std::rc::Rc::new(move |name| match *locale.peek() {
+            "es" => format!("Sobre {name}."),
+            _ => format!("Over {name}."),
+        }),
+        dropped_in: std::rc::Rc::new(move |name| match *locale.peek() {
+            "es" => format!("Soltado en {name}."),
+            _ => format!("Dropped in {name}."),
+        }),
+        cancelled: std::rc::Rc::new(move || match *locale.peek() {
+            "es" => "Arrastre cancelado.".to_string(),
+            _ => "Drag cancelled.".to_string(),
+        }),
+        ..Default::default()
+    });
+    let mut locale = locale;
+    rsx! {
+        section {
+            h2 { "Localized voice" }
+            button {
+                id: "voice-toggle",
+                onclick: move |_| {
+                    let next = if *locale.peek() == "en" { "es" } else { "en" };
+                    locale.set(next);
+                },
+                "toggle language"
+            }
+            DndProvider::<u32> {
+                LiveRegion::<u32> {}
+                Draggable::<u32> {
+                    payload: 3u32,
+                    label: "parcel",
+                    id: "voice-drag",
+                    style: "margin-top:12px; width:140px; padding:10px; border:1px solid #333; \
+                            background:#fff; cursor:grab; user-select:none;",
+                    "parcel"
+                }
+                DropZone::<u32> {
+                    label: "shelf",
+                    on_drop: move |_: DropOutcome<u32>| {},
+                    class: "voice-zone",
+                    style: "margin-top:12px; width:260px; min-height:50px; \
+                            border:2px dashed #999; padding:8px;",
+                    "shelf"
+                }
             }
         }
     }

@@ -54,6 +54,8 @@ enum Route {
         ShufflePage {},
         #[route("/menu")]
         MenuPage {},
+        #[route("/packing-list")]
+        PackingListPage {},
         #[route("/upload")]
         UploadPage {},
         #[route("/share")]
@@ -165,6 +167,15 @@ fn nav() -> Vec<(&'static str, &'static str, Vec<NavItem>)> {
                     route: Route::MenuPage {},
                 },
             ],
+        ),
+        (
+            "Voice",
+            "Speak every user's language.",
+            vec![NavItem {
+                title: "Packing list",
+                blurb: "Announcements and labels localized live with dioxus-i18n.",
+                route: Route::PackingListPage {},
+            }],
         ),
         (
             "Beyond the window",

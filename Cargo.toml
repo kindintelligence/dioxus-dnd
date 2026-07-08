@@ -45,3 +45,8 @@ dioxus-ssr = "0.7"
 web-sys = { version = "0.3", features = ["Location"] }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
+# The gallery's Packing list page wires DndStrings to dioxus-i18n (the
+# Fluent-based crate the Dioxus docs recommend); the library itself stays
+# dependency-free.
+dioxus-i18n = "0.5"
+unic-langid = { version = "0.9", features = ["macros"] }
