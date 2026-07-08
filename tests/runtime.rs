@@ -2161,6 +2161,122 @@ fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
     );
 }
 
+// --- Debug overlay: the registry, drawn -------------------------------------
+
+/// The overlay draws one outline per *measured* zone with its label and id,
+/// marks the hovered zone and per-zone acceptance live during a drag, and
+/// counts unmeasured zones in the status chip so absence is visible too.
+#[test]
+fn debug_overlay_draws_measured_zones_with_live_state() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                DropZone::<u32> {
+                    id: ZoneId(61),
+                    label: "Inbox",
+                    on_drop: move |_: DropOutcome<u32>| {},
+                    "a"
+                }
+                DropZone::<u32> {
+                    id: ZoneId(62),
+                    label: "Archive",
+                    accepts: move |_p: u32| false,
+                    on_drop: move |_: DropOutcome<u32>| {},
+                    "b"
+                }
+                DropZone::<u32> {
+                    id: ZoneId(63),
+                    label: "Unmeasured",
+                    on_drop: move |_: DropOutcome<u32>| {},
+                    "c"
+                }
+                DebugProbe {}
+                DndDebugOverlay::<u32> {}
+            }
+        }
+    }
+
+    #[component]
+    fn DebugProbe() -> Element {
+        let reg = use_zone_registry::<u32>();
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            // Measure two zones; leave 63 rect-less.
+            let mut rect = reg.get(ZoneId(61)).expect("registered").rect;
+            rect.set(Some(Rect::new(0.0, 0.0, 100.0, 40.0)));
+            let mut rect = reg.get(ZoneId(62)).expect("registered").rect;
+            rect.set(Some(Rect::new(0.0, 60.0, 100.0, 40.0)));
+            // A drag in flight, hovering Inbox.
+            dnd.start(
+                5,
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            dnd.enter(ZoneId(61));
+        });
+        rsx! {
+            div {}
+        }
+    }
+
+    let html = run(app);
+    // Hovered, accepting zone: outlined, marked over.
+    assert!(
+        html.contains(r#"data-debug-zone="61" data-over="true" data-accepts="true""#),
+        "zone 61 over + accepting: {html}"
+    );
+    assert!(html.contains("Inbox #61 - over"), "labeled tag: {html}");
+    // Rejecting zone: outlined, no over, acceptance false.
+    assert!(
+        html.contains(r#"data-debug-zone="62" data-accepts="false""#),
+        "zone 62 rejects: {html}"
+    );
+    assert!(
+        html.contains("Archive #62 - rejects"),
+        "rejects tag: {html}"
+    );
+    // Unmeasured zone draws no outline but is counted.
+    assert!(
+        !html.contains(r#"data-debug-zone="63""#),
+        "no rect, no outline: {html}"
+    );
+    assert!(
+        html.contains("dragging - over zone 61"),
+        "status chip: {html}"
+    );
+}
+
+/// Idle: no acceptance markers, and the status chip reports the census.
+#[test]
+fn debug_overlay_idle_reports_census() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                DropZone::<u32> {
+                    id: ZoneId(64),
+                    label: "Inbox",
+                    on_drop: move |_: DropOutcome<u32>| {},
+                    "a"
+                }
+                DndDebugOverlay::<u32> {}
+            }
+        }
+    }
+    let html = run(app);
+    assert!(
+        !html.contains("data-accepts"),
+        "no drag, no acceptance: {html}"
+    );
+    assert!(!html.contains("data-over"), "no drag, no hover: {html}");
+    assert!(
+        html.contains("1 zones (1 unmeasured) - idle"),
+        "census: {html}"
+    );
+}
+
 // --- Localizable strings: the DndStrings context ---------------------------
 
 /// Components read every phrase from the `DndStrings` context; providing

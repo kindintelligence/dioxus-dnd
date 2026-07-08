@@ -128,6 +128,14 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         self.zones.peek().iter().find(|z| z.id == id).cloned()
     }
 
+    /// Every registered zone, in registration order. Unlike the peeking
+    /// lookups around it this is a *subscribing* read - a component
+    /// rendering from it re-renders when zones mount or unmount - because
+    /// its consumers (the debug overlay, your own devtools) are renderers.
+    pub fn records(&self) -> Vec<ZoneRecord<T>> {
+        self.zones.read().to_vec()
+    }
+
     /// Is a zone with this id registered *here*? The parent-zone context is
     /// shared across payload types, so a record's `parent` can name a zone
     /// living in another type's registry - check before navigating to one.

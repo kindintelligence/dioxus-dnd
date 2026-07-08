@@ -8,6 +8,7 @@ pub mod animate;
 pub mod autoscroll;
 pub mod board;
 pub mod canvas;
+pub mod debug;
 pub mod dragout;
 pub mod external;
 pub mod files;
@@ -38,6 +39,7 @@ pub mod prelude {
         GestureEffect, GestureEvent, GesturePhase, ModifierCtx, ParentZone, Point, Rect,
         RectRefresh, ZoneId, ZoneRecord, ZoneRegistry,
     };
+    pub use crate::debug::DndDebugOverlay;
     pub use crate::dragout::{ExternalDragSource, OutboundContent};
     pub use crate::external::{classify, ExternalDrop, ExternalDropZone, ExternalPayload};
     pub use crate::files::{FileDrop, FileDropZone, FileFilter, FileRejection};
