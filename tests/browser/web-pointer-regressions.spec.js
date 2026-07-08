@@ -229,6 +229,7 @@ test("sortable overlay matches the source row and cleans up after drop", async (
   await openGallery(page);
 
   const sortable = await section(page, "Sortable list");
+  await sortable.scrollIntoViewIfNeeded();
   const sourceBox = await elementBox(sortable, "Research");
   const targetBox = await elementBox(sortable, "Revise");
   expect(sourceBox).not.toBeNull();
@@ -239,7 +240,10 @@ test("sortable overlay matches the source row and cleans up after drop", async (
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, targetBox.y + targetBox.height * 0.75, {
     steps: 24,
   });
-  await page.waitForTimeout(250);
+  // Wait for the drag to actually register before inspecting the overlay,
+  // rather than a fixed timeout that can lose the race under load.
+  await expect(sortable.locator('[data-dragging]').first()).toBeVisible();
+  await page.waitForTimeout(100);
 
   const overlayBox = await elementBox(sortable, "Research", "fixed");
   expect(overlayBox).not.toBeNull();
@@ -566,15 +570,17 @@ test("sortable release outside the list commits no reorder", async ({ page }) =>
   expect(before).toEqual(["Research", "Draft", "Review", "Revise", "Publish"]);
 
   const sortable = await section(page, "Sortable list");
+  await sortable.scrollIntoViewIfNeeded();
   const source = await elementBox(sortable, "Research");
   expect(source).not.toBeNull();
 
   await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
   await page.mouse.down();
-  // cross the threshold and hover a real target...
+  // cross the threshold and confirm the drag actually started...
   await page.mouse.move(source.x + source.width / 2, source.y + source.height * 1.6, { steps: 6 });
-  // ...then wander far below every row and release there.
-  await page.mouse.move(source.x + source.width / 2, source.y + 1200, { steps: 24 });
+  await expect(sortable.locator("[data-dragging]").first()).toBeVisible();
+  // ...then release at the top-left corner, clearly outside the list bounds.
+  await page.mouse.move(5, 5, { steps: 24 });
   await page.waitForTimeout(100);
   await page.mouse.up();
   await page.waitForTimeout(300);
@@ -586,6 +592,7 @@ test("sortable release inside the list still reorders (control)", async ({ page 
   await openGallery(page);
 
   const sortable = await section(page, "Sortable list");
+  await sortable.scrollIntoViewIfNeeded();
   const source = await elementBox(sortable, "Research");
   const target = await elementBox(sortable, "Revise");
   expect(source).not.toBeNull();
@@ -594,13 +601,16 @@ test("sortable release inside the list still reorders (control)", async ({ page 
   await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
   await page.mouse.down();
   await page.mouse.move(source.x + source.width / 2, source.y + source.height * 1.6, { steps: 6 });
+  await expect(sortable.locator('[data-dragging]').first()).toBeVisible();
   await page.mouse.move(source.x + source.width / 2, target.y + target.height * 0.75, { steps: 24 });
   await page.waitForTimeout(100);
   await page.mouse.up();
   await page.waitForTimeout(300);
 
   // Research moved down past Revise.
-  expect(await sortableRowTexts(page)).toEqual(["Draft", "Review", "Revise", "Research", "Publish"]);
+  await expect
+    .poll(() => sortableRowTexts(page))
+    .toEqual(["Draft", "Review", "Revise", "Research", "Publish"]);
 });
 
 test("grid release outside the tiles commits no reorder", async ({ page }) => {
@@ -610,14 +620,16 @@ test("grid release outside the tiles commits no reorder", async ({ page }) => {
   expect(before.slice(0, 3)).toEqual(["Tile 1", "Tile 2", "Tile 3"]);
 
   const grid = await section(page, "Grid");
+  await grid.scrollIntoViewIfNeeded();
   const source = await elementBox(grid, "Tile 1");
   expect(source).not.toBeNull();
 
   await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
   await page.mouse.down();
   await page.mouse.move(source.x + source.width * 1.6, source.y + source.height / 2, { steps: 6 });
-  // release far to the right of the whole grid
-  await page.mouse.move(source.x + 2000, source.y + source.height / 2, { steps: 24 });
+  await expect(grid.locator("[data-dragging]").first()).toBeVisible();
+  // release at the top-left corner, clearly outside the grid bounds.
+  await page.mouse.move(5, 5, { steps: 24 });
   await page.waitForTimeout(100);
   await page.mouse.up();
   await page.waitForTimeout(300);
@@ -692,6 +704,56 @@ test("pointer drop falls through a rejecting zone to the accepting one under it"
 
   // The drop reached the accepting zone under the rejecting one.
   await expect(status).toHaveAttribute("data-landed", "accept", { timeout: 5_000 });
+});
+
+// The pointer path must honor the modifier-key convention (Ctrl/Cmd = copy),
+// the same as the native path - so a Ctrl-drag leaves the source in place.
+test("ctrl-drag on the pointer path copies instead of moving", async ({ page }) => {
+  await openGallery(page);
+
+  const sec = await section(page, "Copy vs move");
+  await sec.scrollIntoViewIfNeeded();
+  const palette = sec.getByText("Palette", { exact: true }).locator("xpath=ancestor::div[1]");
+  const stage = sec.getByText("Stage", { exact: true }).locator("xpath=ancestor::div[1]");
+  const paletteCount = () => palette.getByText(/^(Button|Input|Chart)$/).count();
+
+  expect(await paletteCount()).toBe(3);
+
+  const src = await sec.getByText("Button", { exact: true }).boundingBox();
+  const dst = await stage.boundingBox();
+  expect(src).not.toBeNull();
+  expect(dst).not.toBeNull();
+
+  await page.keyboard.down("Control");
+  await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(src.x + src.width / 2 + 10, src.y + src.height / 2 + 10, { steps: 5 });
+  await page.mouse.move(dst.x + dst.width / 2, dst.y + dst.height / 2, { steps: 20 });
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  await page.waitForTimeout(300);
+
+  // Copy: the source stays in the palette AND a copy lands on the stage.
+  expect(await paletteCount()).toBe(3);
+  await expect(stage.getByText("Button", { exact: true })).toBeVisible();
+});
+
+// ReorderButtons rendered inside a SortableList row must still receive clicks -
+// pressing one must not let the row grab pointer capture and swallow the click.
+test("reorder buttons reorder from inside a sortable row", async ({ page }) => {
+  await openGallery(page);
+
+  const sec = await section(page, "Accessible reorder");
+  const order = () =>
+    sec
+      .locator("span")
+      .filter({ hasText: /^(Wake up|Ship code|Touch grass|Sleep)$/ })
+      .allInnerTexts();
+
+  expect(await order()).toEqual(["Wake up", "Ship code", "Touch grass", "Sleep"]);
+  await sec.getByRole("button", { name: "Move Wake up down" }).click();
+  await expect.poll(order).toEqual(["Ship code", "Wake up", "Touch grass", "Sleep"]);
 });
 
 // A native drop landing on a child node inside a canvas must report

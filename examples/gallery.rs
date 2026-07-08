@@ -37,9 +37,13 @@ fn App() -> Element {
                     }
                 }
                 CardsDemo {}
+                CopyMoveDemo {}
                 SortableDemo {}
+                AccessibleReorderDemo {}
                 GridDemo {}
+                FlipDemo {}
                 BoardDemo {}
+                AutoScrollDemo {}
                 TreeDemo {}
                 CanvasDemo {}
                 MultiSelectDemo {}
@@ -449,6 +453,160 @@ fn ExternalDemo() -> Element {
                         "Drop text or a link here"
                     } else {
                         "{dropped}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- 10. copy vs move (modifier keys + apply_clone_or_move) -------------------
+
+const PALETTE: ZoneId = ZoneId(20);
+const STAGE: ZoneId = ZoneId(21);
+
+#[component]
+fn CopyMoveDemo() -> Element {
+    let mut zones = use_signal(|| {
+        let mut m: HashMap<ZoneId, Vec<Card>> = HashMap::new();
+        m.insert(
+            PALETTE,
+            vec![
+                Card { id: 1, title: "Button".into() },
+                Card { id: 2, title: "Input".into() },
+                Card { id: 3, title: "Chart".into() },
+            ],
+        );
+        m.insert(STAGE, vec![]);
+        m
+    });
+    let mut next_id = use_signal(|| 100u32);
+    let on_drop = move |o: DropOutcome<Card>| {
+        // Ctrl/Cmd forces a copy (new id, source kept); a plain drag moves.
+        apply_clone_or_move(
+            &mut zones.write(),
+            o,
+            |c| c.id,
+            move |mut c| {
+                c.id = next_id();
+                next_id += 1;
+                c
+            },
+        );
+    };
+    rsx! {
+        Section { title: "Copy vs move", note: "Drag to move. Hold Ctrl/Cmd to copy instead - the cursor and outcome follow the file-manager convention.",
+            DndProvider::<Card> {
+                div { class: "grid grid-cols-2 gap-4",
+                    for (name, zone) in [("Palette", PALETTE), ("Stage", STAGE)] {
+                        DropZone::<Card> {
+                            id: zone,
+                            label: name,
+                            on_drop,
+                            class: ZONE,
+                            p { class: "text-xs font-medium uppercase tracking-wide text-slate-400", "{name}" }
+                            for card in zones.read().get(&zone).cloned().unwrap_or_default() {
+                                PointerDraggable::<Card> {
+                                    payload: card.clone(),
+                                    zone,
+                                    input: DragInputMode::Pointer,
+                                    label: card.title.clone(),
+                                    class: ITEM,
+                                    "{card.title}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- 11. accessible reorder (headless ReorderButtons, no drag) ----------------
+
+#[component]
+fn AccessibleReorderDemo() -> Element {
+    let mut items = use_signal(|| {
+        ["Wake up", "Ship code", "Touch grass", "Sleep"]
+            .map(String::from)
+            .to_vec()
+    });
+    rsx! {
+        Section { title: "Accessible reorder", note: "No drag required - the up/down buttons emit the same SortEvent dragging does, so one on_sort serves both.",
+            SortableList {
+                len: items.read().len(),
+                input: DragInputMode::Pointer,
+                on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
+                class: "space-y-2 [&>*]:flex [&>*]:items-center [&>*]:justify-between [&>*]:rounded-lg [&>*]:border [&>*]:border-slate-200 [&>*]:bg-white [&>*]:px-3 [&>*]:py-2 [&>*]:text-sm [&>[data-dragging]]:opacity-50 [&>[data-drop-target]]:border-slate-900",
+                render: move |ix: usize| rsx! {
+                    span { "{items.read()[ix]}" }
+                    ReorderButtons {
+                        index: ix,
+                        total: items.read().len(),
+                        label: items.read()[ix].clone(),
+                        on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
+                        class: "flex gap-1 [&_button]:rounded [&_button]:border [&_button]:border-slate-200 [&_button]:px-1.5 [&_button]:leading-none [&_button]:text-slate-600 [&_button:not(:disabled)]:hover:bg-slate-100 [&_button:disabled]:opacity-30",
+                    }
+                },
+            }
+        }
+    }
+}
+
+// --- 12. FLIP reorder transitions (animate::FlipItem, experimental) -----------
+
+#[component]
+fn FlipDemo() -> Element {
+    let mut tiles = use_signal(|| (1..=6).collect::<Vec<u32>>());
+    let mut epoch = use_signal(|| 0usize);
+    let shuffle = move |_| {
+        tiles.write().rotate_left(1);
+        epoch += 1;
+    };
+    rsx! {
+        Section { title: "FLIP animation", note: "Change the order and each tile glides from its old slot to the new one. (Experimental - depends on browser paint timing.)",
+            div { class: "space-y-3",
+                button {
+                    class: "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50",
+                    onclick: shuffle,
+                    "Shuffle"
+                }
+                div { class: "grid grid-cols-6 gap-2",
+                    for n in tiles.read().iter().copied() {
+                        // A stable key per tile lets Dioxus reuse the DOM node
+                        // across reorders, so FlipItem can measure the move.
+                        FlipItem {
+                            key: "{n}",
+                            epoch: epoch(),
+                            class: "flex items-center justify-center rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm",
+                            "{n}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- 13. auto-scrolling container --------------------------------------------
+
+#[component]
+fn AutoScrollDemo() -> Element {
+    let rows = use_signal(|| (1..=24).map(|n| format!("Row {n:02}")).collect::<Vec<_>>());
+    rsx! {
+        Section { title: "Auto-scroll", note: "Pick up a row and drag toward the top or bottom edge - the container scrolls itself, ramped by how close you are.",
+            DndProvider::<String> {
+                AutoScroll {
+                    class: "max-h-44 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2",
+                    for row in rows.read().iter().cloned() {
+                        PointerDraggable::<String> {
+                            payload: row.clone(),
+                            input: DragInputMode::Pointer,
+                            label: row.clone(),
+                            class: ITEM,
+                            "{row}"
+                        }
                     }
                 }
             }
