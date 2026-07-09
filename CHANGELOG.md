@@ -40,8 +40,39 @@
   (`tests/multiwindow.rs`, `tests/multiwindow_seam.rs`) pin the
   cross-VirtualDom contracts this rides on.
 
+- **`PointerKind` (`Mouse`/`Touch`/`Pen`) recorded per drag**: the
+  shared drag state now remembers which pointer device initiated a
+  pointer drag. `Draggable` records it at pickup from the initiating
+  event's `pointerType` (`ctx.set_pointer_kind`, exposed as
+  `ctx.pointer_kind()`; custom sources that never set it get the safe
+  `Mouse` default, and keyboard drags read as `Mouse` with
+  `mode() == Keyboard`). The point of the API is host-side glue: a
+  touch contact is implicitly captured by the browser, so the origin
+  webview itself streams the entire gesture (out-of-viewport moves and
+  the release included) to the source element and needs NO bridging,
+  while mouse and pen go blind at the viewport edge whenever native
+  capture is unavailable and need all of it.
+  `PointerKind::implicitly_captured()` encodes exactly that decision.
+
 ### Fixed
 
+- **Touch drags no longer glitch in multi-window use.** After the
+  Windows raw-input bridge landed, touch drags jittered and could end
+  early: Windows synthesizes MOUSE input from touch (the cursor trails
+  the finger, and synthesized button transitions fire mid-gesture), so
+  the bridge legs fed the drag from a second, laggier source alongside
+  the touch pointer stream the webview was already delivering via
+  implicit capture, and a synthesized left-button-up could complete the
+  drop mid-drag. The desktop-multiwindow example now gates all three
+  bridge legs (origin cursor poller, raw-input release/motion,
+  foreign-window release detection) on
+  `!ctx.pointer_kind().implicitly_captured()`: mouse and pen are
+  bridged, touch is left entirely to the webview's implicit capture.
+  Verified with real injected touch (`InjectTouchInput`) driving
+  cross-window drags in both directions, interleaved with mouse drags:
+  every drop lands, exactly one window highlights at a time, and the
+  sampled ghost trajectory shows zero direction reversals (the
+  double-driven jitter signature) in either window.
 - **Dead-signal reads hardened across windows** (the observed
   `0xc000041d` process-kill, STATUS_FATAL_USER_CALLBACK_EXCEPTION, the
   DioxusLabs/dioxus#4466 failure class; hit once on Windows 11 after

@@ -223,6 +223,50 @@ pub enum DragMode {
     Keyboard,
 }
 
+/// Which kind of pointer device is driving a pointer drag. Recorded at
+/// pickup (see [`crate::core::DndContext::set_pointer_kind`]) so
+/// host-side glue can decide which input layers need bridging: a touch
+/// contact is implicitly captured by the browser - the source element
+/// keeps receiving the whole gesture, out-of-viewport moves and the
+/// release included - while mouse and pen go blind at the viewport edge
+/// whenever native capture is unavailable. Feeding a captured pointer's
+/// drag from a second host-side source (cursor pollers, raw input)
+/// double-drives it: on Windows the touch-synthesized mouse cursor
+/// trails the finger, and its synthesized button transitions can end
+/// the drag early.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PointerKind {
+    /// A mouse - or anything unrecognized, because the safe default for
+    /// glue is to bridge (an unbridged blind pointer loses drops; a
+    /// double-driven captured one merely jitters).
+    #[default]
+    Mouse,
+    /// A touch contact; implicitly captured by the browser.
+    Touch,
+    /// A pen/stylus. The engines this crate targets route pen like
+    /// mouse for capture purposes, so glue should bridge it too.
+    Pen,
+}
+
+impl PointerKind {
+    /// Map a DOM `pointerType` string (`"mouse"` / `"touch"` / `"pen"`,
+    /// or empty when the browser cannot tell) to a kind.
+    pub fn from_pointer_type(pointer_type: &str) -> Self {
+        match pointer_type {
+            "touch" => Self::Touch,
+            "pen" => Self::Pen,
+            _ => Self::Mouse,
+        }
+    }
+
+    /// Does the browser implicitly capture this pointer to the source
+    /// element - i.e. does the webview itself keep streaming the whole
+    /// gesture, making host-side bridging unnecessary (and harmful)?
+    pub fn implicitly_captured(&self) -> bool {
+        matches!(self, Self::Touch)
+    }
+}
+
 /// How a `Draggable` (or a whole-row sortable) shares touch input with the
 /// page's native gestures.
 ///
@@ -320,6 +364,22 @@ pub struct DropOutcome<T> {
 mod tests {
     use super::*;
     use dioxus::prelude::Modifiers;
+
+    #[test]
+    fn pointer_kind_maps_dom_pointer_types() {
+        assert_eq!(PointerKind::from_pointer_type("mouse"), PointerKind::Mouse);
+        assert_eq!(PointerKind::from_pointer_type("touch"), PointerKind::Touch);
+        assert_eq!(PointerKind::from_pointer_type("pen"), PointerKind::Pen);
+        // Unrecognized (including the empty string some browsers report)
+        // must fall back to Mouse: glue then bridges, the safe default.
+        assert_eq!(PointerKind::from_pointer_type(""), PointerKind::Mouse);
+        assert_eq!(PointerKind::from_pointer_type("gamepad"), PointerKind::Mouse);
+        // Only touch is implicitly captured; mouse AND pen need bridging.
+        assert!(PointerKind::Touch.implicitly_captured());
+        assert!(!PointerKind::Mouse.implicitly_captured());
+        assert!(!PointerKind::Pen.implicitly_captured());
+        assert_eq!(PointerKind::default(), PointerKind::Mouse);
+    }
 
     #[test]
     fn modifier_effects_follow_convention() {

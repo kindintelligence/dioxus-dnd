@@ -40,8 +40,8 @@ pub mod prelude {
         BridgeDropZone, BridgeWorld, CanvasViewport, Direction, DndContext, DndProvider,
         DndStrings, DndWorld, DragId, DragMode, DragModifier, DragOverlay, DragState, Draggable,
         DropEffect, DropOutcome, DropZone, Edge, EdgeSet, GestureEffect, GestureEvent,
-        GesturePhase, ModifierCtx, ParentZone, Point, Rect, RectRefresh, SettleSlot, TouchSense,
-        WindowGeometry, WindowKey, ZoneId, ZoneRecord, ZoneRegistry,
+        GesturePhase, ModifierCtx, ParentZone, Point, PointerKind, Rect, RectRefresh, SettleSlot,
+        TouchSense, WindowGeometry, WindowKey, ZoneId, ZoneRecord, ZoneRegistry,
     };
     pub use crate::debug::DndDebugOverlay;
     pub use crate::dragout::{ExternalDragSource, OutboundContent};

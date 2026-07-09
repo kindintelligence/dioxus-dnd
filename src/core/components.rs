@@ -41,8 +41,8 @@ enum NavKey {
     Ascend,
 }
 use super::types::{
-    edge_of, effective_effect, Direction, DragMode, DropEffect, DropOutcome, EdgeSet, Point, Rect,
-    TouchSense, ZoneId,
+    edge_of, effective_effect, Direction, DragMode, DropEffect, DropOutcome, EdgeSet, Point,
+    PointerKind, Rect, TouchSense, ZoneId,
 };
 
 /// How long a touch must stay put before [`TouchSense::Auto`] promotes the
@@ -330,6 +330,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     };
     let mut node = use_signal(|| None::<Rc<MountedData>>);
     let mut press_offset = use_signal(Point::default);
+    // The initiating press's device kind, recorded into the drag state at
+    // promotion so host-side glue can tell captured pointers (touch) from
+    // blind ones (mouse/pen) - see `PointerKind`.
+    let mut press_kind = use_signal(PointerKind::default);
     // The element's rect, measured at press time - so a promotion can hand
     // the ghost its size synchronously. Measuring at Begin instead left the
     // `match_source` overlay blank for the measurement roundtrip (~a few
@@ -350,6 +354,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             effect,
             DragMode::Pointer,
         );
+        dnd.set_pointer_kind(*press_kind.peek());
         // Dress a size-matched ghost immediately from the press-time
         // measurement; fall back to measuring now only if the press's
         // measurement hasn't landed yet (a press promoted within a frame).
@@ -490,6 +495,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 });
                 let o = evt.element_coordinates();
                 press_offset.set(Point::new(o.x, o.y));
+                press_kind.set(PointerKind::from_pointer_type(&evt.pointer_type()));
                 // Measure at press so a later promotion can size the ghost
                 // without waiting on a roundtrip (see `press_rect`).
                 press_rect.set(None);

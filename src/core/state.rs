@@ -13,7 +13,7 @@
 
 use dioxus::prelude::*;
 
-use super::types::{DragMode, DropEffect, Point, Rect, ZoneId};
+use super::types::{DragMode, DropEffect, Point, PointerKind, Rect, ZoneId};
 
 /// A snapshot of an in-flight drag.
 ///
@@ -35,6 +35,12 @@ pub struct DragState<T: 'static> {
     pub effect: DropEffect,
     /// How this drag is being driven (pointer vs keyboard).
     pub mode: DragMode,
+    /// Which pointer device drives a pointer drag (mouse/touch/pen).
+    /// Meaningful only while `mode` is [`DragMode::Pointer`]; host-side
+    /// glue reads it to bridge exactly the input layers the device
+    /// needs (see [`PointerKind`]). `Draggable` records it at pickup;
+    /// custom sources that never do get the safe `Mouse` default.
+    pub pointer_kind: PointerKind,
     /// Client rect of the dragged element, measured at pickup. Feeds
     /// size-matched ghosts (`DragOverlay { match_source: true }`); `None`
     /// until the async measurement lands or when a custom source never set
@@ -63,6 +69,7 @@ impl<T> Default for DragState<T> {
             grab: Point::default(),
             effect: DropEffect::default(),
             mode: DragMode::default(),
+            pointer_kind: PointerKind::default(),
             source_rect: None,
             refocus: None,
             settle: None,
@@ -119,6 +126,9 @@ impl<T: Clone + 'static> DndContext<T> {
             grab,
             effect,
             mode,
+            // The safe default; the drag source refines it right after
+            // this call via `set_pointer_kind` (as `Draggable` does).
+            pointer_kind: PointerKind::default(),
             // Measured (async) by the drag source right after this call.
             source_rect: None,
             // A new drag supersedes any unclaimed focus restoration.
@@ -126,6 +136,16 @@ impl<T: Clone + 'static> DndContext<T> {
             // Starting a new drag interrupts any settle still gliding.
             settle: None,
         });
+    }
+
+    /// Record which pointer device drives the current drag (see
+    /// [`DragState::pointer_kind`]). `Draggable` sets this right after
+    /// pickup from the initiating event's `pointerType`; call it from
+    /// custom pointer sources so host-side glue (cursor pollers, raw
+    /// input bridges) can tell captured pointers from blind ones. Left
+    /// alone, every drag reads as `Mouse`.
+    pub fn set_pointer_kind(&mut self, kind: PointerKind) {
+        self.state.pointer_kind().set(kind);
     }
 
     /// Record that `payload` just landed via a keyboard drop and its new
@@ -309,6 +329,12 @@ impl<T: Clone + 'static> DndContext<T> {
     /// How the current drag is being driven.
     pub fn mode(&self) -> DragMode {
         self.state.mode().cloned()
+    }
+
+    /// Which pointer device drives the current drag (meaningful for
+    /// [`DragMode::Pointer`] drags; `Mouse` otherwise and by default).
+    pub fn pointer_kind(&self) -> PointerKind {
+        self.state.pointer_kind().cloned()
     }
 
     /// Push a screen-reader announcement (rendered by

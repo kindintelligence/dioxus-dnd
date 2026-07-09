@@ -279,12 +279,29 @@ fn Chrome(header: Element, children: Element) -> Element {
 /// Releases INSIDE the origin viewport are left to the Draggable's own
 /// pointerup (via its capture-substitute layer), keeping single-window
 /// semantics - snap, modifiers - exactly as before.
+///
+/// Every leg is gated on the drag's `PointerKind`: only pointers WITHOUT
+/// implicit capture (mouse, pen) are bridged. A touch drag is already
+/// streamed whole to the origin webview by the browser's implicit
+/// capture; bridging it too double-drives the drag from Windows'
+/// touch-synthesized mouse (a cursor trailing the finger, plus
+/// synthesized button transitions that can end the drag early).
 #[component]
 fn DragBridge() -> Element {
     let Some(joined) = use_joined_window::<Card>() else {
         return rsx! {};
     };
     let ctx = joined.world.context();
+
+    // Touch drags need NO bridging: the browser implicitly captures a
+    // touch contact, so the origin webview itself streams the whole
+    // gesture (out-of-viewport moves and the release included) to the
+    // source element. Bridging them anyway double-drives the drag from
+    // the touch-synthesized mouse cursor, which trails the finger and
+    // whose synthesized button transitions can end the drag early -
+    // the observed touch glitch. Mouse and pen go blind at the
+    // viewport edge, so they get all three legs below.
+    let bridged = move || ctx.dragging() && !ctx.pointer_kind().implicitly_captured();
 
     // Third leg: raw-input release detection + event-rate tracking (see
     // the Windows amendment above). DeviceEvents reach every window's
@@ -303,7 +320,7 @@ fn DragBridge() -> Element {
             filter_set.set(true);
             target.set_device_event_filter(dioxus::desktop::tao::event_loop::DeviceEventFilter::Never);
         }
-        if !ctx.dragging() || joined.world.origin_window() != Some(joined.key) {
+        if !bridged() || joined.world.origin_window() != Some(joined.key) {
             return;
         }
         let Event::DeviceEvent { event, .. } = event else {
@@ -337,8 +354,9 @@ fn DragBridge() -> Element {
 
     // Origin-side poller: spawned when a drag starts, ends itself when
     // the drag does. ~30ms keeps the ghost smooth without busy-waiting.
+    // Skipped entirely for captured (touch) drags - see `bridged`.
     use_effect(move || {
-        if !ctx.dragging() {
+        if !bridged() {
             return;
         }
         if joined.world.origin_window() != Some(joined.key) {
@@ -366,9 +384,12 @@ fn DragBridge() -> Element {
         });
     });
 
-    // Foreign-side release detection.
+    // Foreign-side release detection. Also gated off for captured
+    // (touch) drags: the origin webview hears the touch release itself,
+    // and a foreign window's synthesized-mouse events must not complete
+    // the drop at the trailing cursor position.
     use_wry_event_handler(move |event, _| {
-        let dragging_foreign = ctx.dragging()
+        let dragging_foreign = bridged()
             && joined.world.origin_window().is_some()
             && joined.world.origin_window() != Some(joined.key);
         if !dragging_foreign {

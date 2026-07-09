@@ -31,7 +31,7 @@ pub use state::{DndContext, DragState};
 pub use strings::{use_dnd_strings, DndStrings};
 pub use types::{
     edge_of, effective_effect, Direction, DragId, DragMode, DropEffect, DropOutcome, Edge, EdgeSet,
-    Point, Rect, TouchSense, ZoneId,
+    Point, PointerKind, Rect, TouchSense, ZoneId,
 };
 pub use viewport::{
     screen_delta_to_world, screen_to_world, world_delta_to_screen, world_to_screen, CanvasViewport,

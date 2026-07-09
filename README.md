@@ -888,10 +888,15 @@ npm install && npm run test:web
     `use_wry_event_handler` plus
     `set_device_event_filter(DeviceEventFilter::Never)` (the default
     `Unfocused` filter never delivers - the foreground input owner is
-    the WebView2 process's HWND). Touch needs none of this (implicit
-    capture). Known trap unchanged: windows created hidden then shown
-    have broken DnD in WebView2 (wry#1639), so create drop-target
-    windows visible.
+    the WebView2 process's HWND). Touch needs none of this - implicit
+    capture streams the whole gesture to the origin webview - and MUST
+    NOT be bridged: Windows synthesizes mouse input from touch (a
+    cursor trailing the finger, spurious button transitions), so
+    bridging a touch drag double-drives it. The example gates every
+    bridge leg on the drag's `PointerKind` (recorded by `Draggable` at
+    pickup, `ctx.pointer_kind()`): bridge mouse and pen, never touch.
+    Known trap unchanged: windows created hidden then shown have broken
+    DnD in WebView2 (wry#1639), so create drop-target windows visible.
   - **macOS (WKWebView)**: expected to work on the same reasoning
     (AppKit routes the whole drag sequence to the mousedown view;
     `cursor_position` supported); not yet hand-verified.
