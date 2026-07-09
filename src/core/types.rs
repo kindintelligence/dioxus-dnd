@@ -223,6 +223,28 @@ pub enum DragMode {
     Keyboard,
 }
 
+/// How a `Draggable` (or a whole-row sortable) shares touch input with the
+/// page's native gestures.
+///
+/// Mouse and pen are unaffected: they always promote on plain travel past
+/// the threshold. This only decides what a *finger* means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TouchSense {
+    /// The safe default for anything that can sit in a scrollable view:
+    /// the element carries `touch-action: pan-y`, so a vertical swipe keeps
+    /// scrolling the page, while a short hold (250ms with the finger still)
+    /// or a sideways-dominant pull picks the item up. Once a drag begins,
+    /// further touch moves are consumed so the page stays put.
+    #[default]
+    Auto,
+    /// The element owns every touch from the first pixel
+    /// (`touch-action: none`): any travel past the threshold drags, and
+    /// finger-scrolling across the element is disabled - the behavior of
+    /// releases before 2.5. Reach for it on surfaces that never scroll
+    /// (a full-screen canvas, a game board).
+    Immediate,
+}
+
 /// The visual/semantic effect of a drop, mirroring the HTML5
 /// `dropEffect`/`effectAllowed` vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

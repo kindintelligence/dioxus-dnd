@@ -6,12 +6,13 @@
 //! (usually with [`apply_sort`]).
 //!
 //! Mouse, touch and pen all drive the same pointer-event gesture machine, so
-//! the browser never creates a native drag image. By default the whole row
-//! is the touch target, which sets `touch-action: none` on it - fine for
-//! short lists, but it stops finger-scrolling through the rows. Inside a
-//! scrollable list, set `touch_handle: true` to confine pointer drags to a
-//! leading grip (style it via `[data-sort-handle]`) so the rows themselves
-//! still scroll.
+//! the browser never creates a native drag image. Whole rows are the touch
+//! target by default, and touch auto-senses ([`TouchSense::Auto`]): a
+//! vertical swipe keeps scrolling the list, a short hold or a sideways pull
+//! picks the row up - no configuration needed inside scrollable views. Set
+//! `touch: TouchSense::Immediate` to make any 8px travel drag (which stops
+//! finger-scrolling across the rows), or `touch_handle: true` to confine
+//! pointer drags to a leading grip (style it via `[data-sort-handle]`).
 //!
 //! Headless: the component ships behavior plus a couple of `data-*` styling
 //! hooks; you compose the looks. Rows slide to preview the drop by default -
@@ -35,9 +36,12 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::a11y::use_reduced_motion_css;
-use crate::core::components::overlay_style;
+use crate::core::components::{overlay_style, touch_style, HoldTimer};
 use crate::core::hooks::use_rect_refresh_thunk;
-use crate::core::{platform, transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
+use crate::core::{
+    platform, transition_with, GestureEffect, GestureEvent, GesturePhase, Point, Promotion, Rect,
+    TouchSense,
+};
 
 fn pointer_client(evt: &PointerEvent) -> Point {
     let c = evt.client_coordinates();
@@ -317,6 +321,13 @@ pub fn SortableList(
     /// Style it via `[data-sort-handle]`.
     #[props(default = false)]
     touch_handle: bool,
+    /// How a finger shares whole rows with native scrolling (ignored under
+    /// `touch_handle`, where the grip owns every touch).
+    /// [`TouchSense::Auto`] (default) keeps vertical swipes scrolling and
+    /// picks a row up on a short hold or a sideways pull;
+    /// [`TouchSense::Immediate`] makes any 8px travel drag.
+    #[props(default)]
+    touch: TouchSense,
     /// Content for the `touch_handle` grip, keyed by index. Defaults to a
     /// braille-dots glyph when unset.
     #[props(default)]
@@ -367,9 +378,22 @@ pub fn SortableList(
     // drop target) is resolved synchronously on every tracked move - no
     // derived effect - so the gap never lags the pointer.
     let mut gesture = use_signal(|| GesturePhase::Idle);
+    // Some(pid) while a whole-row touch press under `Auto` waits on its hold
+    // timer; doubles as the timer element's render condition.
+    let mut hold_pid = use_signal(|| None::<i32>);
     let mut step = move |event: GestureEvent| -> GestureEffect {
-        let (next, fx) = transition(*gesture.peek(), event, 8.0);
+        let promotion = if hold_pid.peek().is_some() {
+            Promotion::HoldOrSideways
+        } else {
+            Promotion::Distance
+        };
+        let (next, fx) = transition_with(*gesture.peek(), event, 8.0, promotion);
         gesture.set(next);
+        // Any exit from Pressed retires the pending hold - the drag began,
+        // the press tapped out, or a vertical pull yielded to the scroll.
+        if hold_pid.peek().is_some() && !matches!(next, GesturePhase::Pressed { .. }) {
+            hold_pid.set(None);
+        }
         fx
     };
     // Feed one pointer event and act on the machine's effect. The source row is
@@ -529,8 +553,32 @@ pub fn SortableList(
                 cancel_drag();
             },
             onlostpointercapture: move |_| cancel_drag(),
+            // A promoted drag owns the touch: cancel its moves (they bubble
+            // from the row) so the browser can't start a pan mid-drag -
+            // `touch-action` is only consulted at gesture start, so the
+            // rows' `pan-y` alone can't.
+            ontouchmove: move |evt: TouchEvent| {
+                if matches!(*gesture.peek(), GesturePhase::Dragging { .. }) {
+                    evt.prevent_default();
+                }
+            },
+            // Android pops a context menu on touch long-press; mid-gesture
+            // that would tear the hold or the drag. Idle presses keep it.
+            oncontextmenu: move |evt: Event<MouseData>| {
+                if !matches!(*gesture.peek(), GesturePhase::Idle) {
+                    evt.prevent_default();
+                }
+            },
             ..attributes,
             {reduced_motion_css}
+            // Armed only while a whole-row touch press waits under `Auto`;
+            // the alarm promotes exactly like a threshold crossing.
+            if let Some(pid) = hold_pid() {
+                HoldTimer {
+                    pointer_id: pid,
+                    on_hold: move |pid| feed(GestureEvent::Hold { pointer_id: pid }),
+                }
+            }
             for ix in 0..len {
                 div {
                     key: "{ix}",
@@ -569,7 +617,7 @@ pub fn SortableList(
                         if touch_handle {
                             format!("display: flex; align-items: stretch; width: 100%; {base}")
                         } else {
-                            format!("touch-action: none; {base}")
+                            format!("{} {base}", touch_style(touch))
                         }
                     },
                     // Pointer path (whole-row mode). With `touch_handle` these
@@ -592,7 +640,16 @@ pub fn SortableList(
                         if let Some(n) = mounteds.peek().get(&ix).cloned() {
                             platform::capture_pointer(&n, evt.pointer_id());
                         }
-                        feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
+                        let pid = evt.pointer_id();
+                        feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: pid });
+                        // Arm the long-press clock: fingers (and pens) under
+                        // `Auto` promote on hold-or-sideways; mice on travel.
+                        if touch == TouchSense::Auto
+                            && evt.pointer_type() != "mouse"
+                            && matches!(*gesture.peek(), GesturePhase::Pressed { pointer_id, .. } if pointer_id == pid)
+                        {
+                            hold_pid.set(Some(pid));
+                        }
                     },
                     onmounted: move |evt: Event<MountedData>| {
                         let m: Rc<MountedData> = evt.data();

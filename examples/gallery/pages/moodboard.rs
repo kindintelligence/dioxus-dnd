@@ -118,6 +118,12 @@ const SNIPPET: &str = r#"CanvasDropZone::<Note> {
 
 // --- 10. moodboard (canvas: free position) -----------------------------------
 
+const BOARD: ZoneId = ZoneId(7100);
+const BOUNDS: Bounds = Bounds {
+    width: 640.0,
+    height: 220.0,
+};
+
 #[derive(Clone, PartialEq)]
 struct Note {
     id: u32,
@@ -178,10 +184,8 @@ fn MoodboardDemo() -> Element {
             DndProvider::<Note> {
                 LiveRegion::<Note> {}
                 CanvasDropZone::<Note> {
-                    bounds: Bounds {
-                        width: 640.0,
-                        height: 220.0,
-                    },
+                    id: BOARD,
+                    bounds: BOUNDS,
                     on_drop: move |d: CanvasDrop<Note>| {
                         let mut ns = notes.write();
                         if let Some(n) = ns.iter_mut().find(|n| n.id == d.payload.id) {
@@ -190,17 +194,47 @@ fn MoodboardDemo() -> Element {
                         }
                     },
                     class: "relative h-56 overflow-hidden rounded-xl bg-[#EEEADF] bg-[radial-gradient(#D7D4C9_1px,transparent_1px)] [background-size:16px_16px] ring-1 ring-[#E8E5D9] shadow-[inset_0_1px_2px_rgba(26,24,21,0.07)] transition data-active:ring-[#6C9984]/60",
-                    for note in notes.read().clone() {
-                        Draggable::<Note> {
-                            payload: note.clone(),
-                            label: note.label.clone(),
-                            style: "position: absolute; left: {note.x}px; top: {note.y}px;",
-                            class: "w-36 cursor-grab select-none rounded-lg p-3 text-[12px] font-medium leading-snug text-[#2C2A25] shadow-[0_6px_18px_-6px_rgba(26,24,21,0.10)] ring-1 ring-black/25 transition hover:-translate-y-0.5 data-dragging:opacity-60 {note_color(note.id)}",
-                            span { class: "mb-1.5 block h-1.5 w-1.5 rounded-full bg-black/20" }
-                            div { "{note.label}" }
-                        }
-                    }
+                    MoodNotes { notes }
                 }
+            }
+        }
+    }
+}
+
+/// The notes themselves. The one in flight rides the pointer through the
+/// exact corrected placement its drop will use (same `canvas_position`
+/// math, same bounds), so the element simply travels across the board and
+/// stops where you let go - fully normal appearance, nothing left behind,
+/// no overlay.
+#[component]
+fn MoodNotes(notes: Signal<Vec<Note>>) -> Element {
+    let dnd = use_dnd::<Note>();
+    let registry = use_zone_registry::<Note>();
+    let live_pos = move |note: &Note| -> Point {
+        let in_flight = dnd.dragging()
+            && dnd.mode() == DragMode::Pointer
+            && dnd.payload().map(|p| p.id) == Some(note.id);
+        if in_flight {
+            if let Some(rect) = registry.get(BOARD).and_then(|r| *r.rect.peek()) {
+                let pointer = client_to_canvas(dnd.pointer(), rect);
+                return canvas_position(pointer, dnd.grab(), None, Some(BOUNDS));
+            }
+        }
+        Point::new(note.x, note.y)
+    };
+    rsx! {
+        for note in notes.read().clone() {
+            Draggable::<Note> {
+                key: "{note.id}",
+                payload: note.clone(),
+                label: note.label.clone(),
+                style: {
+                    let p = live_pos(&note);
+                    format!("position: absolute; left: {}px; top: {}px;", p.x, p.y)
+                },
+                class: "w-36 cursor-grab select-none rounded-lg p-3 text-[12px] font-medium leading-snug text-[#2C2A25] shadow-[0_6px_18px_-6px_rgba(26,24,21,0.10)] ring-1 ring-black/25 hover:-translate-y-0.5 data-dragging:z-10 {note_color(note.id)}",
+                span { class: "mb-1.5 block h-1.5 w-1.5 rounded-full bg-black/20" }
+                div { "{note.label}" }
             }
         }
     }

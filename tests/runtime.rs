@@ -264,8 +264,8 @@ fn draggable_renders_a11y_attributes() {
         "in-app drags should not opt into native HTML drag: {html}"
     );
     assert!(
-        html.contains("touch-action: none"),
-        "pointer drag style missing: {html}"
+        html.contains("touch-action: pan-y"),
+        "pointer drag style missing (Auto default is pan-y): {html}"
     );
     assert!(
         html.contains("aria-roledescription"),
@@ -1596,9 +1596,34 @@ fn draggable_merges_user_style_with_touch_action() {
         }
     }
     let html = run(app);
+    // Functional style first (Auto's pan-y block), user declarations last so
+    // they win per-property.
     assert!(
-        html.contains("touch-action: none; background: red;"),
+        html.contains("touch-action: pan-y"),
         "touch-action must survive a user style: {html}"
+    );
+    assert!(
+        html.contains("-webkit-touch-callout: none; background: red;"),
+        "user style must come after the functional block: {html}"
+    );
+}
+
+#[test]
+fn draggable_touch_immediate_restores_touch_action_none() {
+    fn app() -> Element {
+        use_dnd_provider::<String>();
+        rsx! {
+            Draggable::<String> {
+                payload: "x".to_string(),
+                touch: TouchSense::Immediate,
+                "item"
+            }
+        }
+    }
+    let html = run(app);
+    assert!(
+        html.contains("touch-action: none"),
+        "Immediate must own the touch surface outright: {html}"
     );
 }
 
@@ -2162,6 +2187,140 @@ fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
 
     assert_eq!(*ticket_drops.lock().unwrap(), vec!["fix the ghost"]);
     assert_eq!(*person_drops.lock().unwrap(), vec![7]);
+    // Idle: neither styling hook is present.
+    assert!(
+        !html.contains("data-active"),
+        "idle zone must not be active: {html}"
+    );
+    assert!(
+        !html.contains("data-over"),
+        "idle zone must not be over: {html}"
+    );
+}
+
+// The generated form for N > 2: `bridge_drop_zone!` expands the same recipe
+// to any list of payload worlds - here three - with per-world acceptance
+// and typed callbacks, no `dyn Any` anywhere.
+
+dioxus_dnd::bridge_drop_zone!(TriBridgeZone {
+    (&'static str, accepts_ticket, on_drop_ticket),
+    (u32, accepts_person, on_drop_person),
+    (i8, accepts_alert, on_drop_alert),
+});
+
+static TRI_TICKETS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+static TRI_PEOPLE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+static TRI_ALERTS: Mutex<Vec<i8>> = Mutex::new(Vec::new());
+
+fn tri_bridge_app() -> Element {
+    rsx! {
+        DndProvider::<&'static str> {
+            DndProvider::<u32> {
+                DndProvider::<i8> {
+                    TriBridgeZone {
+                        id: ZoneId(700),
+                        label: "agenda",
+                        accepts_ticket: move |t: &'static str| t != "done",
+                        on_drop_ticket: move |o: DropOutcome<&'static str>| {
+                            TRI_TICKETS.lock().unwrap().push(o.payload)
+                        },
+                        on_drop_person: move |o: DropOutcome<u32>| {
+                            TRI_PEOPLE.lock().unwrap().push(o.payload)
+                        },
+                        on_drop_alert: move |o: DropOutcome<i8>| {
+                            TRI_ALERTS.lock().unwrap().push(o.payload)
+                        },
+                        "agenda"
+                    }
+                    TriBridgeProbe {}
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn TriBridgeProbe() -> Element {
+    let reg_a = use_zone_registry::<&'static str>();
+    let reg_b = use_zone_registry::<u32>();
+    let reg_c = use_zone_registry::<i8>();
+    let id = ZoneId(700);
+
+    // One component, registered in all three worlds, label synced to each.
+    assert!(reg_a.contains(id) && reg_b.contains(id) && reg_c.contains(id));
+    for label in [
+        reg_a.get(id).unwrap().label.clone(),
+        reg_b.get(id).unwrap().label.clone(),
+        reg_c.get(id).unwrap().label.clone(),
+    ] {
+        assert_eq!(label.as_deref(), Some("agenda"));
+    }
+
+    // Per-world acceptance: the ticket world filters, the others take all.
+    let rec_a = reg_a.get(id).unwrap();
+    assert!(rec_a.accepts_payload(&"fix the ghost"));
+    assert!(!rec_a.accepts_payload(&"done"));
+    assert!(reg_c.get(id).unwrap().accepts_payload(&-3i8));
+
+    // The rect signal is one shared handle across all three registries:
+    // measuring through one world is visible to every world's hit-testing.
+    let mut rect = reg_b.get(id).unwrap().rect;
+    rect.set(Some(Rect::new(0.0, 0.0, 80.0, 40.0)));
+    let p = Point::new(5.0, 5.0);
+    assert_eq!(reg_a.hit_test(p), Some(id));
+    assert_eq!(reg_b.hit_test(p), Some(id));
+    assert_eq!(reg_c.hit_test(p), Some(id));
+
+    // Each drop is delivered through its own typed callback.
+    rec_a.on_drop.call(DropOutcome {
+        payload: "fix the ghost",
+        from: None,
+        to: id,
+        effect: DropEffect::Move,
+        mode: DragMode::Pointer,
+        client: p,
+        element: p,
+        grab: Point::default(),
+        edge: None,
+    });
+    reg_b.get(id).unwrap().on_drop.call(DropOutcome {
+        payload: 7u32,
+        from: None,
+        to: id,
+        effect: DropEffect::Move,
+        mode: DragMode::Keyboard,
+        client: p,
+        element: p,
+        grab: Point::default(),
+        edge: None,
+    });
+    reg_c.get(id).unwrap().on_drop.call(DropOutcome {
+        payload: -3i8,
+        from: None,
+        to: id,
+        effect: DropEffect::Move,
+        mode: DragMode::Pointer,
+        client: p,
+        element: p,
+        grab: Point::default(),
+        edge: None,
+    });
+
+    rsx! { div {} }
+}
+
+#[test]
+fn bridge_drop_zone_macro_registers_three_worlds_with_typed_callbacks() {
+    TRI_TICKETS.lock().unwrap().clear();
+    TRI_PEOPLE.lock().unwrap().clear();
+    TRI_ALERTS.lock().unwrap().clear();
+    let mut dom = VirtualDom::new(tri_bridge_app);
+    dom.rebuild_in_place();
+    let html = dioxus_ssr::render(&dom);
+
+    assert_eq!(*TRI_TICKETS.lock().unwrap(), vec!["fix the ghost"]);
+    assert_eq!(*TRI_PEOPLE.lock().unwrap(), vec![7]);
+    assert_eq!(*TRI_ALERTS.lock().unwrap(), vec![-3]);
     // Idle: neither styling hook is present.
     assert!(
         !html.contains("data-active"),
@@ -2807,6 +2966,252 @@ fn overlay_without_settle_vanishes_on_drop() {
     assert!(
         !html.contains("ghost"),
         "no ghost after a plain take: {html}"
+    );
+}
+
+/// `match_source: true` dresses the ghost in the grabbed element's measured
+/// rect (border-box), and stays content-sized while the measurement is
+/// still pending.
+#[test]
+fn overlay_match_source_sizes_ghost_to_the_measured_rect() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                MatchSourceScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn MatchSourceScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.start(
+                7,
+                None,
+                Point::new(300.0, 200.0),
+                Point::new(8.0, 8.0),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            // What Draggable's post-pickup measurement would deliver.
+            dnd.set_source_rect(Some(Rect::new(100.0, 50.0, 240.0, 44.0)));
+        });
+        rsx! {
+            DragOverlay::<u32> { match_source: true, class: "ghost", "g" }
+        }
+    }
+
+    let html = run(app);
+    assert!(
+        html.contains("width: 240px; height: 44px; box-sizing: border-box;"),
+        "ghost must wear the source rect: {html}"
+    );
+    assert!(
+        html.contains("left: 292px; top: 192px;"),
+        "pointer - grab anchoring unchanged: {html}"
+    );
+}
+
+/// Without a measured rect (measurement pending, or a custom source that
+/// never set one), a `match_source` ghost renders nothing - showing it
+/// content-sized would pop to the matched size a frame later.
+#[test]
+fn overlay_match_source_without_rect_renders_nothing() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                UnmeasuredScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn UnmeasuredScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.start(
+                7,
+                None,
+                Point::new(300.0, 200.0),
+                Point::new(8.0, 8.0),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+        });
+        rsx! {
+            DragOverlay::<u32> { match_source: true, class: "ghost", "g" }
+        }
+    }
+
+    let html = run(app);
+    assert!(
+        !html.contains("ghost"),
+        "no unsized ghost before the measurement lands: {html}"
+    );
+}
+
+/// While a drop settles, a `SettleSlot` marked active holds its space
+/// invisibly (no second copy beside the gliding ghost) and reveals once the
+/// settle finishes; `retarget_settle` re-aims the stored rect for the
+/// overlay to pick up. Inactive slots and idle providers are untouched.
+#[test]
+fn settle_slot_hides_while_settling_and_retargets() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                SlotScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn SlotScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.start(
+                7,
+                None,
+                Point::new(300.0, 200.0),
+                Point::new(8.0, 8.0),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            dnd.take_settling(Rect::new(0.0, 0.0, 100.0, 100.0));
+            // The landed element announcing its real position.
+            dnd.retarget_settle(Rect::new(40.0, 60.0, 80.0, 20.0));
+        });
+        assert_eq!(
+            dnd.settling(),
+            Some(Rect::new(40.0, 60.0, 80.0, 20.0)),
+            "retarget must replace the settle rect"
+        );
+        rsx! {
+            SettleSlot::<u32> { active: true, class: "landed", "book" }
+            SettleSlot::<u32> { active: false, class: "bystander", "other" }
+        }
+    }
+
+    let html = run(app);
+    assert!(
+        html.contains(r#"data-settling="true""#),
+        "active slot marked: {html}"
+    );
+    assert_eq!(
+        html.matches("visibility: hidden;").count(),
+        1,
+        "exactly the active slot hides: {html}"
+    );
+    assert_eq!(
+        html.matches("data-settling").count(),
+        1,
+        "the bystander slot is untouched: {html}"
+    );
+}
+
+/// Keyboard-drop focus continuity: the drop records the payload as a
+/// refocus request; the matching mount claims it exactly once, a foreign
+/// payload never does, and a new drag clears any unclaimed request.
+#[test]
+fn refocus_request_is_claimed_once_by_the_matching_payload() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                RefocusScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn RefocusScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.request_refocus(7);
+            // A foreign payload doesn't claim (or consume) the request.
+            assert!(!dnd.claim_refocus(&9));
+            // The landing element does - exactly once.
+            assert!(dnd.claim_refocus(&7));
+            assert!(!dnd.claim_refocus(&7));
+
+            // An unclaimed request dies with the next drag.
+            dnd.request_refocus(7);
+            dnd.start(
+                8,
+                None,
+                Point::default(),
+                Point::default(),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            assert!(!dnd.claim_refocus(&7));
+            dnd.cancel();
+        });
+        rsx! { div {} }
+    }
+
+    let _ = run(app);
+}
+
+/// `retarget_settle` outside a settle is a no-op, so a stale landing
+/// element can never plant a rect into a fresh drag.
+#[test]
+fn retarget_settle_is_inert_when_not_settling() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                InertScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn InertScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.retarget_settle(Rect::new(1.0, 2.0, 3.0, 4.0));
+        });
+        assert_eq!(dnd.settling(), None);
+        rsx! { div {} }
+    }
+
+    let _ = run(app);
+}
+
+/// A keyboard drag has no meaningful pointer, so the overlay renders
+/// nothing (it used to pin the ghost to the viewport corner). Zones
+/// highlight and the LiveRegion narrates instead.
+#[test]
+fn overlay_skips_keyboard_drags() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                KeyboardScene {}
+            }
+        }
+    }
+
+    #[component]
+    fn KeyboardScene() -> Element {
+        let mut dnd = use_dnd::<u32>();
+        use_hook(move || {
+            dnd.start(
+                7,
+                None,
+                Point::default(),
+                Point::default(),
+                DropEffect::Move,
+                DragMode::Keyboard,
+            );
+        });
+        rsx! {
+            DragOverlay::<u32> { class: "ghost", "g" }
+        }
+    }
+
+    let html = run(app);
+    assert!(
+        !html.contains("ghost"),
+        "no corner-pinned ghost for keyboard drags: {html}"
     );
 }
 

@@ -1,6 +1,13 @@
-//! Drop animations. **Experimental** - this module is the one part of the
-//! crate whose behavior depends on browser paint timing rather than pure
-//! logic; validate it in your target renderer and tune `duration` to taste.
+//! Drop animations.
+//!
+//! With the `web` feature (on a web renderer), the reorder glide is armed
+//! synchronously on the real DOM element - invert, forced style flush,
+//! release - so it cannot race the browser's paint schedule, and the
+//! animation itself is a plain compositor-driven CSS transition. Without
+//! it, a render-twice fallback stands in; that path is **experimental** -
+//! it depends on the browser painting the inverted frame between two
+//! commits, so validate it in your target renderer and tune `duration` to
+//! taste.
 //!
 //! [`FlipItem`] implements the FLIP technique (First–Last–Invert–Play) for
 //! reorder transitions: when your list order changes, each item measures
@@ -40,9 +47,10 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::a11y::use_reduced_motion_css;
-use crate::core::{Point, Rect};
+use crate::core::{platform, Point, Rect};
 
-/// FLIP animation phase.
+/// FLIP animation phase (render-twice fallback only; the `web` path hands
+/// the whole sequence to the DOM in one synchronous step).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 enum FlipPhase {
     /// At rest (transition armed, no transform).
@@ -50,6 +58,22 @@ enum FlipPhase {
     Rest,
     /// Rendered at the *old* position via an instant inverse transform.
     Invert(Point),
+}
+
+/// The inline style of an inverted item: parked at its old position, no
+/// transition. Shared by both paths so they cannot drift.
+fn invert_style(d: Point) -> String {
+    format!(
+        "transform: translate({}px, {}px); transition: none;",
+        d.x, d.y
+    )
+}
+
+/// The inline style of an at-rest item: no transform, transition armed.
+/// Also what [`platform::flip_transform`] leaves on the real element, so the
+/// virtual DOM's view of the attribute stays truthful.
+fn rest_style(duration: f64, easing: &str) -> String {
+    format!("transform: none; transition: transform {duration}ms {easing};")
 }
 
 /// Wraps one list/grid item and glides it to its new position whenever
@@ -72,8 +96,10 @@ pub fn FlipItem(
     let mut phase = use_signal(FlipPhase::default);
 
     // First & Last & Invert: on every epoch change, measure the new
-    // position, and if the item moved, snap an inverse transform on.
-    use_effect(use_reactive!(|epoch| {
+    // position, and if the item moved, run the glide. The synchronous DOM
+    // handoff is preferred; when it isn't available, snap the inverse
+    // transform on through a render instead.
+    use_effect(use_reactive!(|epoch, duration, easing| {
         let _ = epoch;
         let Some(m) = mounted.peek().clone() else {
             return;
@@ -83,10 +109,16 @@ pub fn FlipItem(
             if let Ok(r) = m.get_client_rect().await {
                 let now = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
                 if let Some(old) = *prev.peek() {
-                    let dx = old.x - now.x;
-                    let dy = old.y - now.y;
-                    if dx != 0.0 || dy != 0.0 {
-                        phase.set(FlipPhase::Invert(Point::new(dx, dy)));
+                    let d = Point::new(old.x - now.x, old.y - now.y);
+                    if d.x != 0.0 || d.y != 0.0 {
+                        let handed_off = platform::flip_transform(
+                            &m,
+                            &invert_style(d),
+                            &rest_style(duration, &easing),
+                        );
+                        if !handed_off {
+                            phase.set(FlipPhase::Invert(d));
+                        }
                     }
                 }
                 prev.set(Some(now));
@@ -94,9 +126,10 @@ pub fn FlipItem(
         });
     }));
 
-    // Play: once the inverted frame has committed, release the transform;
-    // the armed CSS transition glides the item home. (Effects run after the
-    // render commits, giving the browser a painted "old position" frame.)
+    // Play (fallback path only): once the inverted frame has committed,
+    // release the transform; the armed CSS transition glides the item home.
+    // (Effects run after the render commits, giving the browser a painted
+    // "old position" frame.)
     use_effect(move || {
         if matches!(phase(), FlipPhase::Invert(_)) {
             phase.set(FlipPhase::Rest);
@@ -104,15 +137,8 @@ pub fn FlipItem(
     });
 
     let style = match phase() {
-        FlipPhase::Invert(d) => {
-            format!(
-                "transform: translate({}px, {}px); transition: none;",
-                d.x, d.y
-            )
-        }
-        FlipPhase::Rest => {
-            format!("transform: none; transition: transform {duration}ms {easing};")
-        }
+        FlipPhase::Invert(d) => invert_style(d),
+        FlipPhase::Rest => rest_style(duration, &easing),
     };
     // The glide is an inline transition; honor prefers-reduced-motion.
     let reduced_motion_css = use_reduced_motion_css();

@@ -235,6 +235,7 @@ fn SprintColumns(board: Signal<HashMap<ContainerId, Vec<Card>>>) -> Element {
                     }
                     for (ix, card) in board.read().get(&col).cloned().unwrap_or_default().into_iter().enumerate() {
                         BoardItem::<Card> {
+                            key: "{card.id}",
                             item: card.clone(),
                             column: col,
                             index: ix,

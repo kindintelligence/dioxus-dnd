@@ -114,7 +114,11 @@ fn pointer_move_should_scroll(
 }
 
 /// A scrollable container that scrolls itself while a drag hovers near its
-/// edges. Give it the `overflow` CSS yourself (via `style`/`class`).
+/// edges. Give it the `overflow` CSS yourself (via `style`/`class`) - and
+/// consider `overscroll-behavior: contain` alongside it, so a wheel or
+/// touch scroll that hits the container's end mid-drag doesn't chain into
+/// scrolling the page. (The edge-scrolling itself is programmatic, clamps
+/// at the container's bounds, and never chains.)
 #[component]
 pub fn AutoScroll(
     /// Edge band size in px.

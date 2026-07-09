@@ -1,10 +1,13 @@
 //! Hooks for providing and consuming the drag context.
 
+use std::rc::Rc;
+
+use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
-use super::registry::{RectRefresh, ZoneRegistry};
+use super::registry::{RectRefresh, ZoneRecord, ZoneRegistry};
 use super::state::{DndContext, DragState};
-use super::types::{DragId, Point, ZoneId};
+use super::types::{DragId, DropOutcome, Point, Rect, ZoneId};
 
 /// Marker flag: a settle-enabled `DragOverlay<T>` is mounted somewhere in
 /// this provider's subtree, so `Draggable<T>` should route successful
@@ -115,6 +118,66 @@ pub fn use_zone_registry<T: Clone + 'static>() -> ZoneRegistry<T> {
 /// A stable, auto-generated [`ZoneId`] for this component instance.
 pub fn use_zone_id() -> ZoneId {
     use_hook(ZoneId::auto)
+}
+
+/// Live, type-erased view of one payload world at a bridge zone, as returned
+/// by [`use_bridge_world`] - so callers can OR any number of worlds together
+/// without naming their `T`s again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BridgeWorld {
+    /// An acceptable drag of this world's payload is in flight.
+    pub active: bool,
+    /// That drag currently hovers this zone.
+    pub over: bool,
+}
+
+/// Register `zone_id` as a drop target in `T`'s payload world - sharing the
+/// caller's `mounted`/`rect` signals - and report that world's live state
+/// this render.
+///
+/// This is the building block behind `BridgeDropZone` and the
+/// [`crate::bridge_drop_zone!`] macro: call it once per coexisting provider
+/// type with the same id and signals, and one element becomes a target in
+/// every world at once. Signals are Copy handles, so all records genuinely
+/// share one mounted/rect pair (any world's `refresh_rects()` re-measures
+/// the one rectangle every registry sees), while each drop still arrives
+/// through its own typed callback - no downcasts, no shared erased channel.
+///
+/// # Panics
+/// Panics if no ancestor provided a `DndProvider<T>`.
+pub fn use_bridge_world<T: Clone + PartialEq + 'static>(
+    zone_id: ZoneId,
+    parent: Option<ZoneId>,
+    label: Option<String>,
+    accepts: Option<Callback<T, bool>>,
+    on_drop: EventHandler<DropOutcome<T>>,
+    mounted: Signal<Option<Rc<MountedData>>>,
+    rect: Signal<Option<Rect>>,
+) -> BridgeWorld {
+    let dnd = use_dnd::<T>();
+    let mut reg = use_zone_registry::<T>();
+    use_hook(|| {
+        reg.register(ZoneRecord {
+            id: zone_id,
+            parent,
+            label: label.clone(),
+            on_drop: Callback::new(move |o| on_drop.call(o)),
+            accepts,
+            mounted,
+            rect,
+        });
+    });
+    use_drop(move || reg.unregister(zone_id));
+    reg.sync_label(zone_id, label);
+
+    let acceptable = match dnd.payload() {
+        Some(p) => accepts.map(|cb| cb.call(p)).unwrap_or(true),
+        None => false,
+    };
+    BridgeWorld {
+        active: dnd.dragging() && acceptable,
+        over: dnd.over() == Some(zone_id) && acceptable,
+    }
 }
 
 /// Client (viewport) coordinates of a native drag event as a [`Point`].

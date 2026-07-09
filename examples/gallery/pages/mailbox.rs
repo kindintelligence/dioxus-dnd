@@ -347,7 +347,11 @@ fn MailboxDemo() -> Element {
                         }
                     }
                 }
-                DragOverlay::<Vec<u32>> { class: "pointer-events-none rotate-2 rounded-lg bg-[#FBFAF6] px-3.5 py-2 text-[12px] font-semibold text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_20px_44px_-12px_rgba(26,24,21,0.14)]",
+                DragOverlay::<Vec<u32>> {
+                    settle: true,
+                    duration: 160.0,
+                    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+                    class: "pointer-events-none rotate-2 rounded-lg bg-[#FBFAF6] px-3.5 py-2 text-[12px] font-semibold text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_2px_4px_rgba(26,24,21,0.10),0_12px_24px_-8px_rgba(26,24,21,0.12)]",
                     MailGhost {}
                 }
             }

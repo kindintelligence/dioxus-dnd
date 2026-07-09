@@ -1,5 +1,124 @@
 # Changelog
 
+## Unreleased (2.5.0)
+
+### Added
+
+- **Size-matched ghosts**: `DragOverlay { match_source: true }` dresses the
+  ghost in the grabbed element's measured client rect (recorded in the new
+  `DragState::source_rect` / `dnd.source_rect()`, set by `Draggable` at
+  pickup or via `set_source_rect` from custom sources). With sizes equal,
+  the `pointer - grab` anchor is exact by construction: the ghost appears
+  precisely over what you picked up, whatever rsx it renders - no shrink,
+  no jump, no hand-tuned ghost widths.
+- **`on_settled` on `DragOverlay`** - fires once when the drop-settle glide
+  lands (including the degenerate no-glide cases), so completion effects
+  (arrival flashes, sounds) can sequence off the ghost instead of racing
+  it. Never fires for cancelled drags.
+- **`SettleSlot` + `retarget_settle`** - the missing half of drop-settle.
+  Wrap the element a drop just created and mark it `active`: it holds its
+  space invisibly while the ghost glides (no second copy beside the
+  ghost), re-aims the glide at its own measured rect via the new
+  `DndContext::retarget_settle` (the ghost lands exactly where the element
+  is, not at the zone's center - the overlay retargets smoothly even
+  mid-glide), and reveals the element the instant the ghost unmounts. One
+  object from pickup to landing.
+- Gallery: ghosts stay where they teach - the reading list (the
+  `DragOverlay` page) and the mailbox (multi-select count pill); the other
+  demos keep their clean dim-in-place drags. On the reading list the drag
+  is one object end to end: the original hides outright while in flight
+  (the size-matched ghost lifts off from its exact rect), the flash waits
+  for the glide via `on_settled`, and the drag-fade is a consistent
+  `opacity-40` everywhere else.
+
+### Fixed
+
+- `DragOverlay` no longer renders during keyboard drags - the pointer never
+  moves from the origin in that mode, so the ghost used to sit pinned at
+  the viewport corner. Zones highlight and `LiveRegion` narrates instead.
+- **A mouse press no longer focuses the `Draggable`.** `tabindex="0"`
+  (there for the keyboard path) made the div mouse-focusable as a browser
+  side effect; that stray focus outlived drops and - in lists whose nodes
+  get reused across re-renders - could surface a focus ring on an
+  unrelated item. `pointerdown` now runs `prevent_default()` (exactly what
+  `SortableList` rows always did): no press focus, no selection noise,
+  clicks on inner controls still fire, Tab-focus untouched.
+- **Keyboard drops walk focus to the moved item.** The drop re-mounts the
+  item elsewhere and the browser dumped focus on `<body>`, stranding
+  keyboard users. The drop now records a refocus request
+  (`request_refocus` / `claim_refocus` on `DndContext`, for custom sources
+  too) and the landing `Draggable` claims it on mount and focuses itself.
+- Gallery: the card loops are now keyed by id (reading list, newsletter,
+  sprint board), so DOM nodes track cards instead of positions across
+  drops.
+- **No more ghost pop-in at pickup.** `Draggable` measures its rect at
+  press time, so a `match_source` ghost is dressed synchronously the frame
+  the drag begins - previously the measurement ran after promotion and the
+  ghost appeared several frames late.
+- **Native-behavior audit fixes** (the principle: browser side effects are
+  suppressed on drag surfaces; only intended HTML semantics remain):
+  - `SortableGrid` tiles now `prevent_default()` on pointerdown like every
+    other drag surface - previously an `<img>`/`<a>` inside a tile could
+    hijack the gesture with a native browser drag, and press could focus
+    or start a text selection.
+  - `TouchSense::Immediate` now pins `user-select`/`-webkit-touch-callout`
+    like `Auto` (it only differed in `touch-action` by design).
+  - `TouchSense::Auto` allows `pinch-zoom` again (`touch-action: pan-y
+    pinch-zoom`) - two fingers were never a drag, and zoom is an
+    accessibility floor.
+  - Context menus are suppressed only while a gesture is in flight
+    (Android's touch long-press menu tore the 250ms hold); idle
+    right-clicks/long-presses keep the menu.
+  - `SelectableDraggable` swallows the browser's trailing `click` after a
+    completed drag - it used to collapse the just-dragged multi-selection
+    back to a single item.
+- Gallery: the arrival flash now animates `outline` instead of
+  `box-shadow` - the cards' entire resting look (inset border, elevation)
+  lives in box-shadow, so the old keyframes flattened the landed card for
+  600ms and snapped its look back at the end.
+
+- **Touch auto-sensing** (`TouchSense`, default `Auto`). `Draggable` and
+  whole-row `SortableList` now carry `touch-action: pan-y` instead of
+  `none`: a vertical finger swipe keeps scrolling the page, a short hold
+  (250ms, finger still) or a sideways-dominant pull picks the item up,
+  and a promoted drag then owns the touch (its `touchmove`s are
+  cancelled, so the page can't pan mid-drag - dioxus-web's delegated
+  listener on `#main` is non-passive, pinned by a browser spec). The
+  scroll-trap that `touch_handle` existed to work around is gone by
+  default; the grip stays available as an explicit affordance. Mouse
+  drags are unchanged. `TouchSense::Immediate` restores the 2.4
+  behavior for surfaces that never scroll. Under the hood the gesture
+  machine gained `GestureEvent::Hold`, a `Promotion` policy enum and
+  `transition_with` (the existing `transition` is unchanged, delegating
+  with `Promotion::Distance`); the hold clock is a zero-size CSS
+  animation whose `animationend` is the alarm, so the crate still has no
+  timer dependency and unmounting cancels it by construction.
+
+- **`bridge_drop_zone!` macro** - the `BridgeDropZone` recipe generated
+  for *any* number of coexisting payload worlds, since Rust's lack of
+  variadic generics is what caps the component form at `<A, B>`. Each
+  `(Type, accepts_prop, on_drop_prop)` row becomes one world with typed
+  callbacks; no `dyn Any` anywhere. Built on the new public
+  `use_bridge_world` hook (register one zone id in `T`'s world on shared
+  `mounted`/`rect` signals, get back erased `{active, over}` state);
+  `BridgeDropZone` itself is now two calls to it.
+
+### Changed
+
+- **`FlipItem` is no longer paint-timing dependent on web.** With the
+  `web` feature, the reorder glide is armed synchronously on the real DOM
+  element - inverted transform, forced style flush, release with the
+  transition armed - so the browser is guaranteed to start the glide from
+  the old position; the animation itself remains a compositor-driven CSS
+  transition, entirely off the VDOM cycle. The render-twice path remains
+  as the fallback without `web`, and keeps its experimental caveat.
+- **Touch behavior change (deliberate):** under the new `Auto` default a
+  quick vertical touch-pull on a `Draggable` scrolls instead of dragging;
+  hold briefly or pull sideways to drag. Set
+  `touch: TouchSense::Immediate` where the old reflex matters more than
+  scroll-through. (`GestureEvent` also gained the `Hold` variant - a
+  technically breaking addition if you exhaustively matched it.)
+
 ## 2.4.0 - 2026-07-09
 
 ### Added

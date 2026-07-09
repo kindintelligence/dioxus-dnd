@@ -17,11 +17,13 @@ use dioxus::prelude::*;
 
 use std::rc::Rc;
 
-use super::hooks::{use_dnd, use_dnd_provider, use_zone_id, use_zone_registry, SettleFlag};
+use super::hooks::{
+    use_bridge_world, use_dnd, use_dnd_provider, use_zone_id, use_zone_registry, SettleFlag,
+};
 use super::registry::{ZoneRecord, ZoneRegistry};
 use super::state::DndContext;
 use super::strings::use_dnd_strings;
-use super::{platform, transition, GestureEffect, GestureEvent, GesturePhase};
+use super::{platform, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion};
 
 /// Context marker a `DropZone` provides so zones nested inside it can
 /// discover their parent - powering hierarchical keyboard traversal with no
@@ -39,8 +41,57 @@ enum NavKey {
 }
 use super::types::{
     edge_of, effective_effect, Direction, DragMode, DropEffect, DropOutcome, EdgeSet, Point, Rect,
-    ZoneId,
+    TouchSense, ZoneId,
 };
+
+/// How long a touch must stay put before [`TouchSense::Auto`] promotes the
+/// press to a drag - the familiar mobile long-press beat (dnd-kit and iOS
+/// both sit around this value).
+pub(crate) const HOLD_DELAY_MS: f64 = 250.0;
+
+/// The functional inline style for a drag surface under each touch policy.
+/// `Auto` also pins down selection: a long-press that starts selecting text
+/// (or popping the iOS callout) would eat the hold.
+pub(crate) fn touch_style(touch: TouchSense) -> &'static str {
+    match touch {
+        // `pinch-zoom` stays allowed: two fingers were never a drag, and
+        // zooming is an accessibility floor.
+        TouchSense::Auto => {
+            "touch-action: pan-y pinch-zoom; user-select: none; \
+             -webkit-user-select: none; -webkit-touch-callout: none;"
+        }
+        TouchSense::Immediate => {
+            "touch-action: none; user-select: none; -webkit-user-select: none; \
+             -webkit-touch-callout: none;"
+        }
+    }
+}
+
+/// The long-press clock for [`TouchSense::Auto`], with no timer dependency:
+/// a zero-size element runs a no-op CSS animation for the hold duration and
+/// `animationend` is the alarm. Mounting arms it, unmounting (the gesture
+/// resolved some other way) cancels it - the element's lifecycle IS the
+/// timer's, so a stale callback can't outlive its press. Works on any
+/// renderer with CSS animations; where there are none, `Auto` quietly loses
+/// only its long-press path (sideways pulls still drag).
+#[component]
+pub(crate) fn HoldTimer(pointer_id: i32, on_hold: EventHandler<i32>) -> Element {
+    rsx! {
+        // The inline `display: none` matters: dioxus-web renders a bare
+        // `style {}` element visibly, so without it the keyframes rule
+        // flashes as page text on every press (same guard as
+        // `a11y::use_reduced_motion_css`).
+        style { style: "display: none;",
+            "@keyframes dnd-hold-timer {{ from {{ opacity: 0.99; }} to {{ opacity: 1; }} }}"
+        }
+        div {
+            style: "position: absolute; width: 0; height: 0; overflow: hidden; \
+                    animation: dnd-hold-timer {HOLD_DELAY_MS}ms linear forwards;",
+            aria_hidden: true,
+            onanimationend: move |_| on_hold.call(pointer_id),
+        }
+    }
+}
 
 /// Map an arrow key to a hierarchical move, honoring layout direction:
 /// horizontal arrows mirror under RTL (the WAI-ARIA tree convention), so
@@ -191,6 +242,13 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     /// Movement in CSS px before a pointer press becomes a drag.
     #[props(default = 8.0)]
     threshold: f64,
+    /// How a finger shares this element with native scrolling.
+    /// [`TouchSense::Auto`] (default) keeps vertical swipes scrolling the
+    /// page and picks up on a short hold or a sideways pull;
+    /// [`TouchSense::Immediate`] owns every touch from the first pixel.
+    /// Mouse and pen drags are identical under both.
+    #[props(default)]
+    touch: TouchSense,
     /// Human label used in screen-reader announcements ("Picked up {label}").
     #[props(default)]
     label: Option<String>,
@@ -216,17 +274,72 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     // Comparing against the context payload (rather than a local flag) means
     // the attribute is also correct when a custom source started the drag.
     let attr_payload = payload.clone();
+    // For claiming a keyboard drop's focus restoration on mount.
+    let mount_payload = payload.clone();
     let mut phase = use_signal(|| GesturePhase::Idle);
+    // Some(pid) while a touch press under `Auto` waits on its hold timer;
+    // doubles as the timer element's render condition.
+    let mut hold_pid = use_signal(|| None::<i32>);
     let mut step = move |event: GestureEvent, threshold: f64| -> GestureEffect {
-        let (next, fx) = transition(*phase.peek(), event, threshold);
+        let promotion = if hold_pid.peek().is_some() {
+            Promotion::HoldOrSideways
+        } else {
+            Promotion::Distance
+        };
+        let (next, fx) = transition_with(*phase.peek(), event, threshold, promotion);
         phase.set(next);
+        // Any exit from Pressed retires the pending hold - the drag began,
+        // the press tapped out, or a vertical pull yielded to the scroll.
+        if hold_pid.peek().is_some() && !matches!(next, GesturePhase::Pressed { .. }) {
+            hold_pid.set(None);
+        }
         fx
     };
     let mut node = use_signal(|| None::<Rc<MountedData>>);
     let mut press_offset = use_signal(Point::default);
+    // The element's rect, measured at press time - so a promotion can hand
+    // the ghost its size synchronously. Measuring at Begin instead left the
+    // `match_source` overlay blank for the measurement roundtrip (~a few
+    // frames), a visible pop-in at every pickup.
+    let mut press_rect = use_signal(|| None::<Rect>);
     let mut mods = use_signal(Modifiers::empty);
     let mut attributes = attributes;
-    let style = merge_style(&mut attributes, "touch-action: none;");
+    let style = merge_style(&mut attributes, touch_style(touch));
+
+    // Begin is reachable from two places - a pointer-move promotion and the
+    // hold timer's alarm - so the sequence lives in one callback.
+    let begin_drag = use_callback(move |at: Point| {
+        dnd.start(
+            pointer_payload.clone(),
+            zone,
+            at,
+            *press_offset.peek(),
+            effect,
+            DragMode::Pointer,
+        );
+        // Dress a size-matched ghost immediately from the press-time
+        // measurement; fall back to measuring now only if the press's
+        // measurement hasn't landed yet (a press promoted within a frame).
+        if let Some(r) = *press_rect.peek() {
+            dnd.set_source_rect(Some(r));
+        } else if let Some(m) = node.peek().clone() {
+            let mut dnd = dnd;
+            spawn(async move {
+                if let Ok(r) = m.get_client_rect().await {
+                    dnd.set_source_rect(Some(Rect::new(
+                        r.origin.x,
+                        r.origin.y,
+                        r.size.width,
+                        r.size.height,
+                    )));
+                }
+            });
+        }
+        registry.refresh_rects();
+        if let Some(h) = &on_drag_start {
+            h.call(());
+        }
+    });
 
     let mut deliver_to = move |target: ZoneId, point: Point, effect: DropEffect| -> bool {
         deliver_drop(registry, &mut dnd, settle_flag, target, point, effect)
@@ -265,21 +378,65 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             style: style,
             "data-dragging": if dnd.dragging() && dnd.payload().as_ref() == Some(&attr_payload) { "true" },
             "data-disabled": if disabled { "true" },
-            onmounted: move |evt: Event<MountedData>| node.set(Some(evt.data())),
+            onmounted: move |evt: Event<MountedData>| {
+                let m: Rc<MountedData> = evt.data();
+                node.set(Some(m.clone()));
+                // Focus continuity for keyboard drops: if this mount IS the
+                // just-dropped payload landing in its new place, take the
+                // focus the browser dropped when the source unmounted.
+                if !disabled && dnd.claim_refocus(&mount_payload) {
+                    spawn(async move {
+                        let _ = m.set_focus(true).await;
+                    });
+                }
+            },
             onpointerdown: move |evt: PointerEvent| {
                 if disabled || !evt.is_primary() {
                     return;
                 }
+                // Suppress the press's default actions - the same line the
+                // sortable rows carry. The one that matters: `tabindex=0`
+                // makes this div mouse-focusable as a browser side effect,
+                // and that stray focus outlives the drop (the model mutates,
+                // nodes get reused, and the ring can surface on an unrelated
+                // item). Keyboard focus via Tab is untouched, and clicks
+                // on inner controls still fire (`click` is not a
+                // compatibility mouse event).
+                evt.prevent_default();
                 evt.stop_propagation();
                 if let Some(n) = node.peek().clone() {
                     platform::capture_pointer(&n, evt.pointer_id());
                 }
                 let o = evt.element_coordinates();
                 press_offset.set(Point::new(o.x, o.y));
+                // Measure at press so a later promotion can size the ghost
+                // without waiting on a roundtrip (see `press_rect`).
+                press_rect.set(None);
+                if let Some(m) = node.peek().clone() {
+                    spawn(async move {
+                        if let Ok(r) = m.get_client_rect().await {
+                            press_rect.set(Some(Rect::new(
+                                r.origin.x,
+                                r.origin.y,
+                                r.size.width,
+                                r.size.height,
+                            )));
+                        }
+                    });
+                }
+                let pid = evt.pointer_id();
                 let _ = step(
-                    GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
+                    GestureEvent::Down { at: pointer_client(&evt), pointer_id: pid },
                     threshold,
                 );
+                // Arm the long-press clock: fingers (and pens) under `Auto`
+                // promote on hold-or-sideways; mice promote on travel alone.
+                if touch == TouchSense::Auto
+                    && evt.pointer_type() != "mouse"
+                    && matches!(*phase.peek(), GesturePhase::Pressed { pointer_id, .. } if pointer_id == pid)
+                {
+                    hold_pid.set(Some(pid));
+                }
             },
             onpointermove: move |evt: PointerEvent| {
                 let at = pointer_client(&evt);
@@ -295,20 +452,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     GestureEvent::Move { at, pointer_id: evt.pointer_id() }
                 };
                 match step(event, threshold) {
-                    GestureEffect::Begin { at, .. } => {
-                        dnd.start(
-                            pointer_payload.clone(),
-                            zone,
-                            at,
-                            *press_offset.peek(),
-                            effect,
-                            DragMode::Pointer,
-                        );
-                        registry.refresh_rects();
-                        if let Some(h) = &on_drag_start {
-                            h.call(());
-                        }
-                    }
+                    GestureEffect::Begin { at, .. } => begin_drag.call(at),
                     GestureEffect::Track { at } => {
                         dnd.update_pointer(at);
                         match registry.hit_test(at) {
@@ -354,6 +498,24 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     if let Some(h) = &on_drag_end {
                         h.call(false);
                     }
+                }
+            },
+            // A promoted drag owns the touch: cancel its moves so the
+            // browser can't start a pan mid-drag. (`touch-action` is only
+            // consulted at gesture start, so `pan-y` alone can't do this.)
+            // dioxus-web's delegated listener is non-passive - see the
+            // touch-sensor browser spec.
+            ontouchmove: move |evt: TouchEvent| {
+                if matches!(*phase.peek(), GesturePhase::Dragging { .. }) {
+                    evt.prevent_default();
+                }
+            },
+            // Android pops a context menu on touch long-press (the iOS
+            // callout is already off via touch_style); mid-gesture that
+            // would tear the hold or the drag. Idle presses keep the menu.
+            oncontextmenu: move |evt: Event<MouseData>| {
+                if !matches!(*phase.peek(), GesturePhase::Idle) {
+                    evt.prevent_default();
                 }
             },
             // --- keyboard interaction ---------------------------------
@@ -454,6 +616,11 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     if let Some(record) = registry.get(target) {
                         if let Some((p, from)) = dnd.take() {
                             let (client, element) = keyboard_drop_points(*record.rect.peek());
+                            // The drop will re-mount the moved item and the
+                            // browser will dump focus on <body> when this
+                            // element unmounts; the landing Draggable claims
+                            // this request on mount and focuses itself.
+                            dnd.request_refocus(p.clone());
                             record.on_drop.call(DropOutcome {
                                 payload: p,
                                 from,
@@ -487,6 +654,20 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 }
             },
             ..attributes,
+            // Armed only while a touch press waits under `Auto`; the alarm
+            // promotes exactly like a threshold crossing, at the origin.
+            if let Some(pid) = hold_pid() {
+                HoldTimer {
+                    pointer_id: pid,
+                    on_hold: move |pid| {
+                        if let GestureEffect::Begin { at, .. } =
+                            step(GestureEvent::Hold { pointer_id: pid }, threshold)
+                        {
+                            begin_drag.call(at);
+                        }
+                    },
+                }
+            }
             {children}
         }
     }
@@ -644,9 +825,9 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
 /// Reach for this only when two providers genuinely coexist (say, tickets
 /// and teammates as separate features). If one drag world merely carries
 /// several shapes, make the payload an enum and use a plain [`DropZone`].
-/// For more than two worlds, register a shared id yourself with
-/// `use_zone_registry` - this component is that recipe, packaged for the
-/// common pair.
+/// For more than two worlds, generate a component for your exact type list
+/// with [`crate::bridge_drop_zone!`] - or go lower-level and call
+/// [`use_bridge_world`] once per world yourself.
 ///
 /// Styling hooks match `DropZone`: `data-active="true"` while an acceptable
 /// drag from *either* world is in flight, `data-over="true"` while one
@@ -673,10 +854,6 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
-    let dnd_a = use_dnd::<A>();
-    let dnd_b = use_dnd::<B>();
-    let mut reg_a = use_zone_registry::<A>();
-    let mut reg_b = use_zone_registry::<B>();
     let auto_id = use_zone_id();
     let zone_id = id.unwrap_or(auto_id);
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
@@ -686,54 +863,23 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
     let mounted = use_signal(|| None::<Rc<MountedData>>);
     let rect = use_signal(|| None::<super::types::Rect>);
 
-    // Signals are Copy handles, so both records genuinely share one
-    // mounted/rect pair: either world's refresh_rects() re-measures the one
-    // rectangle both registries see.
-    use_hook(|| {
-        reg_a.register(ZoneRecord {
-            id: zone_id,
-            parent,
-            label: label.clone(),
-            on_drop: Callback::new(move |o| on_drop_a.call(o)),
-            accepts: accepts_a,
-            mounted,
-            rect,
-        });
-        reg_b.register(ZoneRecord {
-            id: zone_id,
-            parent,
-            label: label.clone(),
-            on_drop: Callback::new(move |o| on_drop_b.call(o)),
-            accepts: accepts_b,
-            mounted,
-            rect,
-        });
-    });
-    use_drop(move || {
-        reg_a.unregister(zone_id);
-        reg_b.unregister(zone_id);
-    });
-    reg_a.sync_label(zone_id, label.clone());
-    reg_b.sync_label(zone_id, label);
-
-    let acceptable_a = move || -> bool {
-        match dnd_a.payload() {
-            Some(p) => accepts_a.map(|cb| cb.call(p)).unwrap_or(true),
-            None => false,
-        }
-    };
-    let acceptable_b = move || -> bool {
-        match dnd_b.payload() {
-            Some(p) => accepts_b.map(|cb| cb.call(p)).unwrap_or(true),
-            None => false,
-        }
-    };
+    // One `use_bridge_world` per world: same id, same shared mounted/rect
+    // signals, each drop through its own typed callback.
+    let a = use_bridge_world::<A>(
+        zone_id,
+        parent,
+        label.clone(),
+        accepts_a,
+        on_drop_a,
+        mounted,
+        rect,
+    );
+    let b = use_bridge_world::<B>(zone_id, parent, label, accepts_b, on_drop_b, mounted, rect);
 
     rsx! {
         div {
-            "data-active": if (dnd_a.dragging() && acceptable_a()) || (dnd_b.dragging() && acceptable_b()) { "true" },
-            "data-over": if (dnd_a.over() == Some(zone_id) && acceptable_a())
-                || (dnd_b.over() == Some(zone_id) && acceptable_b()) { "true" },
+            "data-active": if a.active || b.active { "true" },
+            "data-over": if a.over || b.over { "true" },
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();
                 let mut mounted = mounted;
@@ -757,6 +903,133 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
             {children}
         }
     }
+}
+
+/// Generate a bridge drop-zone component for **any number** of coexisting
+/// payload worlds - [`BridgeDropZone`]'s recipe, packaged for N > 2 without
+/// `dyn Any` (Rust has no variadic generics, so the component is generated
+/// per concrete type list rather than parameterized over one).
+///
+/// Each `(Type, accepts_prop, on_drop_prop)` row becomes one world: an
+/// optional `accepts_prop: Callback<Type, bool>` filter and a required
+/// `on_drop_prop: EventHandler<DropOutcome<Type>>`. The generated component
+/// also takes the shared `id`/`label` props, forwards extra attributes to
+/// its div, and carries the same styling hooks as [`DropZone`]
+/// (`data-active` / `data-over`, lit by whichever world's drag qualifies).
+///
+/// Requires `use dioxus::prelude::*;` in scope, and an ancestor
+/// `DndProvider` for every listed type. Before reaching for three worlds,
+/// consider whether one provider with an enum payload reads better.
+///
+/// ```text
+/// use dioxus::prelude::*;
+/// use dioxus_dnd::prelude::*;
+///
+/// dioxus_dnd::bridge_drop_zone!(pub StandupZone {
+///     (Ticket, accepts_ticket, on_drop_ticket),
+///     (Person, accepts_person, on_drop_person),
+///     (Alert, accepts_alert, on_drop_alert),
+/// });
+///
+/// rsx! {
+///     StandupZone {
+///         label: "agenda",
+///         accepts_ticket: move |t: Ticket| !t.done,
+///         on_drop_ticket: move |o: DropOutcome<Ticket>| { /* … */ },
+///         on_drop_person: move |o: DropOutcome<Person>| { /* … */ },
+///         on_drop_alert: move |o: DropOutcome<Alert>| { /* … */ },
+///         "standup agenda"
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! bridge_drop_zone {
+    (
+        $(#[$meta:meta])*
+        $vis:vis $name:ident {
+            $( ($ty:ty, $accepts:ident, $on_drop:ident) ),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[::dioxus::prelude::component]
+        #[allow(non_snake_case)]
+        $vis fn $name(
+            /// Stable identity for this zone, valid in every world.
+            /// Auto-generated if omitted.
+            #[props(default)]
+            id: ::std::option::Option<$crate::core::ZoneId>,
+            /// Human label for screen-reader announcements, used by every
+            /// world.
+            #[props(default)]
+            label: ::std::option::Option<::std::string::String>,
+            $(
+                #[props(default)]
+                $accepts: ::std::option::Option<::dioxus::prelude::Callback<$ty, bool>>,
+                $on_drop: ::dioxus::prelude::EventHandler<$crate::core::DropOutcome<$ty>>,
+            )+
+            #[props(extends = div, extends = GlobalAttributes)]
+            attributes: ::std::vec::Vec<::dioxus::prelude::Attribute>,
+            children: ::dioxus::prelude::Element,
+        ) -> ::dioxus::prelude::Element {
+            use ::dioxus::prelude::*;
+
+            let auto_id = $crate::core::use_zone_id();
+            let zone_id = id.unwrap_or(auto_id);
+            let parent = try_use_context::<$crate::core::ParentZone>().map(|p| p.0);
+            // One unambiguous parent id that resolves in every registry, so
+            // nested zones of any listed type ascend correctly.
+            use_context_provider(|| $crate::core::ParentZone(zone_id));
+            let mounted = use_signal(|| ::std::option::Option::<
+                ::std::rc::Rc<::dioxus::html::MountedData>,
+            >::None);
+            let rect = use_signal(|| ::std::option::Option::<$crate::core::Rect>::None);
+
+            let mut active = false;
+            let mut over = false;
+            $(
+                let world = $crate::core::use_bridge_world::<$ty>(
+                    zone_id,
+                    parent,
+                    label.clone(),
+                    $accepts,
+                    $on_drop,
+                    mounted,
+                    rect,
+                );
+                active |= world.active;
+                over |= world.over;
+            )+
+
+            rsx! {
+                div {
+                    "data-active": if active { "true" },
+                    "data-over": if over { "true" },
+                    onmounted: move |evt: Event<::dioxus::html::MountedData>| {
+                        let m = evt.data();
+                        let mut mounted = mounted;
+                        let mut rect = rect;
+                        mounted.set(Some(m.clone()));
+                        // Same as DropZone: measure at mount so a bridge
+                        // appearing mid-drag is immediately hit-testable in
+                        // every world (the rect signal is shared, so one
+                        // measurement serves all).
+                        spawn(async move {
+                            if let Ok(r) = m.get_client_rect().await {
+                                rect.set(Some($crate::core::Rect::new(
+                                    r.origin.x,
+                                    r.origin.y,
+                                    r.size.width,
+                                    r.size.height,
+                                )));
+                            }
+                        });
+                    },
+                    ..attributes,
+                    {children}
+                }
+            }
+        }
+    };
 }
 
 /// The functional inline style for a pointer-pinned "ghost": fixed to `pos`
@@ -807,6 +1080,21 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     /// CSS easing function for the settle glide.
     #[props(default = "ease".to_string())]
     easing: String,
+    /// Size the ghost to the grabbed element's measured rect. With it, the
+    /// `pointer - grab` anchoring is exact by construction: the ghost
+    /// appears precisely over what was picked up, whatever your ghost rsx
+    /// renders inside. The ghost waits for the pickup measurement (at most
+    /// a frame behind `Draggable`; custom sources must call
+    /// `set_source_rect` or it stays hidden). Off by default (the ghost
+    /// sizes to its content).
+    #[props(default)]
+    match_source: bool,
+    /// Fired when the drop-settle finishes (including the degenerate
+    /// no-glide cases), so completion effects can start as the ghost lands
+    /// instead of racing it. Never fires for cancelled drags, and not when
+    /// the overlay unmounts mid-glide.
+    #[props(default)]
+    on_settled: Option<EventHandler<()>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
@@ -842,33 +1130,73 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     // an overlay that settles claims the subtree's stylesheet slot.
     let reduced_motion_css = crate::a11y::use_reduced_motion_css_if(settle);
 
+    // Every way a settle can complete funnels through here, so `on_settled`
+    // fires exactly once per landed drop - glide or no glide.
+    let mut settled = move || {
+        dnd.finish_settle();
+        if let Some(h) = &on_settled {
+            h.call(());
+        }
+    };
+
+    // The ghost's own rect, measured once per settle; retargets reuse it
+    // (the layout rect never moves - the glide is pure transform).
+    let mut from = use_signal(|| None::<Rect>);
+    let mut measuring = use_signal(|| false);
+
     // Measure & play (FLIP, like FlipItem): the settled frame commits at
     // the release position with the transition armed; this effect then
-    // measures the ghost and releases the transform, so the browser glides
-    // its center onto the zone's center.
+    // measures the ghost and releases the transform toward the settle rect.
+    // The effect subscribes to `settling()`, so a `retarget_settle` (the
+    // landed element announcing its real position, see `SettleSlot`) reruns
+    // it and re-aims the transform - CSS transitions continue smoothly from
+    // wherever the ghost currently is, mid-glide included.
     use_effect(move || {
         match dnd.settling() {
             Some(to) if settle => {
-                if glide.peek().is_some() {
+                if let Some(f) = *from.peek() {
+                    let d = to.center() - f.center();
+                    // A sub-pixel glide would produce no transition (and
+                    // thus no transitionend) - but only when none is
+                    // already running; a retarget of a live glide always
+                    // ends in a transitionend.
+                    if d.x.abs() < 1.0 && d.y.abs() < 1.0 && glide.peek().is_none() {
+                        settled();
+                    } else {
+                        glide.set(Some(d));
+                    }
+                    return;
+                }
+                if *measuring.peek() {
+                    // A retarget landed mid-measure; the pending measurement
+                    // reads the latest settle rect when it completes.
                     return;
                 }
                 let Some(m) = node.peek().clone() else {
                     // Never mounted (e.g. keyboard-only ghost skipped) -
                     // nothing to animate.
-                    dnd.finish_settle();
+                    settled();
                     return;
                 };
+                measuring.set(true);
                 spawn(async move {
-                    let Ok(r) = m.get_client_rect().await else {
-                        dnd.finish_settle();
+                    let r = m.get_client_rect().await;
+                    measuring.set(false);
+                    let Ok(r) = r else {
+                        settled();
                         return;
                     };
-                    let from = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
-                    let d = to.center() - from.center();
-                    // A sub-pixel glide would produce no transition (and
-                    // thus no transitionend) - finish immediately.
+                    let f = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
+                    from.set(Some(f));
+                    // Aim at the *current* settle rect - a retarget may
+                    // have arrived while the measurement was in flight.
+                    let Some(to) = dnd.settling() else {
+                        settled();
+                        return;
+                    };
+                    let d = to.center() - f.center();
                     if d.x.abs() < 1.0 && d.y.abs() < 1.0 {
-                        dnd.finish_settle();
+                        settled();
                     } else {
                         glide.set(Some(d));
                     }
@@ -878,6 +1206,9 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
                 if glide.peek().is_some() {
                     glide.set(None);
                 }
+                if from.peek().is_some() {
+                    from.set(None);
+                }
             }
         }
     });
@@ -886,18 +1217,43 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     if !dnd.dragging() && !settling {
         return rsx! {};
     }
+    // A keyboard drag has no meaningful pointer - rendering would pin the
+    // ghost to the viewport corner. Zones already highlight via data-over,
+    // and the LiveRegion narrates; the ghost is pointer furniture.
+    if dnd.mode() == DragMode::Keyboard {
+        return rsx! {};
+    }
+    // A size-matched ghost waits for the pickup measurement (at most a
+    // frame behind `Draggable`): rendering content-sized first would
+    // visibly pop to the matched size when the rect lands. Custom drag
+    // sources must call `set_source_rect`, or the ghost stays hidden.
+    if match_source && dnd.dragging() && dnd.source_rect().is_none() {
+        return rsx! {};
+    }
 
+    // Size-matched ghost: the grabbed element's measured rect, border-box
+    // so the ghost's own padding/border stay inside it.
+    let size = match_source
+        .then(|| dnd.source_rect())
+        .flatten()
+        .map(|r| {
+            format!(
+                " width: {}px; height: {}px; box-sizing: border-box;",
+                r.width, r.height
+            )
+        })
+        .unwrap_or_default();
     let functional = if settling {
         let transform = match glide() {
             Some(d) => format!("translate({}px, {}px)", d.x, d.y),
             None => "none".to_string(),
         };
         format!(
-            "{} transform: {transform}; transition: transform {duration}ms {easing};",
+            "{}{size} transform: {transform}; transition: transform {duration}ms {easing};",
             overlay_style(dnd.pointer() - dnd.grab()),
         )
     } else {
-        overlay_style(dnd.pointer() - dnd.grab())
+        format!("{}{size}", overlay_style(dnd.pointer() - dnd.grab()))
     };
     let mut attributes = attributes;
     let style = merge_style(&mut attributes, &functional);
@@ -909,9 +1265,97 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
             onmounted: move |evt: Event<MountedData>| node.set(Some(evt.data())),
             ontransitionend: move |_| {
                 // The only transition this element runs is the settle glide;
-                // finish_settle is a guarded no-op against stray bubbles.
+                // finish_settle (inside `settled`) is a guarded no-op
+                // against stray bubbles.
                 if settling && glide.peek().is_some() {
-                    dnd.finish_settle();
+                    settled();
+                }
+            },
+            ..attributes,
+            {children}
+        }
+    }
+}
+
+/// Wraps the element a drop just created so the drop-settle reads as ONE
+/// object: while the ghost glides, the wrapper holds the element's space
+/// but keeps it invisible (no "second copy" next to the ghost), re-aims the
+/// glide at its own measured rect (the ghost lands exactly where the
+/// element is, not at the zone's center), and reveals the element the
+/// instant the ghost unmounts.
+///
+/// Set `active: true` only on the just-landed element - typically by
+/// remembering the dropped payload's id in your `on_drop` handler and
+/// comparing. Inert while nothing is settling (keyboard drops, cancelled
+/// drags, overlays without `settle`), so it is always safe to render.
+///
+/// ```text
+/// on_drop: move |o: DropOutcome<Card>| { landed.set(Some(o.payload.id)); /* model */ },
+/// // ...
+/// SettleSlot::<Card> { active: landing() == Some(card.id),
+///     Draggable::<Card> { payload: card.clone(), CardFace { card } }
+/// }
+/// ```
+#[component]
+pub fn SettleSlot<T: Clone + PartialEq + 'static>(
+    /// Internal marker; never set this.
+    #[props(default)]
+    phantom: std::marker::PhantomData<T>,
+    /// True on the element the current settle is delivering.
+    active: bool,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    let _ = phantom;
+    let mut dnd = use_dnd::<T>();
+    let mut node = use_signal(|| None::<Rc<MountedData>>);
+
+    let retarget = move |m: Rc<MountedData>| {
+        spawn(async move {
+            if let Ok(r) = m.get_client_rect().await {
+                dnd.retarget_settle(Rect::new(
+                    r.origin.x,
+                    r.origin.y,
+                    r.size.width,
+                    r.size.height,
+                ));
+            }
+        });
+    };
+    // The landed element usually mounts fresh (the drop re-rendered the
+    // model), so onmounted below re-aims. This effect covers the other
+    // order - `active` turning true on an already-mounted element.
+    use_effect(use_reactive!(|active| {
+        if active && dnd.settling().is_some() {
+            if let Some(m) = node.peek().clone() {
+                retarget(m);
+            }
+        }
+    }));
+
+    // Reading `settling()` here subscribes the reveal: the moment
+    // finish_settle resets the state, the wrapper re-renders visible. Both
+    // states write an explicit value - updating a style string to "" can
+    // leave the old declaration standing.
+    let hidden = active && dnd.settling().is_some();
+    let mut attributes = attributes;
+    let style = merge_style(
+        &mut attributes,
+        if hidden {
+            "visibility: hidden;"
+        } else {
+            "visibility: visible;"
+        },
+    );
+    rsx! {
+        div {
+            style: style,
+            "data-settling": if hidden { "true" },
+            onmounted: move |evt: Event<MountedData>| {
+                let m: Rc<MountedData> = evt.data();
+                node.set(Some(m.clone()));
+                if active && dnd.settling().is_some() {
+                    retarget(m);
                 }
             },
             ..attributes,

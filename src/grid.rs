@@ -265,8 +265,20 @@ pub fn SortableGrid(
                             }
                         });
                     },
+                    oncontextmenu: move |evt: Event<MouseData>| {
+                        // Android's long-press context menu would tear an
+                        // in-flight gesture; idle presses keep the menu.
+                        if !matches!(*gesture.peek(), GesturePhase::Idle) {
+                            evt.prevent_default();
+                        }
+                    },
                     onpointerdown: move |evt: PointerEvent| {
                         if !primary_pointer(&evt) { return; }
+                        // Same suppression as Draggable and the sortable
+                        // rows: no press focus, no text-selection start, and
+                        // no native drag hijack from an <img>/<a> inside the
+                        // tile (this module promises no native drag image).
+                        evt.prevent_default();
                         evt.stop_propagation();
                         press_from.set(Some(ix));
                         // Capture on the stable tile so a mouse drag survives

@@ -159,11 +159,20 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     };
     let click_key = item.clone();
     let mut selection = selection;
+    // The browser fires a trailing `click` on the source after a completed
+    // pointer drag; letting it through would collapse the just-dragged
+    // multi-selection to this one item. Drag start arms the flag, the next
+    // click consumes it - exactly one trailing click is swallowed.
+    let mut dragged = use_signal(|| false);
 
     rsx! {
         div {
             "data-selected": if selected { "true" },
             onclick: move |evt: MouseEvent| {
+                if *dragged.peek() {
+                    dragged.set(false);
+                    return;
+                }
                 selection.click(click_key.clone(), evt.modifiers());
             },
             ..attributes,
@@ -172,6 +181,7 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
                 zone,
                 effect,
                 label,
+                on_drag_start: move |_| dragged.set(true),
                 {children}
             }
         }

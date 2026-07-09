@@ -35,6 +35,18 @@ pub struct DragState<T: 'static> {
     pub effect: DropEffect,
     /// How this drag is being driven (pointer vs keyboard).
     pub mode: DragMode,
+    /// Client rect of the dragged element, measured at pickup. Feeds
+    /// size-matched ghosts (`DragOverlay { match_source: true }`); `None`
+    /// until the async measurement lands or when a custom source never set
+    /// it.
+    pub source_rect: Option<Rect>,
+    /// Payload of a just-completed keyboard drop, awaiting focus
+    /// restoration: the drop re-mounts the moved item at its landing place
+    /// and the browser dumps focus on `<body>` when the source element
+    /// unmounts, so the matching `Draggable` claims this on mount and
+    /// focuses itself - keyboard users keep their place. Cleared by the
+    /// claim or by the next drag starting.
+    pub refocus: Option<T>,
     /// Destination rect of a just-completed drop whose overlay is still
     /// gliding home (the drop-settle animation). While set, `dragging()` is
     /// false but `payload` stays readable so the ghost keeps its content.
@@ -51,6 +63,8 @@ impl<T> Default for DragState<T> {
             grab: Point::default(),
             effect: DropEffect::default(),
             mode: DragMode::default(),
+            source_rect: None,
+            refocus: None,
             settle: None,
         }
     }
@@ -105,9 +119,45 @@ impl<T: Clone + 'static> DndContext<T> {
             grab,
             effect,
             mode,
+            // Measured (async) by the drag source right after this call.
+            source_rect: None,
+            // A new drag supersedes any unclaimed focus restoration.
+            refocus: None,
             // Starting a new drag interrupts any settle still gliding.
             settle: None,
         });
+    }
+
+    /// Record that `payload` just landed via a keyboard drop and its new
+    /// element should take focus when it mounts (see
+    /// [`DragState::refocus`]). `Draggable` calls this on its own keyboard
+    /// drops; call it from custom keyboard sources to get the same focus
+    /// continuity.
+    pub fn request_refocus(&mut self, payload: T) {
+        self.state.refocus().set(Some(payload));
+    }
+
+    /// Claim a pending focus restoration if it matches `payload`; returns
+    /// whether the caller should focus itself. First matching claimant
+    /// wins - the request is consumed.
+    pub fn claim_refocus(&mut self, payload: &T) -> bool
+    where
+        T: PartialEq,
+    {
+        let mut refocus = self.state.refocus();
+        let hit = refocus.peek().as_ref() == Some(payload);
+        if hit {
+            refocus.set(None);
+        }
+        hit
+    }
+
+    /// Record the dragged element's client rect (see
+    /// [`DragState::source_rect`]). `Draggable` measures and sets this right
+    /// after pickup; call it from custom drag sources so size-matched ghosts
+    /// (`DragOverlay { match_source: true }`) can dress themselves.
+    pub fn set_source_rect(&mut self, rect: Option<Rect>) {
+        self.state.source_rect().set(rect);
     }
 
     /// Update the tracked pointer position (drives `DragOverlay`). Granular:
@@ -164,6 +214,21 @@ impl<T: Clone + 'static> DndContext<T> {
         Some((payload, source))
     }
 
+    /// Re-aim an in-flight settle at a better rect - typically the landed
+    /// element's own, measured after the drop re-rendered the model
+    /// (`SettleSlot` does this for you). The overlay's glide retargets
+    /// smoothly, mid-flight included. A no-op unless currently settling.
+    pub fn retarget_settle(&mut self, to: Rect) {
+        let mut settle = self.state.settle();
+        // The equality guard is load-bearing: a `SettleSlot` retargets from
+        // an effect that (via its render) subscribes to `settle`, and
+        // signal writes notify even when the value is unchanged - writing
+        // the same rect back would loop effect -> write -> effect forever.
+        if settle.peek().is_some() && *settle.peek() != Some(to) {
+            settle.set(Some(to));
+        }
+    }
+
     /// End the settling phase and reset all state. A no-op unless currently
     /// settling, so a late `transitionend` can never clobber a new drag.
     pub fn finish_settle(&mut self) {
@@ -216,6 +281,11 @@ impl<T: Clone + 'static> DndContext<T> {
     /// Grab offset inside the dragged element.
     pub fn grab(&self) -> Point {
         self.state.grab().cloned()
+    }
+
+    /// Client rect of the dragged element measured at pickup, if available.
+    pub fn source_rect(&self) -> Option<Rect> {
+        self.state.source_rect().cloned()
     }
 
     /// Effect the drag was started with.

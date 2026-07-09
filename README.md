@@ -103,7 +103,7 @@ to their wrapper `div`.
 | `dragout` | drag text, links and HTML out to other apps (`ExternalDragSource`) | native `DataTransfer` |
 | `autoscroll` | edge-scrolling containers (`AutoScroll`) | n/a |
 | `a11y` | screen-reader announcements (`LiveRegion`), no-drag reordering (`ReorderButtons`) | n/a |
-| `animate` | FLIP reorder transitions (`FlipItem`, experimental) | n/a |
+| `animate` | FLIP reorder transitions (`FlipItem`) | n/a |
 | `debug` | dev-only zone inspector (`DndDebugOverlay`) | n/a |
 
 ## How it works
@@ -312,10 +312,11 @@ mark your own animated elements with the same attribute to opt them in.
 ### Motor forgiveness
 
 Presses only become drags after an 8px movement threshold (clicks stay
-clicks), touch and pen use the same gesture as mouse, near-miss releases
-snap to the closest acceptable zone whose edge is within 48px, and
-sortables offer `touch_handle` grips so scrolling a list and dragging its
-rows don't fight.
+clicks), near-miss releases snap to the closest acceptable zone whose edge
+is within 48px, and touch auto-senses by default - vertical swipes scroll,
+a short hold or sideways pull drags - so scrolling a list and dragging its
+rows don't fight (see [Touch](#touch); `touch_handle` grips remain for
+lists that want an explicit affordance).
 
 ### What this means for compliance
 
@@ -388,22 +389,32 @@ plus keyboard controls where a typed provider is involved.
   `external::typed` use `DataTransfer` for file drops, external drops,
   drag-out and cross-window interop.
 
-The one tradeoff to know about: a touch drag surface must set
-`touch-action: none`, which stops the browser from scrolling when a finger
-moves on it. For a `SortableList` inside a scrollable container, set
-`touch_handle: true` so only a leading grip claims the finger and the rows
-themselves keep scrolling. The default grip is exposed as
-`[data-sort-handle]`, so style it from the list root class or plain CSS:
+Touch surfaces auto-sense by default (`TouchSense::Auto`): a `Draggable`
+or whole-row `SortableList` carries `touch-action: pan-y`, so a vertical
+swipe keeps scrolling the page, while a short hold (250ms with the finger
+still) or a sideways pull picks the item up - and from that moment the
+item owns the touch, so the page stays put under the drag. Nothing to
+configure, no scroll trap, and mouse drags are exactly as before (the
+hold-or-sideways rule applies only to fingers and pens; a mouse promotes
+on plain 8px travel).
+
+Two opt-outs when `Auto` isn't the right call:
+
+- `touch: TouchSense::Immediate` restores `touch-action: none` - the
+  surface owns every touch from the first pixel and any 8px travel drags.
+  Right for surfaces that never sit in a scrollable view (a full-screen
+  canvas, a game board), or when a vertical pull must begin instantly.
+- `touch_handle: true` on sortables confines pointer drags to a leading
+  grip (always immediate - a grip *is* an explicit statement of intent)
+  while the rows themselves keep scrolling. The default grip is exposed
+  as `[data-sort-handle]`, so style it from the list root class or plain
+  CSS:
 
 ```rust,ignore
 SortableList { len, render, on_sort, touch_handle: true,
     class: "[&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:cursor-grab",
 }
 ```
-
-There is deliberately no long-press activation option; a movement threshold
-plus an explicit handle is more predictable than a timer, and works the
-same for pens.
 
 ## Sortable lists with live preview
 
@@ -635,9 +646,22 @@ BridgeDropZone::<Task, Person> {
 ```
 
 The gallery's *Standup* page shows it live. For *three or more* worlds,
-write the same double registration yourself - everything it uses is public
-(`use_zone_registry`, `use_zone_id`, `ZoneRecord`, `ParentZone`), and the
-Standup page documents the recipe.
+generate a component for your exact type list with the
+`bridge_drop_zone!` macro - each row is one world, with its own optional
+acceptance filter and required typed drop callback:
+
+```rust,ignore
+dioxus_dnd::bridge_drop_zone!(pub StandupZone {
+    (Task, accepts_task, on_drop_task),
+    (Person, accepts_person, on_drop_person),
+    (Alert, accepts_alert, on_drop_alert),
+});
+```
+
+(Rust has no variadic generics, so the component is generated per concrete
+type list - which is also why `BridgeDropZone<A, B>` stops at two.) Under
+both sits `use_bridge_world`, public too: call it once per world with a
+shared id and `mounted`/`rect` signals to build something custom.
 
 ## Virtualized lists
 
@@ -742,9 +766,11 @@ sortable overlay geometry and cleanup, releases outside a list or grid
 committing no reorder, autoscroll edge behavior, canvas grab-offset
 placement, drop fall-through past rejecting zones, the Ctrl-drag copy
 convention, reorder buttons inside sortable rows, the native boundary
-paths, a bridge zone receiving typed drops from two payload worlds, and
-drops landing on zones - and sortable slots - that auto-scrolled into
-place mid-drag.
+paths, a bridge zone receiving typed drops from two payload worlds, drops
+landing on zones - and sortable slots - that auto-scrolled into place
+mid-drag, the touch auto-sensor (real CDP touch gestures: swipes scroll,
+holds and sideways pulls drag, promoted drags pin the page), and
+`FlipItem`'s synchronously-armed glide.
 
 ```sh
 cargo test
@@ -759,11 +785,12 @@ npm install && npm run test:web
   window boundaries.
 - `web`: enables native **pointer capture** (via `web-sys`, pinned to the
   version `dioxus-web` uses) so mouse pointer-drags stay glued to the drag
-  source even when the cursor leaves it. Off by default: the core stays
-  dependency-free, and mouse dragging falls back to a best-effort
-  reconciliation (see [Platform notes](#platform-notes)). Enable it for web
-  builds: `features = ["web"]` in your `Cargo.toml`. Touch and pen never
-  need it.
+  source even when the cursor leaves it, and lets `FlipItem` arm its glide
+  synchronously on the real element (no paint-timing dependency). Off by
+  default: the core stays dependency-free, and both fall back to
+  best-effort paths (see [Platform notes](#platform-notes)). Enable it for
+  web builds: `features = ["web"]` in your `Cargo.toml`. Touch and pen
+  never need pointer capture.
 
 ## Platform notes
 
@@ -781,8 +808,12 @@ npm install && npm run test:web
 - **Windows desktop file drops** have a history of platform quirks in
   wry-based webviews. Test on your target and consider a file input
   fallback.
-- **`animate::FlipItem`** is experimental: it is the one module whose
-  behavior depends on browser paint timing rather than pure logic.
+- **`animate::FlipItem`** with the `web` feature arms its glide
+  synchronously on the real element (invert, forced style flush, release),
+  so it cannot race the browser's paint schedule. Without `web` it falls
+  back to animating through two renders; that fallback is the one code
+  path whose behavior depends on browser paint timing rather than pure
+  logic - validate it in your target renderer.
 
 ## Prior art
 
