@@ -9,6 +9,8 @@ pub mod autoscroll;
 pub mod board;
 pub mod canvas;
 pub mod debug;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 pub mod dragout;
 pub mod external;
 pub mod files;

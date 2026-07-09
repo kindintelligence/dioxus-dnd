@@ -1,23 +1,26 @@
-//! Two-window desktop drags (TODO 3.5): a board window and a tear-off tray
-//! window sharing one `DndWorld<Card>` - drag cards between the windows in
-//! both directions, with the ghost handing off between windows mid-drag.
+//! Multi-window desktop drags (TODO 3.5): a board window and N tear-off
+//! tray windows sharing one `DndWorld<Card>` - drag cards between any
+//! windows, with the ghost handing off between windows mid-drag.
 //!
 //! The interesting parts:
-//! - `use_dnd_world` in the board window creates the shared world; the tray
-//!   receives it through `VirtualDom::with_root_context`, and each window's
-//!   `DndProvider` joins automatically.
-//! - `use_window_geometry_feed` is the desktop glue (the only code here
-//!   that touches tao): it feeds the window's position/size/scale into a
-//!   `WindowGeometry` on move/resize/focus events. Everything else is the
-//!   same dioxus-dnd API the web gallery uses.
+//! - `use_dnd_world` in the board window creates the shared world; each
+//!   tray receives it through `VirtualDom::with_root_context`, and each
+//!   window's `DndProvider` joins automatically.
+//! - The windowing glue is the library's `desktop` feature:
+//!   `use_window_geometry_feed` (above the provider) feeds the window's
+//!   position/size/scale into a `WindowGeometry`, and `DragBridge`
+//!   (inside the provider) is the host-side eyes and ears for pointer
+//!   drags that leave the origin window. See `dioxus_dnd::desktop` for
+//!   the per-platform mechanics. Everything else is the same dioxus-dnd
+//!   API the web gallery uses.
 //! - On Wayland a window cannot learn its own screen position; the feed
 //!   then leaves geometry cleared and drags gracefully stay per-window.
 //!   (Try `GDK_BACKEND=x11` under WSLg/X11 for the full cross-window path.)
 
 use dioxus::desktop::tao::dpi::LogicalSize;
-use dioxus::desktop::tao::event::{DeviceEvent, ElementState, Event, WindowEvent};
-use dioxus::desktop::{use_wry_event_handler, window, Config, WindowBuilder};
+use dioxus::desktop::{window, Config, WindowBuilder};
 use dioxus::prelude::*;
+use dioxus_dnd::desktop::{use_window_geometry_feed, DragBridge};
 use dioxus_dnd::prelude::*;
 
 const BOARD: ZoneId = ZoneId(1);
@@ -83,49 +86,6 @@ fn main() {
             ),
         )
         .launch(board_window);
-}
-
-/// The desktop glue (candidate for a future `desktop` feature): provide a
-/// `WindowGeometry` for this window and keep it fed from tao events. Call
-/// it ABOVE the `DndProvider`, which picks the geometry up from context
-/// when it joins the world.
-fn use_window_geometry_feed() -> WindowGeometry {
-    let geometry = use_context_provider(WindowGeometry::new);
-    let desktop = window();
-    let sample = use_callback(move |_: ()| {
-        let scale = desktop.scale_factor();
-        let size = desktop.inner_size();
-        match desktop.inner_position() {
-            Ok(pos) => geometry.set(
-                Point::new(pos.x as f64, pos.y as f64),
-                (size.width as f64, size.height as f64),
-                scale,
-            ),
-            // Wayland: window positions are unknowable by design; leave
-            // geometry cleared and this window drags per-window only.
-            Err(_) => geometry.clear(),
-        }
-    });
-    use_hook(move || {
-        sample.call(());
-        geometry.mark_focused();
-    });
-    // WindowEvents arrive pre-filtered to the registering window.
-    use_wry_event_handler(move |event, _| {
-        if let Event::WindowEvent { event, .. } = event {
-            match event {
-                WindowEvent::Moved(_)
-                | WindowEvent::Resized(_)
-                | WindowEvent::ScaleFactorChanged { .. } => sample.call(()),
-                WindowEvent::Focused(true) => {
-                    geometry.mark_focused();
-                    sample.call(());
-                }
-                _ => {}
-            }
-        }
-    });
-    geometry
 }
 
 fn board_window() -> Element {
@@ -228,7 +188,7 @@ fn Chrome(header: Element, children: Element) -> Element {
     rsx! {
         style { {STYLE} }
         DndProvider::<Card> {
-            DragBridge {}
+            DragBridge::<Card> {}
             div { class: "chrome",
                 header { {header} }
                 {children}
@@ -239,185 +199,6 @@ fn Chrome(header: Element, children: Element) -> Element {
             LiveRegion::<Card> {}
         }
     }
-}
-
-/// The cross-window drag bridge (glue, candidate for a `desktop`
-/// feature). Webview pointer events stop at the viewport edge, and while
-/// a button is held every NON-origin window is fully event-blind (X11
-/// implicit grab / AppKit event routing / engine mouse capture) - probed
-/// and confirmed on this stack. So:
-///
-/// - While a drag is in flight and the cursor is outside the ORIGIN
-///   window, the origin's bridge polls the global cursor (tao
-///   `cursor_position`, works even where events are dead) and feeds
-///   `world.track_global` - the ghost and zone hovers keep working
-///   across windows.
-/// - A NON-origin window receiving any pointer event mid-drag proves the
-///   button was released (it was blind while held): its bridge completes
-///   the drop at that position via `world.drop_at_global`. Releases back
-///   inside the origin window arrive as normal pointerups; both paths
-///   are idempotent.
-///
-/// Windows/WebView2 amendment (probed on Win 11 / WebView2): the engine
-/// capture there is the OPPOSITE shape. The origin webview keeps
-/// receiving the full mouse stream while the button is held - including
-/// moves and the release outside its own viewport - but those events
-/// target `<html>` (nothing retargets without pointer capture), so no
-/// component handler ever hears them; and tao never fires
-/// `CursorMoved`/`MouseInput` at all, because the WebView2 child HWND
-/// consumes the messages before the tao window sees them. Both bridge
-/// legs above are therefore dead on Windows. The third leg below fixes
-/// it one layer lower, with no JS: tao registers Windows raw input
-/// (`WM_INPUT`, `DeviceEventFilter::Unfocused` by default) on the event
-/// loop's thread target, which no HWND can swallow, and dioxus-desktop
-/// forwards `Event::DeviceEvent` to EVERY `use_wry_event_handler`
-/// (only `WindowEvent`s are filtered per-window). So the origin's
-/// bridge hears the raw button-up wherever it happens and completes the
-/// drop at `cursor_position()` - the same global-physical-px source the
-/// poller uses. Raw motion also retracks mid-drag at event rate, which
-/// out-paces the 30ms poller while the cursor is outside the origin.
-/// Releases INSIDE the origin viewport are left to the Draggable's own
-/// pointerup (via its capture-substitute layer), keeping single-window
-/// semantics - snap, modifiers - exactly as before.
-///
-/// Every leg is gated on the drag's `PointerKind`: only pointers WITHOUT
-/// implicit capture (mouse, pen) are bridged. A touch drag is already
-/// streamed whole to the origin webview by the browser's implicit
-/// capture; bridging it too double-drives the drag from Windows'
-/// touch-synthesized mouse (a cursor trailing the finger, plus
-/// synthesized button transitions that can end the drag early).
-#[component]
-fn DragBridge() -> Element {
-    let Some(joined) = use_joined_window::<Card>() else {
-        return rsx! {};
-    };
-    let ctx = joined.world.context();
-
-    // Touch drags need NO bridging: the browser implicitly captures a
-    // touch contact, so the origin webview itself streams the whole
-    // gesture (out-of-viewport moves and the release included) to the
-    // source element. Bridging them anyway double-drives the drag from
-    // the touch-synthesized mouse cursor, which trails the finger and
-    // whose synthesized button transitions can end the drag early -
-    // the observed touch glitch. Mouse and pen go blind at the
-    // viewport edge, so they get all three legs below.
-    let bridged = move || ctx.dragging() && !ctx.pointer_kind().implicitly_captured();
-
-    // Third leg: raw-input release detection + event-rate tracking (see
-    // the Windows amendment above). DeviceEvents reach every window's
-    // handler; the origin gate keeps exactly one bridge acting.
-    //
-    // The filter must be `Never` (RIDEV_INPUTSINK): tao's default
-    // `Unfocused` delivers WM_INPUT only while the registered target is
-    // foreground, and the foreground input owner here is the WebView2
-    // child (a different process's HWND tree), so raw input never
-    // arrives. `Never` delivers regardless of focus; the `dragging()`
-    // gate below keeps the firehose ignored outside drags. Windows-only
-    // effect; a documented no-op everywhere else.
-    let filter_set = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(false)));
-    use_wry_event_handler(move |event, target| {
-        if !filter_set.get() {
-            filter_set.set(true);
-            target.set_device_event_filter(dioxus::desktop::tao::event_loop::DeviceEventFilter::Never);
-        }
-        if !bridged() || joined.world.origin_window() != Some(joined.key) {
-            return;
-        }
-        let Event::DeviceEvent { event, .. } = event else {
-            return;
-        };
-        let released = matches!(
-            event,
-            DeviceEvent::Button { button: 1, state: ElementState::Released, .. }
-        );
-        if !released && !matches!(event, DeviceEvent::MouseMotion { .. }) {
-            return;
-        }
-        // Wayland has no global cursor; the error leaves this leg inert
-        // and the per-window paths keep working.
-        let Ok(pos) = window().cursor_position() else {
-            return;
-        };
-        let global = Point::new(pos.x, pos.y);
-        // Inside the origin viewport the webview owns the gesture (the
-        // capture substitute feeds moves, the Draggable's pointerup
-        // finishes drops). Outside it, this leg is the drag's ears.
-        if joined.geometry.contains_global(global) {
-            return;
-        }
-        if released {
-            joined.world.drop_at_global(global);
-        } else {
-            joined.world.track_global(global);
-        }
-    });
-
-    // Origin-side poller: spawned when a drag starts, ends itself when
-    // the drag does. ~30ms keeps the ghost smooth without busy-waiting.
-    // Skipped entirely for captured (touch) drags - see `bridged`.
-    use_effect(move || {
-        if !bridged() {
-            return;
-        }
-        if joined.world.origin_window() != Some(joined.key) {
-            return;
-        }
-        let desktop = window();
-        spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                if !ctx.dragging() {
-                    break;
-                }
-                // Wayland: no global cursor by design - the bridge simply
-                // never engages and drags stay per-window.
-                let Ok(pos) = desktop.cursor_position() else {
-                    break;
-                };
-                let global = Point::new(pos.x, pos.y);
-                // Inside the origin window the webview owns the stream;
-                // outside it, the poller is the drag's eyes.
-                if !joined.geometry.contains_global(global) {
-                    joined.world.track_global(global);
-                }
-            }
-        });
-    });
-
-    // Foreign-side release detection. Also gated off for captured
-    // (touch) drags: the origin webview hears the touch release itself,
-    // and a foreign window's synthesized-mouse events must not complete
-    // the drop at the trailing cursor position.
-    use_wry_event_handler(move |event, _| {
-        let dragging_foreign = bridged()
-            && joined.world.origin_window().is_some()
-            && joined.world.origin_window() != Some(joined.key);
-        if !dragging_foreign {
-            return;
-        }
-        if let Event::WindowEvent { event, .. } = event {
-            match event {
-                WindowEvent::CursorMoved { position, .. } => {
-                    // Physical window px -> this window's CSS px -> global.
-                    let scale = joined.geometry.scale().max(f64::EPSILON);
-                    let client = Point::new(position.x / scale, position.y / scale);
-                    if let Some(global) = joined.geometry.to_global(client) {
-                        joined.world.drop_at_global(global);
-                    }
-                }
-                WindowEvent::MouseInput { state: ElementState::Released, .. } => {
-                    if let Ok(pos) = window().cursor_position() {
-                        joined
-                            .world
-                            .drop_at_global(Point::new(pos.x, pos.y));
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
-
-    rsx! {}
 }
 
 /// The ghost mirrors whatever card is in flight - in whichever window is

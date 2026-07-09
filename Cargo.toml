@@ -23,6 +23,12 @@ serde_json = { version = "1", optional = true }
 # matches only when the type is identical. `Element` brings
 # `set_pointer_capture`. No wasm-bindgen: we downcast via Dioxus, not JsCast.
 web-sys = { version = "0.3.98", optional = true, features = ["Element"] }
+# `desktop` feature only: the windowing-layer glue in `crate::desktop`
+# (geometry feed + cross-window drag bridge) touches tao through
+# dioxus-desktop, and the bridge's cursor poller sleeps on the tokio
+# runtime dioxus-desktop already drives.
+dioxus-desktop = { version = "0.7", optional = true }
+tokio = { version = "1", default-features = false, features = ["time"], optional = true }
 
 [features]
 default = []
@@ -32,6 +38,11 @@ serde = ["dep:serde", "dep:serde_json"]
 ## on web (keeps your styled `DragOverlay`). Off by default; the core stays
 ## dependency-free and mouse pointer-drag falls back to best-effort.
 web = ["dep:web-sys"]
+## Desktop windowing glue for multi-window drag worlds (`crate::desktop`):
+## `use_window_geometry_feed` + `DragBridge`, the two pieces every
+## dioxus-desktop window needs to join a `DndWorld` with full cross-window
+## drags. Off by default; pulls dioxus-desktop (wry/tao).
+desktop = ["dep:dioxus-desktop", "dep:tokio"]
 
 # The browser-suite fixture app uses the typed transport, which is
 # serde-gated (its doc header runs it with `--features web,serde`);

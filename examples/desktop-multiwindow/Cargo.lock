@@ -672,7 +672,6 @@ dependencies = [
  "dioxus",
  "dioxus-dnd",
  "serde",
- "tokio",
 ]
 
 [[package]]
@@ -887,8 +886,10 @@ name = "dioxus-dnd"
 version = "2.4.0"
 dependencies = [
  "dioxus",
+ "dioxus-desktop",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

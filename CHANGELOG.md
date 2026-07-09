@@ -40,6 +40,32 @@
   (`tests/multiwindow.rs`, `tests/multiwindow_seam.rs`) pin the
   cross-VirtualDom contracts this rides on.
 
+- **`desktop` cargo feature: the multi-window windowing glue is now
+  library API** (`dioxus_dnd::desktop`), promoted from the
+  desktop-multiwindow example once the per-platform behavior was probed
+  and hand-verified - there is no first-class multi-window story in
+  dioxus 0.7 to defer to, so this crate carries it. Two exports, the
+  exact pair every window of a multi-window app needs:
+  `use_window_geometry_feed()` (call ABOVE the `DndProvider`; feeds the
+  window's position/size/scale into a `WindowGeometry` from tao
+  move/resize/focus events, leaving geometry cleared on Wayland where
+  positions are unknowable) and `DragBridge::<T>` (render INSIDE the
+  provider; the three-legged host-side bridge for pointer drags that
+  leave the origin window - global-cursor poller, foreign-window
+  release detection, and the Windows raw-input leg with
+  `DeviceEventFilter::Never`, all gated per the drag's `PointerKind` so
+  touch is never double-driven). The module docs carry the full
+  per-platform truth table, including the process-global
+  `set_device_event_filter` caveat. Off by default: the feature pulls
+  dioxus-desktop (wry/tao) plus a `time`-only tokio, and the core stays
+  dependency-free. The example now consumes the feature and shrank to
+  model + UI; behavior verified unchanged by re-running the full
+  scripted matrix (mouse and injected-touch cross-window drags,
+  dead-space cancel and recovery, tray close/reopen) against the
+  promoted glue. The crate-layout ladder (example code, then feature,
+  then a `dioxus-dnd-desktop` companion crate only if the glue grows
+  again or needs its own release cadence against tao/wry churn) was
+  recorded in the 3.5 plan; this lands the middle rung.
 - **`PointerKind` (`Mouse`/`Touch`/`Pen`) recorded per drag**: the
   shared drag state now remembers which pointer device initiated a
   pointer drag. `Draggable` records it at pickup from the initiating

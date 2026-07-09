@@ -627,20 +627,29 @@ fn tray_window() -> Element {
 }
 ```
 
-Two pieces of glue make it spatial, both plain app code today (see
-`examples/desktop-multiwindow/` for a working two-window board-and-tray,
-probe binary included):
+Two pieces of glue make it spatial, shipped as the **`desktop` cargo
+feature** (`dioxus_dnd::desktop`; see `examples/desktop-multiwindow/`
+for a working board-and-N-trays app, probe binary included):
 
-- **Geometry**: feed each window's position/size/scale into a
-  `WindowGeometry` from tao's window events, so the world can hit-test
-  windows in desktop coordinates.
-- **The bridge**: webview pointer events stop at the viewport edge, and
-  while a button is held every *other* window is event-blind on every OS
-  (that's how pointer grabs work). So the origin window's glue polls the
-  global cursor (`cursor_position()`) to keep the drag tracking outside
-  its own viewport, and a blind window receiving its first pointer event
-  mid-drag - proof the button was released - completes the drop through
-  `DndWorld::drop_at_global`.
+- **`use_window_geometry_feed()`** (call ABOVE the provider): feeds
+  each window's position/size/scale into a `WindowGeometry` from tao's
+  window events, so the world can hit-test windows in desktop
+  coordinates.
+- **`DragBridge::<T>`** (render INSIDE the provider): host-side eyes
+  and ears for pointer drags that leave the origin window. Webview
+  pointer events stop at the viewport edge, and while a button is held
+  every *other* window is event-blind (that's how pointer grabs work) -
+  so the origin's bridge polls the global cursor to keep tracking, a
+  blind window's first pointer event mid-drag completes the drop, and
+  on Windows a third raw-input leg covers WebView2's swallowed mouse
+  stream (details in the module docs). Legs engage per the drag's
+  `PointerKind`: mouse and pen are bridged, touch is left to the
+  browser's implicit capture. Note: the bridge sets tao's
+  `DeviceEventFilter::Never` process-globally on first use (Windows
+  raw-input delivery; documented no-op elsewhere).
+
+The feature pulls dioxus-desktop (wry/tao), so it is off by default and
+the core stays dependency-free.
 
 Windows may close in **any order**: the world's state is process-lived, a
 window closing mid-drag aborts a drag that started there (and merely
@@ -868,7 +877,7 @@ npm install && npm run test:web
   tracking anywhere in the window. Verified on Linux (WebKitGTK).
 - **Multi-window drags**, verified per platform (2026-07):
   - **Linux/X11**: works end to end - cross-window hovers, ghost handoff,
-    drops - with the example's geometry feed and cursor-polling bridge.
+    drops - with the `desktop` feature's geometry feed and bridge.
     (Under WSLg specifically, session state can corrupt move-event button
     masks; the library debounces, but treat WSLg as a smoke-test rig,
     not a verdict machine.)
