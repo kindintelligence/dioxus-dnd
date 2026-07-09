@@ -1,7 +1,7 @@
 # Desktop architecture reconciliation review
 
 - Date: 2026-07-10
-- Canonical base: Windows checkout, `development` at `deb90af`
+- Canonical base: Windows checkout, `development` at `0320047`
 - Donor implementation: WSL checkout at `12ae7ad` plus its uncommitted hardening patch
 - Dioxus baseline: 0.7.9
 - Purpose: decide, by file and line range, what to preserve, move, replace, or discard before implementation
@@ -30,8 +30,8 @@ The donor semantics should be kept, but the monoliths should be split before or 
 
 ### Source-control facts behind this review
 
-- Commit ancestry is linear: `12ae7ad -> f0df808 -> 64a1b2e -> deb90af`.
-- The Windows checkout and live `origin/development` are both at `deb90af`.
+- Commit ancestry is linear: `12ae7ad -> 05d0da1 -> ecfba5d -> 0320047`.
+- The Windows checkout and live `origin/development` are both at `0320047`.
 - The Windows worktree has no textual edits; its apparent modifications are NTFS/WSL mode changes (`100644 -> 100755`). Do not stage them.
 - The WSL donor has 22 modified tracked files (`+2,084/-286`) plus its CI and earlier review files.
 - Eleven files contain overlapping edits that do not apply cleanly in either direction. This must be a manual reconciliation, not patch application.
@@ -47,7 +47,7 @@ The donor semantics should be kept, but the monoliths should be split before or 
 
 Line references use:
 
-- **W**: canonical Windows checkout at `deb90af`.
+- **W**: canonical Windows checkout at `0320047`.
 - **D**: current WSL donor working tree. Donor line numbers will cease to be authoritative once the patch is ported.
 
 ## Target module layout
@@ -472,7 +472,7 @@ Use Windows as the base.
 
 ## Recommended implementation sequence
 
-1. **Anchor on Windows `deb90af`.** Create the implementation branch from the canonical checkout. Do not stage NTFS executable-bit noise.
+1. **Anchor on Windows `0320047`.** Create the implementation branch from the canonical checkout. Do not stage NTFS executable-bit noise.
 2. **Split the adapter without changing behavior.** Convert `src/desktop.rs` into `src/desktop/` and prove Windows build/API parity.
 3. **Fix zone ownership.** Move mounted/rect data into provider-owned registry storage and require a clean native launch without Dioxus cross-scope warnings.
 4. **Split core monoliths without semantic change.** Establish `components/`, `session.rs`, and `world/` facades with current exports.
@@ -579,4 +579,4 @@ Use Windows as the base.
 - Unqualified claims that macOS is verified.
 - `--all-features` on Wasm.
 
-This reconciliation should be implemented as a manual port onto `deb90af`, not as a directory copy, patch application, or merge of the WSL working tree.
+This reconciliation should be implemented as a manual port onto `0320047`, not as a directory copy, patch application, or merge of the WSL working tree.
