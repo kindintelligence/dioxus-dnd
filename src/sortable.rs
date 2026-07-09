@@ -481,6 +481,9 @@ pub fn SortableList(
         move |evt: &PointerEvent| crate::core::components::primary_press(evt);
     // Consecutive empty-held moves seen mid-drag (lost-release debounce).
     let mut empty_held_moves = use_signal(|| 0u8);
+    // Did native pointer capture engage for the current press? Decides
+    // whether the capture-substitute layer renders (see `Draggable`).
+    let mut captured = use_signal(|| false);
     let mut cancel_drag = move || {
         feed(GestureEvent::Cancel);
         press_from.set(None);
@@ -583,6 +586,17 @@ pub fn SortableList(
             },
             ..attributes,
             {reduced_motion_css}
+            // Capture substitute (see `Draggable` for the full story):
+            // without native capture, moves die the moment the cursor
+            // leaves the list; this full-viewport child keeps them
+            // bubbling to the container handlers while a row drag is in
+            // flight. Never rendered where real capture engaged.
+            if drag_from().is_some() && !captured() {
+                div {
+                    style: "position: fixed; inset: 0; z-index: 9998; touch-action: none;",
+                    aria_hidden: true,
+                }
+            }
             // Armed only while a whole-row touch press waits under `Auto`;
             // the alarm promotes exactly like a threshold crossing.
             if let Some(pid) = hold_pid() {
@@ -646,12 +660,12 @@ pub fn SortableList(
                         press_at.set(Some(pointer_client(&evt)));
                         // Capture on the stable row wrapper so a mouse drag
                         // survives the cursor leaving the list (real capture with
-                        // the `web` feature; a no-op otherwise, backed by the
-                        // button-release recovery above). Move/up still bubble to
-                        // the container handlers.
-                        if let Some(n) = mounteds.peek().get(&ix).cloned() {
-                            platform::capture_pointer(&n, evt.pointer_id());
-                        }
+                        // the `web` feature; the capture-substitute layer covers
+                        // the rest). Move/up still bubble to the container.
+                        captured.set(match mounteds.peek().get(&ix).cloned() {
+                            Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
+                            None => false,
+                        });
                         let pid = evt.pointer_id();
                         feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: pid });
                         // Arm the long-press clock: fingers (and pens) under
@@ -695,9 +709,10 @@ pub fn SortableList(
                                 // Capture on the row wrapper (not the grip): it is
                                 // stable across live-preview re-renders, and
                                 // captured events still bubble to the container.
-                                if let Some(n) = mounteds.peek().get(&ix).cloned() {
-                                    platform::capture_pointer(&n, evt.pointer_id());
-                                }
+                                captured.set(match mounteds.peek().get(&ix).cloned() {
+                                    Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
+                                    None => false,
+                                });
                                 feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
                             },
                             if let Some(h) = handle {

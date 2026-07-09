@@ -195,6 +195,9 @@ pub fn SortableGrid(
         move |evt: &PointerEvent| crate::core::components::primary_press(evt);
     // Consecutive empty-held moves seen mid-drag (lost-release debounce).
     let mut empty_held_moves = use_signal(|| 0u8);
+    // Did native pointer capture engage for the current press? Decides
+    // whether the capture-substitute layer renders (see `Draggable`).
+    let mut captured = use_signal(|| false);
     // The grid itself doesn't animate, but its tiles commonly do (FlipItem
     // siblings can't share context with each other) - anchor the
     // reduced-motion stylesheet once for the whole subtree.
@@ -256,6 +259,15 @@ pub fn SortableGrid(
             },
             onlostpointercapture: move |_| feed(GestureEvent::Cancel, None),
             ..attributes,
+            // Capture substitute (see `Draggable` for the full story):
+            // keeps moves bubbling to the container while a tile drag is
+            // in flight and native capture did not engage.
+            if drag_from().is_some() && !captured() {
+                div {
+                    style: "position: fixed; inset: 0; z-index: 9998; touch-action: none;",
+                    aria_hidden: true,
+                }
+            }
             for ix in 0..len {
                 div {
                     key: "{ix}",
@@ -294,11 +306,13 @@ pub fn SortableGrid(
                         evt.stop_propagation();
                         press_from.set(Some(ix));
                         // Capture on the stable tile so a mouse drag survives
-                        // the cursor leaving it (no-op without the `web`
-                        // feature).
-                        if let Some(n) = mounteds.peek().get(&ix).cloned() {
-                            platform::capture_pointer(&n, evt.pointer_id());
-                        }
+                        // the cursor leaving it (real capture with the `web`
+                        // feature; the capture-substitute layer covers the
+                        // rest).
+                        captured.set(match mounteds.peek().get(&ix).cloned() {
+                            Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
+                            None => false,
+                        });
                         feed(
                             GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                             None,

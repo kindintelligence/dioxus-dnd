@@ -44,10 +44,11 @@
 
 - **Pointer drags on renderers without native capture** (desktop
   webviews; web without the `web` feature) no longer freeze when the
-  cursor leaves the dragged element: while native capture is not engaged,
-  `Draggable` renders a full-viewport capture substitute that keeps the
-  move stream flowing (with capture engaged the substitute never exists,
-  so web behavior and DOM are unchanged).
+  cursor leaves the dragged element or container: while native capture
+  is not engaged, `Draggable`, `SortableList` and `SortableGrid` render
+  a full-viewport capture substitute that keeps the move stream flowing
+  (with capture engaged the substitute never exists, so web behavior and
+  DOM are unchanged).
 - **Press detection and lost-release recovery hardened against corrupt
   button state** (observed on WSLg, where the display server's move-event
   button masks can be stale): mice now begin drags on the reliable
