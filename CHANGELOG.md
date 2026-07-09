@@ -42,6 +42,108 @@
 
 ### Fixed
 
+- **Dead-signal reads hardened across windows** (the observed
+  `0xc000041d` process-kill, STATUS_FATAL_USER_CALLBACK_EXCEPTION, the
+  DioxusLabs/dioxus#4466 failure class; hit once on Windows 11 after
+  multi-window open/close cycles, with dioxus's read-after-scope-drop
+  warning fingering the zone `rect`/`mounted` signals registered into
+  the provider-lived registry). The mechanism: a `DropZone`'s
+  `mounted`/`rect` signals and a window's `WindowGeometry` signals die
+  with their owning scope, but copies of their records legitimately
+  outlive it for a moment - in a cloned `registry.get` lookup, in an
+  in-flight measurement (`refresh_rects`/`measure_all` WRITE the rect
+  signal after an await, and the zone can unmount during that await),
+  in a sibling window's cross-world hit-test racing that window's
+  teardown, or in a windowing-layer callback that fires one event
+  late. Any such touch panicked; on Windows the panic lands inside a
+  Win32 callback that cannot unwind, which kills the process. All
+  access now goes through degrading accessors: new
+  `ZoneRecord::cached_rect()` / `mounted_handle()` (used by hit-tests,
+  spatial sort, drop delivery and keyboard drops) and an internal
+  `store_rect` that quietly drops a measurement whose zone died
+  mid-flight, plus try-based reads AND writes throughout
+  `WindowGeometry` (`set`/`clear`/`mark_focused` included). A dead
+  zone now reads as unmeasured and a dead geometry as unknown, both
+  states every consumer already models (unmeasured zones sort last and
+  never hit; unknown geometry is the documented Wayland degradation),
+  so this is honest degradation rather than error masking. The full
+  suite plus a live four-window close-mid-drag soak pass with the
+  change.
+- **A press on a card whose previous drag was completed by host glue no
+  longer gets eaten.** When host-side glue ends a pointer drag through
+  `DndWorld::drop_at_global` or `cancel_drag` (a cross-window drop, a
+  release in the dead space between windows), the origin `Draggable`'s
+  own pointerup never arrives: outside the viewport the DOM retargets
+  it to `<html>`, which no delegated handler hears. Its gesture machine
+  therefore stayed in `Dragging`, and since `(Dragging, Down)` is
+  deliberately inert (a second pointer must not steal a live gesture),
+  the NEXT press on that same card was swallowed whole: no promotion,
+  no ghost, no drop. Reproduced deterministically on Windows by
+  releasing a drag in dead space and immediately pressing the same
+  card. `Draggable`'s pointerdown now detects the stale state (machine
+  in `Dragging` while the shared context is not dragging), feeds the
+  machine a silent `Cancel`, and proceeds with a fresh press.
+  `SortableList`/`SortableGrid` are not affected: they never hand their
+  gestures to the shared world, so nothing external can strand their
+  machines.
+- **`examples/regressions.rs` gained `required-features = ["serde"]`**
+  in `Cargo.toml`, so a plain feature-less `cargo test` no longer fails
+  compiling it. The fixture app uses the serde-gated typed transport
+  (`TypedDragSource`/`TypedDropZone`) and has always documented itself
+  as `dx serve ... --features web,serde`; Cargo just was never told.
+- **The desktop-multiwindow example is properly N-way**: every tray
+  previously rendered the same `model.tray` list AND registered the
+  same `ZoneId(2)` in the shared world, so a second tray was a mirror
+  of the first (same cards in both), hovering any tray highlighted all
+  of them, and drops routed into the one shared list. Each "Open tray
+  window" now mints a `Tray` record with its own `ZoneId::auto()` and
+  its own card list created in ROOT scope (it must outlive the
+  opener's re-renders and belongs to the app, not to any window);
+  `move_card` routes by zone across the board and every open tray,
+  falling back to the board for a zone that closed in the race between
+  hit-test and delivery so a card can never vanish. Closing a tray
+  returns its cards to the board (in-flight drags included) via a
+  `use_drop` that uses `try_write` throughout, since at app shutdown
+  the board's signals may already be gone. Verified live with four
+  windows: a board->tray1->tray2->tray3->board drag chain, exactly one
+  window highlighting at each hop, drags across an intervening tray,
+  close-with-cards, and closing the drag's ORIGIN window mid-drag
+  (world aborts the drag, the app survives, the card comes home).
+  Lesson recorded in the example: zone ids must be unique across the
+  whole world.
+- **Multi-window drags verified end to end on Windows (WebView2)**, and
+  the example bridge grew the third leg that platform needs (no library
+  change, no JavaScript). What the platform actually does, established
+  by recording DOM pointer events and tao events in both windows during
+  scripted real-input drags: (1) the origin webview keeps receiving the
+  ENTIRE held-button mouse stream, including moves and the release far
+  outside its own viewport, but those events target `<html>` (nothing
+  retargets without pointer capture, and `capture_pointer` is a no-op
+  off web), so no component handler ever hears them; (2) tao never
+  fires `CursorMoved`/`MouseInput` while the cursor is over a webview,
+  because the WebView2 child HWND consumes the mouse messages before
+  the tao window sees them, leaving foreign-side release detection
+  dead. Net effect: cross-window mouse releases were heard by nobody,
+  drops never landed, and the drag wedged (touch always worked: implicit
+  pointer capture retargets everything to the element). The example's
+  `DragBridge` now also listens to Windows raw input, which no HWND can
+  swallow: `DeviceEvent::MouseMotion`/`Button` via
+  `use_wry_event_handler` (dioxus-desktop fans DeviceEvents out to
+  every handler; only WindowEvents are per-window filtered), with
+  `set_device_event_filter(DeviceEventFilter::Never)` because the
+  default `Unfocused` filter registers without `RIDEV_INPUTSINK` and
+  the foreground input owner is the WebView2 process's HWND, so raw
+  input never arrives otherwise. On a raw button-up outside the origin
+  viewport the bridge completes the drop through the existing
+  `drop_at_global` at tao's `cursor_position()` (the same
+  global-physical-px source the poller uses); raw motion feeds
+  `track_global` at event rate, out-pacing the 30ms poller. Releases
+  inside the origin viewport still go through the Draggable's own
+  pointerup, keeping single-window semantics (snap, modifiers)
+  untouched, and dead-space releases become clean cancels instead of
+  parked drags. Full WINDOWS-TEST.md checklist passed on Win 11 ARM64
+  at 1.5x scale; the per-leg platform story lives in the example source
+  and the README platform notes.
 - **Pointer drags on renderers without native capture** (desktop
   webviews; web without the `web` feature) no longer freeze when the
   cursor leaves the dragged element or container: while native capture
@@ -470,7 +572,7 @@ a second provider first-class.
 Retargeted to Dioxus **0.7 stable**. 2.0 depended on the `0.8.0-alpha.0`
 pre-release; because Cargo won't unify an `0.8` pre-release with `0.7.x`,
 that made the crate unusable in the many projects on shipped 0.7. The code
-needed no changes — only the dependency requirement moved. Verified against
+needed no changes - only the dependency requirement moved. Verified against
 `0.7.9`: library (all features), the wasm32 web build, every gallery
 example, and the full test suite compile and pass with zero warnings. The
 crate still declares `dioxus` with `default-features = false, features =

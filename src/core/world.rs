@@ -175,15 +175,24 @@ impl WindowGeometry {
     /// factor. No-op writes are skipped, so this is safe to call from
     /// high-frequency window events.
     pub fn set(&self, origin: Point, size: (f64, f64), scale: f64) {
+        // try_write throughout (here and below): host feeds run from
+        // windowing-layer callbacks that can fire one event after the
+        // owning window's signals died - see the read-side note below.
         let (mut o, mut sz, mut sc) = (self.origin, self.size, self.scale);
-        if *o.peek() != Some(origin) {
-            o.set(Some(origin));
+        if matches!(o.try_peek().as_deref(), Ok(v) if *v != Some(origin)) {
+            if let Ok(mut w) = o.try_write() {
+                *w = Some(origin);
+            }
         }
-        if *sz.peek() != Some(size) {
-            sz.set(Some(size));
+        if matches!(sz.try_peek().as_deref(), Ok(v) if *v != Some(size)) {
+            if let Ok(mut w) = sz.try_write() {
+                *w = Some(size);
+            }
         }
-        if *sc.peek() != scale {
-            sc.set(scale);
+        if matches!(sc.try_peek().as_deref(), Ok(v) if *v != scale) {
+            if let Ok(mut w) = sc.try_write() {
+                *w = scale;
+            }
         }
     }
 
@@ -191,43 +200,68 @@ impl WindowGeometry {
     /// working as a single-window drag surface.
     pub fn clear(&self) {
         let (mut o, mut sz) = (self.origin, self.size);
-        if o.peek().is_some() {
-            o.set(None);
+        if matches!(o.try_peek().as_deref(), Ok(Some(_))) {
+            if let Ok(mut w) = o.try_write() {
+                *w = None;
+            }
         }
-        if sz.peek().is_some() {
-            sz.set(None);
+        if matches!(sz.try_peek().as_deref(), Ok(Some(_))) {
+            if let Ok(mut w) = sz.try_write() {
+                *w = None;
+            }
         }
     }
 
     /// Record that this window was just focused (see `focused`).
     pub fn mark_focused(&self) {
         let mut f = self.focused;
-        f.set(NEXT_FOCUS_STAMP.fetch_add(1, Ordering::Relaxed));
+        if let Ok(mut w) = f.try_write() {
+            *w = NEXT_FOCUS_STAMP.fetch_add(1, Ordering::Relaxed);
+        };
     }
+
+    // Reads below use try_peek and degrade to "geometry unknown" when the
+    // signals are gone. A geometry's signals are host-owned and usually
+    // window-scoped, so they die with their window's VirtualDom - but a
+    // copy inside a WindowRecord (or a handler closure) can race the
+    // pruning and be read one event late. On Windows that read happens
+    // inside a Win32 callback, where the resulting panic cannot unwind
+    // and kills the process with 0xc000041d (observed; the
+    // DioxusLabs/dioxus#4466 failure class). Stale geometry is already a
+    // modeled state (Wayland), so degrading is honest, not a mask.
 
     /// Is the placement known?
     pub fn live(&self) -> bool {
-        self.origin.peek().is_some() && self.size.peek().is_some()
+        matches!(self.origin.try_peek().as_deref(), Ok(Some(_)))
+            && matches!(self.size.try_peek().as_deref(), Ok(Some(_)))
+    }
+
+    fn origin_scale(&self) -> Option<(Point, f64)> {
+        let origin = (*self.origin.try_peek().ok()?)?;
+        let scale = self.scale.try_peek().map(|s| *s).unwrap_or(1.0);
+        Some((origin, scale))
     }
 
     /// This window's client CSS px -> global physical px. `None` until the
     /// placement is known.
     pub fn to_global(&self, client: Point) -> Option<Point> {
-        let origin = (*self.origin.peek())?;
-        Some(client_to_global(client, origin, *self.scale.peek()))
+        let (origin, scale) = self.origin_scale()?;
+        Some(client_to_global(client, origin, scale))
     }
 
     /// Global physical px -> this window's client CSS px. `None` until the
     /// placement is known.
     pub fn to_client(&self, global: Point) -> Option<Point> {
-        let origin = (*self.origin.peek())?;
-        Some(global_to_client(global, origin, *self.scale.peek()))
+        let (origin, scale) = self.origin_scale()?;
+        Some(global_to_client(global, origin, scale))
     }
 
     /// Does this window's client area contain `global` (physical px)?
     /// Always false while the placement is unknown.
     pub fn contains_global(&self, global: Point) -> bool {
-        match (*self.origin.peek(), *self.size.peek()) {
+        let origin = self.origin.try_peek().ok().and_then(|o| *o);
+        let size = self.size.try_peek().ok().and_then(|s| *s);
+        match (origin, size) {
             (Some(origin), Some(size)) => window_contains(global, origin, size),
             _ => false,
         }
@@ -235,12 +269,12 @@ impl WindowGeometry {
 
     /// The window's scale factor.
     pub fn scale(&self) -> f64 {
-        *self.scale.peek()
+        self.scale.try_peek().map(|s| *s).unwrap_or(1.0)
     }
 
     /// The current focus stamp (0 = never focused).
     pub fn focus_stamp(&self) -> u64 {
-        *self.focused.peek()
+        self.focused.try_peek().map(|f| *f).unwrap_or(0)
     }
 }
 

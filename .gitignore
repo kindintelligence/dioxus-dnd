@@ -5,3 +5,9 @@ node_modules/
 test-results/
 playwright-report/
 .codex-plans/
+# Session planning/scout/upstream notes live outside history (like TODO.md)
+PLAN-*.md
+SCOUT-*.md
+UPSTREAM-*.md
+WINDOWS-TEST.md
+TODO.md

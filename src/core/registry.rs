@@ -51,6 +51,35 @@ impl<T: Clone + 'static> ZoneRecord<T> {
             None => true,
         }
     }
+
+    // `mounted` and `rect` are ZONE-owned signals: they die with the
+    // DropZone's scope, while copies of this record can outlive it for a
+    // moment - in a cloned lookup, an in-flight measurement, or a sibling
+    // window's cross-world hit-test racing that window's teardown. All
+    // access goes through these accessors, which degrade to "unmeasured"
+    // instead of panicking; on Windows the panic would land inside a
+    // Win32 callback that cannot unwind and kills the process with
+    // 0xc000041d (observed; the DioxusLabs/dioxus#4466 failure class).
+
+    /// The zone's cached client rect; `None` while unmeasured or after
+    /// the zone's scope dropped.
+    pub fn cached_rect(&self) -> Option<Rect> {
+        self.rect.try_peek().ok().and_then(|r| *r)
+    }
+
+    /// The zone's mounted element; `None` before mount or after the
+    /// zone's scope dropped.
+    pub fn mounted_handle(&self) -> Option<Rc<MountedData>> {
+        self.mounted.try_peek().ok().and_then(|m| m.clone())
+    }
+
+    /// Store a measurement, quietly dropping it if the zone died while
+    /// it was in flight.
+    fn store_rect(mut rect: Signal<Option<Rect>>, r: Rect) {
+        if let Ok(mut w) = rect.try_write() {
+            *w = Some(r);
+        };
+    }
 }
 
 /// Registry of the currently mounted drop zones, in mount order.
@@ -223,7 +252,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             .peek()
             .iter()
             .rev()
-            .find(|z| (*z.rect.peek()).map(|r| r.contains(point)).unwrap_or(false))
+            .find(|z| z.cached_rect().map(|r| r.contains(point)).unwrap_or(false))
             .map(|z| z.id)
     }
 
@@ -244,7 +273,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             .rev()
             .find(|z| {
                 z.accepts_payload(payload)
-                    && (*z.rect.peek()).map(|r| r.contains(point)).unwrap_or(false)
+                    && z.cached_rect().map(|r| r.contains(point)).unwrap_or(false)
             })
             .map(|z| z.id)
         {
@@ -252,7 +281,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         }
         let mut best: Option<(ZoneId, f64)> = None;
         for z in self.acceptable(payload) {
-            let Some(r) = *z.rect.peek() else { continue };
+            let Some(r) = z.cached_rect() else { continue };
             // Distance to the rect's nearest point (zero on either axis the
             // point already overlaps), not to its center.
             let dx = (r.x - point.x).max(point.x - (r.x + r.width)).max(0.0);
@@ -274,17 +303,18 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             .zones
             .peek()
             .iter()
-            .map(|z| (z.mounted.peek().clone(), z.rect))
+            .map(|z| (z.mounted_handle(), z.rect))
             .collect();
-        for (mounted, mut rect) in zones {
+        for (mounted, rect) in zones {
             if let Some(m) = mounted {
                 if let Ok(r) = m.get_client_rect().await {
-                    rect.set(Some(Rect::new(
-                        r.origin.x,
-                        r.origin.y,
-                        r.size.width,
-                        r.size.height,
-                    )));
+                    // The zone can unmount during the await (a closing
+                    // window mid-drag); the accessor drops the stale
+                    // measurement instead of panicking the task.
+                    ZoneRecord::<T>::store_rect(
+                        rect,
+                        Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
+                    );
                 }
             }
         }
@@ -293,17 +323,16 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// Re-measure every mounted zone's client rect (async, spawned).
     pub fn refresh_rects(&self) {
         for zone in self.zones.peek().iter() {
-            let mounted = zone.mounted.peek().clone();
-            let mut rect = zone.rect;
+            let mounted = zone.mounted_handle();
+            let rect = zone.rect;
             if let Some(m) = mounted {
                 spawn(async move {
                     if let Ok(r) = m.get_client_rect().await {
-                        rect.set(Some(Rect::new(
-                            r.origin.x,
-                            r.origin.y,
-                            r.size.width,
-                            r.size.height,
-                        )));
+                        // See measure_all: the zone can die mid-await.
+                        ZoneRecord::<T>::store_rect(
+                            rect,
+                            Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
+                        );
                     }
                 });
             }
@@ -395,7 +424,7 @@ fn spatial_sort<T: Clone + 'static>(zones: &mut [ZoneRecord<T>], dir: Direction)
         Direction::Ltr => x,
         Direction::Rtl => -x,
     };
-    zones.sort_by(|a, b| match (*a.rect.peek(), *b.rect.peek()) {
+    zones.sort_by(|a, b| match (a.cached_rect(), b.cached_rect()) {
         (Some(ra), Some(rb)) => (ra.y, reading_x(ra.x))
             .partial_cmp(&(rb.y, reading_x(rb.x)))
             .unwrap_or(std::cmp::Ordering::Equal),

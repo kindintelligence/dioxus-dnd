@@ -33,6 +33,13 @@ serde = ["dep:serde", "dep:serde_json"]
 ## dependency-free and mouse pointer-drag falls back to best-effort.
 web = ["dep:web-sys"]
 
+# The browser-suite fixture app uses the typed transport, which is
+# serde-gated (its doc header runs it with `--features web,serde`);
+# without this, a plain feature-less `cargo test` fails compiling it.
+[[example]]
+name = "regressions"
+required-features = ["serde"]
+
 [dev-dependencies]
 # `mounted` is REQUIRED: the pointer path measures element rects via
 # `MountedData::get_client_rect()`, and dioxus-web only fires `onmounted` /

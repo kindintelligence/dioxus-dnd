@@ -876,11 +876,22 @@ npm install && npm run test:web
     can learn neither its windows' positions nor the global cursor);
     the world detects missing geometry and degrades to per-window drags.
     Verified: drags park at the window edge and recover cleanly.
-  - **Windows (WebView2)**: expected to work - the engine takes mouse
-    capture on press and tao's `cursor_position` is supported - but not
-    yet hand-verified; one known trap: windows created hidden then shown
-    have broken DnD in WebView2 (wry#1639), so create drop-target windows
-    visible.
+  - **Windows (WebView2)**: verified end to end (Win 11 ARM64, 1.5x
+    scale, 2026-07) - cross-window hovers, ghost handoff, drops both
+    directions, dead-space cancel, tray close/reopen mid-drag - but the
+    bridge needs a third leg there. WebView2 keeps streaming mouse
+    events to the origin webview outside its viewport, yet they target
+    `<html>` (nothing retargets without pointer capture) so no component
+    hears them, and tao never sees `CursorMoved`/`MouseInput` because
+    the WebView2 child HWND consumes them. The example bridges via raw
+    input: `DeviceEvent::Button`/`MouseMotion` through
+    `use_wry_event_handler` plus
+    `set_device_event_filter(DeviceEventFilter::Never)` (the default
+    `Unfocused` filter never delivers - the foreground input owner is
+    the WebView2 process's HWND). Touch needs none of this (implicit
+    capture). Known trap unchanged: windows created hidden then shown
+    have broken DnD in WebView2 (wry#1639), so create drop-target
+    windows visible.
   - **macOS (WKWebView)**: expected to work on the same reasoning
     (AppKit routes the whole drag sequence to the mousedown view;
     `cursor_position` supported); not yet hand-verified.

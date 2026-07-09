@@ -207,9 +207,7 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     if !record.accepts_payload(&p) {
         return false;
     }
-    let origin = (*record.rect.peek())
-        .map(|r| r.origin())
-        .unwrap_or_default();
+    let origin = record.cached_rect().map(|r| r.origin()).unwrap_or_default();
     let mode = dnd.mode();
     let grab = dnd.grab();
     // A settle-enabled overlay glides the ghost into the target zone:
@@ -217,7 +215,7 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     // readable while it animates. Pointer drops only - a keyboard drag
     // renders no positioned ghost to glide.
     let settle_to = match settle_flag {
-        Some(f) if mode == DragMode::Pointer && *f.armed.peek() => *record.rect.peek(),
+        Some(f) if mode == DragMode::Pointer && *f.armed.peek() => record.cached_rect(),
         _ => None,
     };
     let taken = match settle_to {
@@ -507,6 +505,19 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                         }
                     });
                 }
+                // A machine still in Dragging while the shared context is
+                // idle is the corpse of an externally-completed drag: host
+                // glue ended it (`drop_at_global` / `cancel_drag`, e.g. a
+                // cross-window or dead-space mouse release) and the matching
+                // pointerup never reached this element - outside the
+                // viewport it targets `<html>`, which no handler hears.
+                // Reset before pressing, or the corpse eats this press
+                // ((Dragging, Down) is deliberately inert so a second
+                // pointer can't steal a live gesture). Silent: the drag's
+                // end was already delivered/announced by whoever ended it.
+                if !dnd.dragging() && matches!(*phase.peek(), GesturePhase::Dragging { .. }) {
+                    let _ = step(GestureEvent::Cancel, threshold);
+                }
                 let pid = evt.pointer_id();
                 let _ = step(
                     GestureEvent::Down { at: pointer_client(&evt), pointer_id: pid },
@@ -718,7 +729,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     };
                     if let Some(record) = registry.get(target) {
                         if let Some((p, from)) = dnd.take() {
-                            let (client, element) = keyboard_drop_points(*record.rect.peek());
+                            let (client, element) = keyboard_drop_points(record.cached_rect());
                             // The drop will re-mount the moved item and the
                             // browser will dump focus on <body> when this
                             // element unmounts; the landing Draggable claims
