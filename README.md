@@ -594,6 +594,61 @@ ExternalDragSource {
 raw custom `(format, data)` pairs. Generated HTML anchors escape their
 content and refuse `javascript:`-style schemes.
 
+With the `serde` feature the boundary also speaks **types**:
+`TypedDragSource` serializes a payload to JSON on the drag's
+`DataTransfer` (always alongside a legible `text/plain` fallback), and
+`TypedDropZone` decodes drops back to the type - ignoring untyped drags
+and reporting undecodable JSON through `on_invalid`. That is the wire for
+drags between two *separate* apps; between windows of one app, read on.
+
+## Multi-window desktop drags
+
+On desktop, one app is often several windows - and a drag should not care.
+Create a `DndWorld<T>` in your first window, hand it to the others, and
+every joined window shares one drag: zones light up across windows, the
+ghost hands off to whichever window the cursor is over (scale-aware on
+mixed-DPI setups), and the payload arrives as a live Rust value - no
+serialization, no `DataTransfer`, same `on_drop` you already have.
+
+```rust,ignore
+fn board_window() -> Element {
+    let world = use_dnd_world::<Card>();          // once, in any window
+    let open_tray = move |_| {
+        dioxus::desktop::window().new_window(
+            VirtualDom::new(tray_window).with_root_context(world),
+            Default::default(),
+        );
+    };
+    rsx! { DndProvider::<Card> { /* joins the world via context */ } }
+}
+
+fn tray_window() -> Element {
+    rsx! { DndProvider::<Card> { /* joins via root context */ } }
+}
+```
+
+Two pieces of glue make it spatial, both plain app code today (see
+`examples/desktop-multiwindow/` for a working two-window board-and-tray,
+probe binary included):
+
+- **Geometry**: feed each window's position/size/scale into a
+  `WindowGeometry` from tao's window events, so the world can hit-test
+  windows in desktop coordinates.
+- **The bridge**: webview pointer events stop at the viewport edge, and
+  while a button is held every *other* window is event-blind on every OS
+  (that's how pointer grabs work). So the origin window's glue polls the
+  global cursor (`cursor_position()`) to keep the drag tracking outside
+  its own viewport, and a blind window receiving its first pointer event
+  mid-drag - proof the button was released - completes the drop through
+  `DndWorld::drop_at_global`.
+
+Windows may close in **any order**: the world's state is process-lived, a
+window closing mid-drag aborts a drag that started there (and merely
+clears the hover if it was only being hovered), and where geometry is
+unavailable - Wayland forbids it by design - everything gracefully
+degrades to normal per-window drags. Headless tests drive all of it: the
+world-aware `DragSim` simulates whole cross-window arcs in CI.
+
 ## Nesting
 
 Sortables inside sortables, boards inside boards: inner drag scopes stop
@@ -779,10 +834,11 @@ npm install && npm run test:web
 
 ## Feature flags
 
-- `serde`: enables `external::typed::{store, retrieve}`, JSON-typed
-  payloads over the native `DataTransfer` (wire-compatible with
-  dioxus-html's own `store`/`retrieve`) for drags that must cross app or
-  window boundaries.
+- `serde`: enables the typed `DataTransfer` transport for drags that must
+  cross **app** boundaries - `TypedDragSource`/`TypedDropZone` and the
+  underlying `external::typed::{store, retrieve}` (JSON, wire-compatible
+  with dioxus-html's own helpers). Multi-window drags within one app need
+  no feature: `DndWorld` is core and carries live Rust values.
 - `web`: enables native **pointer capture** (via `web-sys`, pinned to the
   version `dioxus-web` uses) so mouse pointer-drags stay glued to the drag
   source even when the cursor leaves it, and lets `FlipItem` arm its glide
@@ -805,9 +861,35 @@ npm install && npm run test:web
     that never returns won't commit.
   - Touch and pen are unaffected either way; the browser implicitly
     captures them.
+- **Desktop pointer drags** (dioxus-desktop) run without native pointer
+  capture - the `web` feature's capture API doesn't exist there - so
+  `Draggable`, `SortableList` and `SortableGrid` render a full-viewport
+  capture substitute while a drag is in flight, which keeps mouse drags
+  tracking anywhere in the window. Verified on Linux (WebKitGTK).
+- **Multi-window drags**, verified per platform (2026-07):
+  - **Linux/X11**: works end to end - cross-window hovers, ghost handoff,
+    drops - with the example's geometry feed and cursor-polling bridge.
+    (Under WSLg specifically, session state can corrupt move-event button
+    masks; the library debounces, but treat WSLg as a smoke-test rig,
+    not a verdict machine.)
+  - **Linux/Wayland**: cross-window is impossible by OS design (a client
+    can learn neither its windows' positions nor the global cursor);
+    the world detects missing geometry and degrades to per-window drags.
+    Verified: drags park at the window edge and recover cleanly.
+  - **Windows (WebView2)**: expected to work - the engine takes mouse
+    capture on press and tao's `cursor_position` is supported - but not
+    yet hand-verified; one known trap: windows created hidden then shown
+    have broken DnD in WebView2 (wry#1639), so create drop-target windows
+    visible.
+  - **macOS (WKWebView)**: expected to work on the same reasoning
+    (AppKit routes the whole drag sequence to the mousedown view;
+    `cursor_position` supported); not yet hand-verified.
 - **Windows desktop file drops** have a history of platform quirks in
   wry-based webviews. Test on your target and consider a file input
-  fallback.
+  fallback. Note the tradeoff wry imposes on Windows: its drop handler
+  and HTML5 drag-and-drop are mutually exclusive per window
+  (`with_disable_drag_drop_handler`), so a window using the typed
+  `DataTransfer` transport there gives up native file drops.
 - **`animate::FlipItem`** with the `web` feature arms its glide
   synchronously on the real element (invert, forced style flush, release),
   so it cannot race the browser's paint schedule. Without `web` it falls
@@ -825,7 +907,8 @@ fallback, modifier chain and gesture state machine were informed by reading
 them, and by dnd-kit and react-beautiful-dnd before that. What it does that
 the others do not: the native boundary path (OS file drops, drag-out to
 other apps, copy/move effects) alongside touch and keyboard, across
-fourteen patterns.
+fourteen patterns - and multi-window desktop drags with live payloads, a
+story neither dnd-kit nor pragmatic-drag-and-drop tells either.
 
 ## License
 
