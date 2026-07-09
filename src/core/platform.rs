@@ -5,7 +5,7 @@
 //! pointer paths fall back to their capture-free reconciliation (a held-button
 //! recovery plus not cancelling a drag that merely strays off the element).
 //!
-//! The one capability we need that Dioxus 0.8 does not expose is **pointer
+//! The one capability we need that Dioxus 0.7 does not expose is **pointer
 //! capture**: routing every later event for a pointer to one element until
 //! release, so a mouse drag survives the cursor leaving that element. Touch and
 //! pen get this implicitly from the browser; mouse does not, and there is no

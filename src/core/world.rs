@@ -71,11 +71,12 @@ use dioxus::signals::{AnyStorage, Owner, SyncStorage, UnsyncStorage};
 use super::hooks::SettleFlag;
 use super::registry::ZoneRegistry;
 use super::state::{DndContext, DragState};
-use super::types::{Point, ZoneId};
+use super::types::{effective_effect, DragSessionId, Point, PointerKind, ZoneId};
 
 static NEXT_WINDOW_KEY: AtomicU64 = AtomicU64::new(1);
 /// Focus stamps start at 1 so a never-focused window's 0 always loses.
 static NEXT_FOCUS_STAMP: AtomicU64 = AtomicU64::new(1);
+static NEXT_SETTLE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
     /// Owners of every world's state, held for the life of the process
@@ -99,6 +100,24 @@ impl WindowKey {
     pub fn auto() -> Self {
         Self(NEXT_WINDOW_KEY.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// A drop-zone identity qualified by the joined window that owns it.
+///
+/// Legacy single-window APIs continue to expose [`ZoneId`]; worlds use this
+/// richer identity internally so two windows may safely reuse the same
+/// explicit id without both rendering as hovered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ZoneLocation {
+    pub window: WindowKey,
+    pub zone: ZoneId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ActiveDrag {
+    origin: WindowKey,
+    session: Option<DragSessionId>,
+    origin_scale: f64,
 }
 
 // --- pure conversion math (unit-tested; signals stay out of it) --------
@@ -139,6 +158,9 @@ pub struct WindowGeometry {
     /// when overlapping windows both contain a point (no z-order queries
     /// exist on desktop, so focus recency approximates it).
     focused: Signal<u64>,
+    /// Whether the host currently considers the window eligible for global
+    /// hit-testing (visible, restored, and otherwise interactive).
+    eligible: Signal<bool>,
 }
 
 impl Copy for WindowGeometry {}
@@ -167,6 +189,7 @@ impl WindowGeometry {
             size: Signal::new(None),
             scale: Signal::new(1.0),
             focused: Signal::new(0),
+            eligible: Signal::new(true),
         }
     }
 
@@ -199,15 +222,30 @@ impl WindowGeometry {
         }
     }
 
+    /// Include or exclude this window from global hit-testing without
+    /// discarding its last known placement.
+    pub fn set_eligible(&self, eligible: bool) {
+        let mut value = self.eligible;
+        if *value.peek() != eligible {
+            value.set(eligible);
+        }
+    }
+
+    /// Whether the host currently allows this window to receive a global
+    /// drag. This is a subscribing read.
+    pub fn eligible(&self) -> bool {
+        *self.eligible.read()
+    }
+
     /// Record that this window was just focused (see `focused`).
     pub fn mark_focused(&self) {
         let mut f = self.focused;
         f.set(NEXT_FOCUS_STAMP.fetch_add(1, Ordering::Relaxed));
     }
 
-    /// Is the placement known?
+    /// Is the placement known and currently eligible for global hit-testing?
     pub fn live(&self) -> bool {
-        self.origin.peek().is_some() && self.size.peek().is_some()
+        self.origin.read().is_some() && self.size.read().is_some() && *self.eligible.read()
     }
 
     /// This window's client CSS px -> global physical px. `None` until the
@@ -227,6 +265,9 @@ impl WindowGeometry {
     /// Does this window's client area contain `global` (physical px)?
     /// Always false while the placement is unknown.
     pub fn contains_global(&self, global: Point) -> bool {
+        if !*self.eligible.peek() {
+            return false;
+        }
         match (*self.origin.peek(), *self.size.peek()) {
             (Some(origin), Some(size)) => window_contains(global, origin, size),
             _ => false,
@@ -276,10 +317,18 @@ pub struct DndWorld<T: Clone + 'static> {
     windows: Signal<Vec<WindowRecord<T>>>,
     /// The window the in-flight drag started in - the coordinate anchor:
     /// `ctx.pointer()` is always in *this* window's client px.
-    active: Signal<Option<WindowKey>>,
-    /// The window whose overlay presents the current settle glide (set on
-    /// cross-window drops; `None` means the origin window presents).
+    active: Signal<Option<ActiveDrag>>,
+    /// The one window whose overlay owns the current settle glide.
     settling_in: Signal<Option<WindowKey>>,
+    settle_generation: Signal<Option<u64>>,
+    /// Exact host-reported pointer position, in global physical pixels.
+    global_pointer: Signal<Option<Point>>,
+    /// Window-qualified source and hover identity. The legacy ids remain in
+    /// `DragState` for API compatibility.
+    source_location: Signal<Option<ZoneLocation>>,
+    over_location: Signal<Option<ZoneLocation>>,
+    pointer_kind: Signal<PointerKind>,
+    modifiers: Signal<Modifiers>,
 }
 
 impl<T: Clone + 'static> Copy for DndWorld<T> {}
@@ -311,6 +360,12 @@ impl<T: Clone + 'static> DndWorld<T> {
                 windows: Signal::new(Vec::new()),
                 active: Signal::new(None),
                 settling_in: Signal::new(None),
+                settle_generation: Signal::new(None),
+                global_pointer: Signal::new(None),
+                source_location: Signal::new(None),
+                over_location: Signal::new(None),
+                pointer_kind: Signal::new(PointerKind::Unknown),
+                modifiers: Signal::new(Modifiers::empty()),
             })
         });
         WORLD_OWNERS.with_borrow_mut(|owners| owners.push((owner, sync_owner)));
@@ -360,31 +415,50 @@ impl<T: Clone + 'static> DndWorld<T> {
             let mut windows = self.windows;
             windows.write().retain(|w| w.key != key);
         }
-        // Clear a hover that now points into nowhere. Checked against the
-        // REMAINING windows, not the leaving one: scopes drop children
-        // first, so the leaving window's zones have usually unregistered
-        // themselves from its registry before the provider's leave runs.
-        if let Some(over) = ctx.over() {
-            let reachable = self
-                .windows
-                .peek()
-                .iter()
-                .any(|w| w.registry.contains(over));
-            if !reachable {
+        if self
+            .over_location
+            .peek()
+            .is_some_and(|over| over.window == key)
+        {
+            if let Some(over) = ctx.over() {
                 ctx.leave(over);
             }
+            let mut over_location = self.over_location;
+            over_location.set(None);
         }
-        if *self.active.peek() == Some(key) {
+        if self
+            .active
+            .peek()
+            .is_some_and(|active| active.origin == key)
+        {
             if ctx.dragging() {
-                ctx.cancel();
+                if let Some(session) = ctx.active_session() {
+                    // A Draggable normally completes from its own cleanup
+                    // before the provider leaves. Never call an unknown
+                    // custom source after child scopes have been torn down.
+                    ctx.abandon_session(session);
+                } else {
+                    ctx.cancel();
+                }
+                self.clear_world_state();
+                return;
             }
-            let mut active = self.active;
-            active.set(None);
+            if ctx.settling().is_some() {
+                // A receiver-owned settle no longer needs the origin
+                // runtime: global release coordinates and origin scale were
+                // snapshotted into the world. Let the elected receiver land.
+                if *self.settling_in.peek() == Some(key) {
+                    ctx.finish_settle();
+                    self.clear_world_state();
+                }
+                return;
+            }
+            self.clear_world_state();
+            return;
         }
         if *self.settling_in.peek() == Some(key) {
             ctx.finish_settle();
-            let mut settling_in = self.settling_in;
-            settling_in.set(None);
+            self.clear_world_state();
         }
     }
 
@@ -431,48 +505,280 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// Mark a drag as begun from `key` and reset stale presentation state.
     /// `Draggable` calls this at pickup; call it from custom drag sources
     /// so the world knows which window's client px `ctx.pointer()` is in.
+    /// This compatibility entry point assumes a mouse, matching the
+    /// pre-pointer-kind host behavior; custom touch/pen sources should call
+    /// [`Self::begin_pointer_from`] with their actual kind.
     pub fn begin_from(&self, key: WindowKey) {
+        self.begin_pointer_from(key, PointerKind::Mouse, Modifiers::empty());
+    }
+
+    /// Mark a built-in pointer drag as begun and record the native input
+    /// metadata desktop host completion needs.
+    pub fn begin_pointer_from(&self, key: WindowKey, kind: PointerKind, modifiers: Modifiers) {
+        let active_drag = ActiveDrag {
+            origin: key,
+            // A receiver callback may synchronously start an untracked drag
+            // while the previous source result is committed but not yet
+            // publicly finalized. That old generation must not be attached
+            // to the new world drag.
+            session: self
+                .ctx
+                .active_session()
+                .filter(|session| self.ctx.session_result(*session).is_none()),
+            origin_scale: self
+                .record(key)
+                .map_or(1.0, |record| record.geometry.scale()),
+        };
         let mut active = self.active;
-        if *active.peek() != Some(key) {
-            active.set(Some(key));
+        if *active.peek() != Some(active_drag) {
+            active.set(Some(active_drag));
         }
         let mut settling_in = self.settling_in;
         if settling_in.peek().is_some() {
             settling_in.set(None);
         }
+        let mut settle_generation = self.settle_generation;
+        if settle_generation.peek().is_some() {
+            settle_generation.set(None);
+        }
+        let mut source_location = self.source_location;
+        source_location.set(
+            self.ctx
+                .source()
+                .map(|zone| ZoneLocation { window: key, zone }),
+        );
+        let mut over_location = self.over_location;
+        over_location.set(None);
+        let mut pointer_kind = self.pointer_kind;
+        pointer_kind.set(kind);
+        let mut current_modifiers = self.modifiers;
+        current_modifiers.set(modifiers);
+        let mut global_pointer = self.global_pointer;
+        global_pointer.set(
+            self.record(key)
+                .and_then(|r| r.geometry.to_global(self.ctx.pointer())),
+        );
     }
 
     /// The record of the window the in-flight drag started in.
     pub fn active_record(&self) -> Option<WindowRecord<T>> {
-        let key = (*self.active.peek())?;
-        self.record(key)
+        self.record(self.active.peek().as_ref()?.origin)
     }
 
-    /// The in-flight pointer in global physical px: the origin window's
-    /// conversion of `ctx.pointer()`. `None` when no drag is active or the
-    /// origin window's geometry is unknown.
+    fn active_drag(&self) -> Option<ActiveDrag> {
+        *self.active.peek()
+    }
+
+    /// The in-flight pointer in global physical px. `None` when no drag is
+    /// active or the origin window's geometry is unknown.
     pub fn global_pointer(&self) -> Option<Point> {
-        let origin = self.active_record()?;
-        origin.geometry.to_global(self.ctx.pointer())
+        *self.global_pointer.read()
     }
 
-    /// Have a cross-window drop's settle glide presented by `key`'s
-    /// overlay. No-op unless a settle is actually in flight.
-    pub(crate) fn present_settle_in(&self, key: WindowKey) {
-        if self.ctx.settling().is_some() {
-            let mut settling_in = self.settling_in;
-            settling_in.set(Some(key));
+    /// Claim settle presentation for the receiving window before the
+    /// shared context enters its settling state.
+    /// Elect `key` as presenter before a custom world delivery calls
+    /// [`DndContext::take_settling`]. Built-in drop paths do this
+    /// automatically.
+    pub fn claim_settle(&self, key: WindowKey) {
+        let mut settling_in = self.settling_in;
+        settling_in.set(Some(key));
+        let mut generation = self.settle_generation;
+        generation.set(Some(NEXT_SETTLE_GENERATION.fetch_add(1, Ordering::Relaxed)));
+    }
+
+    pub(crate) fn settle_token(&self, key: WindowKey) -> Option<u64> {
+        if *self.settling_in.read() == Some(key) {
+            *self.settle_generation.read()
+        } else {
+            None
         }
     }
 
-    /// The window presenting the current settle glide, if a cross-window
-    /// drop routed it somewhere other than the origin.
-    pub(crate) fn settling_in(&self) -> Option<WindowKey> {
-        *self.settling_in.read()
+    /// Complete a settle only from its elected overlay. Returns whether
+    /// this caller owned and finished it.
+    /// Finish a custom or built-in settle from its elected window. Custom
+    /// world overlays should use this instead of calling
+    /// [`DndContext::finish_settle`] directly so world metadata is cleared.
+    pub fn finish_settle_from(&self, key: WindowKey) -> bool {
+        let Some(generation) = self.settle_token(key) else {
+            return false;
+        };
+        self.finish_settle_generation(key, generation)
+    }
+
+    pub(crate) fn finish_settle_generation(&self, key: WindowKey, generation: u64) -> bool {
+        if *self.settling_in.peek() != Some(key)
+            || *self.settle_generation.peek() != Some(generation)
+            || self.ctx.settling().is_none()
+        {
+            return false;
+        }
+        let mut ctx = self.ctx;
+        ctx.finish_settle();
+        self.clear_world_state();
+        true
+    }
+
+    /// The window elected to present the current settle glide.
+    pub fn settling_in(&self) -> Option<WindowKey> {
+        self.ctx.settling().and_then(|_| *self.settling_in.read())
+    }
+
+    /// Window-qualified source and hover locations for the active world
+    /// drag. These are additive metadata; existing `DndContext` id accessors
+    /// remain unchanged.
+    pub fn source_location(&self) -> Option<ZoneLocation> {
+        *self.source_location.read()
+    }
+
+    pub fn over_location(&self) -> Option<ZoneLocation> {
+        *self.over_location.read()
+    }
+
+    /// Pointer kind and modifiers currently associated with host delivery.
+    pub fn pointer_kind(&self) -> PointerKind {
+        *self.pointer_kind.read()
+    }
+
+    pub fn modifiers(&self) -> Modifiers {
+        *self.modifiers.read()
+    }
+
+    pub fn update_modifiers(&self, modifiers: Modifiers) {
+        let mut value = self.modifiers;
+        if *value.peek() != modifiers {
+            value.set(modifiers);
+        }
+    }
+
+    /// Current pointer-drag generation, used by host pollers to reject a
+    /// stale task after a rapid restart.
+    pub fn drag_session(&self) -> Option<DragSessionId> {
+        self.active.peek().as_ref()?.session
+    }
+
+    pub fn is_drag_session(&self, session: DragSessionId) -> bool {
+        self.drag_session() == Some(session) && self.ctx.is_session(session)
+    }
+
+    /// The key of the window the in-flight drag started in, if any.
+    pub fn origin_window(&self) -> Option<WindowKey> {
+        (self.ctx.dragging() || self.ctx.settling().is_some())
+            .then(|| self.active.peek().as_ref().map(|active| active.origin))
+            .flatten()
+    }
+
+    fn clear_world_state(&self) {
+        let mut active = self.active;
+        active.set(None);
+        let mut settling_in = self.settling_in;
+        settling_in.set(None);
+        let mut settle_generation = self.settle_generation;
+        settle_generation.set(None);
+        let mut global_pointer = self.global_pointer;
+        global_pointer.set(None);
+        let mut source_location = self.source_location;
+        source_location.set(None);
+        let mut over_location = self.over_location;
+        over_location.set(None);
+        let mut pointer_kind = self.pointer_kind;
+        pointer_kind.set(PointerKind::Unknown);
+        let mut modifiers = self.modifiers;
+        modifiers.set(Modifiers::empty());
+    }
+
+    fn enter_location(&self, location: ZoneLocation) {
+        let mut over_location = self.over_location;
+        if *over_location.peek() != Some(location) {
+            over_location.set(Some(location));
+        }
+        let mut ctx = self.ctx;
+        ctx.enter(location.zone);
+    }
+
+    fn clear_hover(&self) {
+        let mut ctx = self.ctx;
+        if let Some(over) = ctx.over() {
+            ctx.leave(over);
+        }
+        let mut over_location = self.over_location;
+        if over_location.peek().is_some() {
+            over_location.set(None);
+        }
+    }
+
+    pub(crate) fn commit_session(&self, session: DragSessionId, dropped: bool) -> bool {
+        if !self.is_drag_session(session) {
+            return false;
+        }
+        let mut ctx = self.ctx;
+        ctx.commit_source(session, dropped)
+    }
+
+    pub(crate) fn finalize_session(&self, session: DragSessionId) -> bool {
+        let Some(result) = self.ctx.session_result(session) else {
+            return false;
+        };
+        self.finish_session(session, result)
+    }
+
+    pub(crate) fn finish_session(&self, session: DragSessionId, dropped: bool) -> bool {
+        let mut ctx = self.ctx;
+        if !ctx.is_session(session) {
+            return false;
+        }
+        let owns_metadata = self.drag_session() == Some(session);
+        let result = ctx.session_result(session).unwrap_or(dropped);
+        let finished = if ctx.session_result(session).is_some() {
+            ctx.finalize_source(session)
+        } else if dropped {
+            ctx.finish_source(session, true)
+        } else {
+            ctx.cancel_session(session)
+        };
+        if !finished {
+            return false;
+        }
+        if !owns_metadata || self.drag_session() != Some(session) {
+            return true;
+        }
+        // `on_drag_end` is user code and may synchronously start another
+        // drag. Its new `begin_*` call owns the world metadata now.
+        if ctx.dragging() {
+            return true;
+        }
+        if result && ctx.settling().is_some() {
+            let mut active = self.active;
+            let current = *active.peek();
+            if let Some(mut current) = current {
+                current.session = None;
+                active.set(Some(current));
+            }
+            self.clear_hover();
+        } else {
+            self.clear_world_state();
+        }
+        true
+    }
+
+    pub(crate) fn finish_untracked(&self, dropped: bool) {
+        let mut ctx = self.ctx;
+        if !dropped && ctx.dragging() {
+            ctx.cancel();
+        }
+        if ctx.dragging() {
+            return;
+        }
+        if dropped && ctx.settling().is_some() {
+            self.clear_hover();
+        } else {
+            self.clear_world_state();
+        }
     }
 
     /// Ask every joined window to re-measure its zones, each inside its own
-    /// runtime (see [`WindowRecord::refresh`]).
+    /// runtime through the window record's refresh callback.
     pub fn refresh_all_rects(&self) {
         let Ok(windows) = self.windows.try_peek() else {
             return;
@@ -503,19 +809,22 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
         let Some(origin) = self.active_record() else {
             return;
         };
+        let mut global_pointer = self.global_pointer;
+        if *global_pointer.peek() != Some(global) {
+            global_pointer.set(Some(global));
+        }
         if let Some(local) = origin.geometry.to_client(global) {
             ctx.update_pointer(local);
         }
-        let zone = self
-            .resolve_global(global)
-            .and_then(|(rec, local)| rec.registry.hit_test(local));
-        match zone {
-            Some(z) => ctx.enter(z),
-            None => {
-                if let Some(over) = ctx.over() {
-                    ctx.leave(over);
-                }
-            }
+        let location = self.resolve_global(global).and_then(|(rec, local)| {
+            rec.registry.hit_test(local).map(|zone| ZoneLocation {
+                window: rec.key,
+                zone,
+            })
+        });
+        match location {
+            Some(location) => self.enter_location(location),
+            None => self.clear_hover(),
         }
     }
 
@@ -533,25 +842,50 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
         if !ctx.dragging() {
             return None;
         }
+        // Make release coordinates authoritative even when the pointer was
+        // stationary and no final host tracking tick preceded the release.
+        self.track_global(global);
+        let session = self.drag_session();
         let Some((rec, local)) = self.resolve_global(global) else {
-            ctx.cancel();
+            match session {
+                Some(session) => {
+                    self.finish_session(session, false);
+                }
+                None => self.finish_untracked(false),
+            }
             return None;
         };
         let target = rec.registry.hit_test(local).or_else(|| {
             ctx.payload()
                 .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
         });
-        let effect = ctx.effect();
+        let effect = effective_effect(ctx.effect(), *self.modifiers.peek());
         let delivered = target.filter(|t| {
-            super::components::deliver_drop(rec.registry, &mut ctx, Some(rec.settle), *t, local, effect)
+            super::components::deliver_drop(
+                rec.registry,
+                &mut ctx,
+                super::components::SettleRoute {
+                    flag: Some(rec.settle),
+                    owner: Some((self, rec.key)),
+                },
+                super::components::DropCompletion::World {
+                    world: self,
+                    session,
+                },
+                *t,
+                local,
+                effect,
+            )
         });
         match delivered {
-            Some(zone) => {
-                self.present_settle_in(rec.key);
-                Some(zone)
-            }
+            Some(zone) => Some(zone),
             None => {
-                ctx.cancel();
+                match session {
+                    Some(session) => {
+                        self.finish_session(session, false);
+                    }
+                    None => self.finish_untracked(false),
+                }
                 None
             }
         }
@@ -560,17 +894,15 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
     /// Abort an in-flight drag from the host side (a window manager
     /// signal, an escape hatch). No-op when nothing is dragging.
     pub fn cancel_drag(&self) {
-        let mut ctx = self.ctx;
-        if ctx.dragging() {
-            ctx.cancel();
+        if !self.ctx.dragging() {
+            return;
         }
-    }
-
-    /// The key of the window the in-flight drag started in, if any - glue
-    /// uses it to tell "origin window, webview owns the events" from
-    /// "foreign window, I am the drag's eyes".
-    pub fn origin_window(&self) -> Option<WindowKey> {
-        *self.active.peek()
+        match self.drag_session() {
+            Some(session) => {
+                self.finish_session(session, false);
+            }
+            None => self.finish_untracked(false),
+        }
     }
 }
 
@@ -634,7 +966,7 @@ impl<T: Clone + 'static> PartialEq for JoinedWindow<T> {
 /// window asking).
 pub(crate) enum WorldHit {
     /// Some window's zone is under the pointer.
-    Zone(ZoneId),
+    Zone(ZoneLocation),
     /// A window is under the pointer, but no zone in it.
     Window,
     /// The world can't resolve the point (no geometry, or outside every
@@ -649,13 +981,55 @@ impl<T: Clone + 'static> JoinedWindow<T> {
         let Some(global) = self.geometry.to_global(client) else {
             return WorldHit::Unresolved;
         };
+        let mut global_pointer = self.world.global_pointer;
+        if *global_pointer.peek() != Some(global) {
+            global_pointer.set(Some(global));
+        }
         let Some((rec, local)) = self.world.resolve_global(global) else {
             return WorldHit::Unresolved;
         };
         match rec.registry.hit_test(local) {
-            Some(zone) => WorldHit::Zone(zone),
+            Some(zone) => WorldHit::Zone(ZoneLocation {
+                window: rec.key,
+                zone,
+            }),
             None => WorldHit::Window,
         }
+    }
+
+    /// Qualify one of this window's local zone ids for world state.
+    pub fn location(&self, zone: ZoneId) -> ZoneLocation {
+        ZoneLocation {
+            window: self.key,
+            zone,
+        }
+    }
+
+    /// Mark a window-qualified zone as hovered. Custom world-aware sources
+    /// should use this instead of `DndContext::enter`, which cannot identify
+    /// which window owns a reused `ZoneId`.
+    pub fn enter(&self, location: ZoneLocation) {
+        self.world.enter_location(location);
+    }
+
+    /// Clear the world's qualified hover.
+    pub fn clear_hover(&self) {
+        self.world.clear_hover();
+    }
+
+    /// Whether this exact window/zone pair owns the world hover.
+    pub fn is_over(&self, zone: ZoneId) -> bool {
+        *self.world.over_location.read() == Some(self.location(zone))
+    }
+
+    /// Latest global pointer converted into this window's client CSS
+    /// coordinates. The origin-local context pointer is used only when no
+    /// host/global conversion is available for the origin itself.
+    pub fn local_pointer(&self) -> Option<Point> {
+        if let Some(global) = *self.world.global_pointer.read() {
+            return self.geometry.to_client(global);
+        }
+        (self.world.origin_window() == Some(self.key)).then(|| self.world.ctx.pointer())
     }
 
     /// Resolve a point in this window's client px to a **foreign** window
@@ -684,23 +1058,41 @@ impl<T: Clone + 'static> JoinedWindow<T> {
         settling: bool,
     ) -> Option<(Point, f64)> {
         let raw = pointer - grab;
-        let Some(origin) = self.world.active_record() else {
+        let Some(active) = self.world.active_drag() else {
             // The drag didn't register an origin window (custom source):
             // fall back to raw anchoring everywhere, as before worlds.
             return Some((raw, 1.0));
         };
-        let Some(global_anchor) = origin.geometry.to_global(raw) else {
+        let origin = self.world.record(active.origin);
+        let origin_scale = origin
+            .map(|record| record.geometry.scale())
+            .unwrap_or(active.origin_scale);
+        let global_anchor = origin
+            .and_then(|record| record.geometry.to_global(raw))
+            .or_else(|| {
+                self.world.global_pointer().map(|global| {
+                    Point::new(
+                        global.x - grab.x * origin_scale,
+                        global.y - grab.y * origin_scale,
+                    )
+                })
+            });
+        let Some(global_anchor) = global_anchor else {
             // Origin geometry unknown: only the origin window can place it.
-            return (self.key == origin.key).then_some((raw, 1.0));
+            return (self.key == active.origin).then_some((raw, 1.0));
         };
         let presenting = if settling {
-            self.world.settling_in().unwrap_or(origin.key)
+            self.world.settling_in()?
         } else {
-            let pointer_global = origin.geometry.to_global(pointer).unwrap_or(global_anchor);
+            let pointer_global = self
+                .world
+                .global_pointer()
+                .or_else(|| origin.and_then(|record| record.geometry.to_global(pointer)))
+                .unwrap_or(global_anchor);
             self.world
                 .window_under(pointer_global)
                 .map(|r| r.key)
-                .unwrap_or(origin.key)
+                .unwrap_or(active.origin)
         };
         if presenting != self.key {
             return None;
@@ -709,14 +1101,14 @@ impl<T: Clone + 'static> JoinedWindow<T> {
             Some(local) => {
                 let own_scale = self.geometry.scale();
                 let ratio = if own_scale > 0.0 {
-                    origin.geometry.scale() / own_scale
+                    origin_scale / own_scale
                 } else {
                     1.0
                 };
                 Some((local, ratio))
             }
             // Presenting window without geometry can only be the origin.
-            None => (self.key == origin.key).then_some((raw, 1.0)),
+            None => (self.key == active.origin).then_some((raw, 1.0)),
         }
     }
 }

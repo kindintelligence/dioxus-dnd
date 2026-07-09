@@ -35,18 +35,18 @@ pub mod prelude {
         apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point, edge_of,
         effective_effect, element_point, screen_delta_to_world, screen_to_world, transition,
         use_bridge_world, use_dnd, use_dnd_provider, use_dnd_strings, use_dnd_world,
-        use_joined_window, use_rect_refresh, use_zone_id, use_zone_registry,
-        world_delta_to_screen, world_to_screen, JoinedWindow,
-        BridgeDropZone, BridgeWorld, CanvasViewport, Direction, DndContext, DndProvider,
-        DndStrings, DndWorld, DragId, DragMode, DragModifier, DragOverlay, DragState, Draggable,
-        DropEffect, DropOutcome, DropZone, Edge, EdgeSet, GestureEffect, GestureEvent,
-        GesturePhase, ModifierCtx, ParentZone, Point, Rect, RectRefresh, SettleSlot, TouchSense,
-        WindowGeometry, WindowKey, ZoneId, ZoneRecord, ZoneRegistry,
+        use_joined_window, use_rect_refresh, use_zone_id, use_zone_registry, world_delta_to_screen,
+        world_to_screen, BridgeDropZone, BridgeWorld, CanvasViewport, Direction, DndContext,
+        DndProvider, DndStrings, DndWorld, DragId, DragMode, DragModifier, DragOverlay,
+        DragSessionId, DragState, Draggable, DropEffect, DropOutcome, DropZone, Edge, EdgeSet,
+        GestureEffect, GestureEvent, GesturePhase, JoinedWindow, ModifierCtx, ParentZone, Point,
+        PointerKind, Rect, RectRefresh, SettleSlot, TouchSense, WindowGeometry, WindowKey, ZoneId,
+        ZoneLocation, ZoneRecord, ZoneRegistry,
     };
     pub use crate::debug::DndDebugOverlay;
-    pub use crate::dragout::{ExternalDragSource, OutboundContent};
     #[cfg(feature = "serde")]
     pub use crate::dragout::TypedDragSource;
+    pub use crate::dragout::{ExternalDragSource, OutboundContent};
     pub use crate::external::{classify, ExternalDrop, ExternalDropZone, ExternalPayload};
     #[cfg(feature = "serde")]
     pub use crate::external::{TypedDrop, TypedDropZone};

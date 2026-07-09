@@ -6,14 +6,21 @@
 //! `DataTransfer` - so they can be any `Clone` type with zero serialization.
 //! (`DataTransfer` interop for external drags lives in [`crate::external`].)
 //!
-//! State is held in a [`struct@Store`], Dioxus 0.8's fine-grained reactivity
+//! State is held in a [`struct@Store`], Dioxus 0.7's fine-grained reactivity
 //! primitive: each field gets its own lazy subscription. A component that
 //! reads `dnd.over()` in its render only reruns when the hovered zone
 //! changes - not on every pointer move.
 
 use dioxus::prelude::*;
 
-use super::types::{DragMode, DropEffect, Point, Rect, ZoneId};
+use super::types::{DragMode, DragSessionId, DropEffect, Point, Rect, ZoneId};
+
+#[derive(Clone, Copy)]
+struct SourceCompletion {
+    id: DragSessionId,
+    callback: Callback<bool>,
+    committed: Option<bool>,
+}
 
 /// A snapshot of an in-flight drag.
 ///
@@ -76,6 +83,10 @@ pub struct DndContext<T: Clone + 'static> {
     /// Screen-reader announcement channel, rendered by
     /// [`crate::a11y::LiveRegion`].
     announcement: Signal<String>,
+    /// Origin-runtime callback for the current pointer gesture. Kept
+    /// outside `DragState` so consuming a payload does not lose the source
+    /// lifecycle that still needs to be completed.
+    completion: Signal<Option<SourceCompletion>>,
 }
 
 // Manual impls: `derive` would add unnecessary `T: Copy` / `T: PartialEq`
@@ -98,7 +109,115 @@ impl<T: Clone + 'static> DndContext<T> {
         Self {
             state,
             announcement,
+            completion: Signal::new(None),
         }
+    }
+
+    /// Begin a pointer drag whose source must be completed exactly once.
+    pub(crate) fn start_tracked(
+        &mut self,
+        payload: T,
+        source: Option<ZoneId>,
+        pointer: Point,
+        grab: Point,
+        effect: DropEffect,
+        callback: Callback<bool>,
+    ) -> DragSessionId {
+        if let Some(previous) = self.active_session() {
+            self.cancel_session(previous);
+        }
+        self.start(payload, source, pointer, grab, effect, DragMode::Pointer);
+        let id = DragSessionId::auto();
+        let mut completion = self.completion;
+        completion.set(Some(SourceCompletion {
+            id,
+            callback,
+            committed: None,
+        }));
+        id
+    }
+
+    /// Current pointer-gesture generation, if the source registered one.
+    pub(crate) fn active_session(&self) -> Option<DragSessionId> {
+        self.completion.try_peek().ok()?.as_ref().map(|c| c.id)
+    }
+
+    pub(crate) fn is_session(&self, id: DragSessionId) -> bool {
+        self.active_session() == Some(id)
+    }
+
+    pub(crate) fn session_result(&self, id: DragSessionId) -> Option<bool> {
+        self.completion
+            .try_peek()
+            .ok()?
+            .as_ref()
+            .filter(|completion| completion.id == id)?
+            .committed
+    }
+
+    /// Commit the result before receiver user code runs, without firing the
+    /// public source callback yet. If receiver code unmounts the source, its
+    /// cleanup finalizes this committed result instead of changing it.
+    pub(crate) fn commit_source(&mut self, id: DragSessionId, dropped: bool) -> bool {
+        if self.active_session() != Some(id) {
+            return false;
+        }
+        let mut slot = self.completion;
+        let mut completion = slot.write();
+        let Some(completion) = completion.as_mut() else {
+            return false;
+        };
+        if completion.committed.is_none() {
+            completion.committed = Some(dropped);
+        }
+        true
+    }
+
+    /// Fire a previously committed result exactly once.
+    pub(crate) fn finalize_source(&mut self, id: DragSessionId) -> bool {
+        let Some(result) = self.session_result(id) else {
+            return false;
+        };
+        let Some(completion) = self.completion.take() else {
+            return false;
+        };
+        completion.callback.call(result);
+        true
+    }
+
+    /// Commit and immediately notify the source.
+    pub(crate) fn finish_source(&mut self, id: DragSessionId, dropped: bool) -> bool {
+        if !self.commit_source(id, dropped) {
+            return false;
+        }
+        self.finalize_source(id)
+    }
+
+    /// Cancel this generation and notify its source exactly once.
+    pub(crate) fn cancel_session(&mut self, id: DragSessionId) -> bool {
+        if !self.is_session(id) {
+            return false;
+        }
+        if self.session_result(id).is_none() {
+            self.cancel();
+            self.commit_source(id, false);
+        }
+        self.finalize_source(id)
+    }
+
+    /// Retire a source generation without calling back into a runtime that
+    /// is already being torn down. Built-in sources cancel from their own
+    /// `use_drop` first; this is the provider/window-close safety net for a
+    /// custom source that omitted equivalent cleanup.
+    pub(crate) fn abandon_session(&mut self, id: DragSessionId) -> bool {
+        if !self.is_session(id) {
+            return false;
+        }
+        if self.session_result(id).is_none() {
+            self.cancel();
+        }
+        self.completion.take();
+        true
     }
 
     /// Begin a drag. Notifies all fields (state transition).
@@ -173,6 +292,8 @@ impl<T: Clone + 'static> DndContext<T> {
     }
 
     /// Mark `zone` as hovered. Granular: only `over` subscribers rerun.
+    /// Custom sources inside a [`crate::core::DndWorld`] should instead use
+    /// [`crate::core::JoinedWindow::enter`] with a qualified location.
     pub fn enter(&mut self, zone: ZoneId) {
         self.state.over().set(Some(zone));
     }
@@ -205,6 +326,8 @@ impl<T: Clone + 'static> DndContext<T> {
     /// [`crate::core::components::DragOverlay`] can glide the ghost home.
     /// After this, `dragging()` is false and `over()` is cleared; call
     /// [`Self::finish_settle`] (the overlay does) to reset fully.
+    /// In a [`crate::core::DndWorld`], custom delivery code must first call
+    /// [`crate::core::DndWorld::claim_settle`] for the receiving window.
     pub fn take_settling(&mut self, to: Rect) -> Option<(T, Option<ZoneId>)> {
         let mut s = self.state.write();
         let payload = s.payload.clone()?;
@@ -231,6 +354,9 @@ impl<T: Clone + 'static> DndContext<T> {
 
     /// End the settling phase and reset all state. A no-op unless currently
     /// settling, so a late `transitionend` can never clobber a new drag.
+    /// Custom world overlays should call
+    /// [`crate::core::DndWorld::finish_settle_from`] instead so the world's
+    /// presenter and coordinate metadata are reset too.
     pub fn finish_settle(&mut self) {
         if self.state.settle().peek().is_some() {
             self.state.set(DragState::default());
@@ -321,5 +447,142 @@ impl<T: Clone + 'static> DndContext<T> {
     /// The current announcement text.
     pub fn announcement(&self) -> String {
         self.announcement.read().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    thread_local! {
+        static CONTEXT: RefCell<Option<DndContext<String>>> = const { RefCell::new(None) };
+        static CALLBACK: RefCell<Option<Callback<bool>>> = const { RefCell::new(None) };
+        static COMPLETIONS: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn probe() -> Element {
+        let state = use_store(DragState::<String>::default);
+        let announcement = use_signal(String::new);
+        let context = use_hook(|| DndContext::from_parts(state, announcement));
+        let callback =
+            use_callback(|dropped| COMPLETIONS.with_borrow_mut(|calls| calls.push(dropped)));
+        CONTEXT.with_borrow_mut(|slot| *slot = Some(context));
+        CALLBACK.with_borrow_mut(|slot| *slot = Some(callback));
+        rsx! {}
+    }
+
+    fn context() -> DndContext<String> {
+        CONTEXT.with_borrow(|slot| slot.expect("probe context"))
+    }
+
+    fn completion_callback() -> Callback<bool> {
+        CALLBACK.with_borrow(|slot| slot.expect("probe callback"))
+    }
+
+    #[test]
+    fn tracked_source_completion_is_exactly_once() {
+        COMPLETIONS.with_borrow_mut(|calls| calls.clear());
+        let mut dom = VirtualDom::new(probe);
+        dom.rebuild_in_place();
+        let mut dnd = context();
+
+        let first = dom.in_runtime(|| {
+            dnd.start_tracked(
+                "first".into(),
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                completion_callback(),
+            )
+        });
+        dom.in_runtime(|| {
+            assert!(dnd.take().is_some());
+            assert!(dnd.finish_source(first, true));
+            assert!(!dnd.finish_source(first, false));
+        });
+        COMPLETIONS.with_borrow(|calls| assert_eq!(calls.as_slice(), &[true]));
+
+        let second = dom.in_runtime(|| {
+            dnd.start_tracked(
+                "second".into(),
+                None,
+                Point::new(20.0, 20.0),
+                Point::default(),
+                DropEffect::Move,
+                completion_callback(),
+            )
+        });
+        dom.in_runtime(|| {
+            assert!(
+                !dnd.finish_source(first, true),
+                "stale generation completed"
+            );
+            assert!(dnd.cancel_session(second));
+            assert!(!dnd.cancel_session(second));
+        });
+        COMPLETIONS.with_borrow(|calls| assert_eq!(calls.as_slice(), &[true, false]));
+    }
+
+    #[test]
+    fn successful_source_completion_preserves_settle_payload() {
+        COMPLETIONS.with_borrow_mut(|calls| calls.clear());
+        let mut dom = VirtualDom::new(probe);
+        dom.rebuild_in_place();
+        let mut dnd = context();
+        let session = dom.in_runtime(|| {
+            dnd.start_tracked(
+                "card".into(),
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                completion_callback(),
+            )
+        });
+        dom.in_runtime(|| {
+            assert!(dnd
+                .take_settling(Rect::new(100.0, 100.0, 40.0, 40.0))
+                .is_some());
+            assert!(dnd.finish_source(session, true));
+            assert!(!dnd.dragging());
+            assert!(dnd.settling().is_some());
+            assert_eq!(dnd.payload().as_deref(), Some("card"));
+            dnd.finish_settle();
+            assert!(dnd.payload().is_none());
+        });
+        COMPLETIONS.with_borrow(|calls| assert_eq!(calls.as_slice(), &[true]));
+    }
+
+    #[test]
+    fn committed_success_survives_source_cleanup_during_delivery() {
+        COMPLETIONS.with_borrow_mut(|calls| calls.clear());
+        let mut dom = VirtualDom::new(probe);
+        dom.rebuild_in_place();
+        let mut dnd = context();
+        let session = dom.in_runtime(|| {
+            dnd.start_tracked(
+                "card".into(),
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                completion_callback(),
+            )
+        });
+        dom.in_runtime(|| {
+            assert!(dnd.take().is_some());
+            assert!(dnd.commit_source(session, true));
+        });
+        COMPLETIONS.with_borrow(|calls| assert!(calls.is_empty()));
+
+        // This is what Draggable's use_drop calls if receiver user code
+        // synchronously removes the source. It must finalize the committed
+        // success, not overwrite it with cancellation.
+        dom.in_runtime(|| assert!(dnd.cancel_session(session)));
+        COMPLETIONS.with_borrow(|calls| assert_eq!(calls.as_slice(), &[true]));
+        dom.in_runtime(|| assert!(!dnd.finalize_source(session)));
     }
 }

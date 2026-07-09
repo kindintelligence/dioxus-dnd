@@ -627,9 +627,9 @@ fn tray_window() -> Element {
 }
 ```
 
-Two pieces of glue make it spatial, both plain app code today (see
-`examples/desktop-multiwindow/` for a working two-window board-and-tray,
-probe binary included):
+Two pieces of glue make it spatial, both plain app code today (see the
+[desktop multi-window example](https://github.com/kindintelligence/dioxus-dnd/tree/main/examples/desktop-multiwindow)
+for a working two-window board-and-tray, probe binary included):
 
 - **Geometry**: feed each window's position/size/scale into a
   `WindowGeometry` from tao's window events, so the world can hit-test
@@ -637,17 +637,31 @@ probe binary included):
 - **The bridge**: webview pointer events stop at the viewport edge, and
   while a button is held every *other* window is event-blind on every OS
   (that's how pointer grabs work). So the origin window's glue polls the
-  global cursor (`cursor_position()`) to keep the drag tracking outside
-  its own viewport, and a blind window receiving its first pointer event
-  mid-drag - proof the button was released - completes the drop through
-  `DndWorld::drop_at_global`.
+  global mouse cursor (`cursor_position()`) to keep the drag tracking
+  outside its own viewport. A native primary-button release in either the
+  origin or receiver completes through `DndWorld::drop_at_global`; a blind
+  receiver's first cursor event remains the fallback on platforms that
+  suppress that release. Touch and pen stay window-local until a native
+  bridge can report their coordinates independently of the mouse.
 
 Windows may close in **any order**: the world's state is process-lived, a
 window closing mid-drag aborts a drag that started there (and merely
 clears the hover if it was only being hovered), and where geometry is
 unavailable - Wayland forbids it by design - everything gracefully
-degrades to normal per-window drags. Headless tests drive all of it: the
-world-aware `DragSim` simulates whole cross-window arcs in CI.
+degrades to normal per-window drags. Detect Wayland from tao's event-loop
+target rather than waiting for position APIs to fail: tao can return
+successful-looking placeholder coordinates there. App model signals need
+the same close-order care as the drag world; the example keeps them under
+a reference-counted signal owner shared by every window. Headless tests
+drive all of it: the world-aware `DragSim` simulates whole cross-window
+arcs in CI.
+
+World hover/source metadata is window-qualified, so separate windows may
+reuse a `ZoneId`; inspect `world.source_location()` / `over_location()` when
+the owning window matters. Custom world-aware sources should qualify hover
+through `JoinedWindow::location` + `enter`. Custom settle delivery should
+call `world.claim_settle(receiver_key)` before `take_settling`, then finish
+through `world.finish_settle_from(receiver_key)`.
 
 ## Nesting
 

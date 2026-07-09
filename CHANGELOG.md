@@ -42,6 +42,19 @@
 
 ### Fixed
 
+- **Multi-window desktop correctness hardening:** Linux now detects Wayland
+  from tao's event-loop target instead of trusting successful placeholder
+  position calls; hidden/minimized windows are excluded from hit-testing;
+  mouse-only host polling is cancellable and drag-generation-aware; native
+  releases, DOM releases, cancellation, and window closure complete the
+  source `Draggable` exactly once (including `on_drag_end` and gesture
+  reset); host drops preserve Ctrl/Cmd/Alt effects; receiver edge/tree
+  intent uses receiver-local coordinates; zone hover identity is qualified
+  by window; and only the elected overlay may finish a cross-window settle.
+  The desktop example's shared model now owns its signals independently of
+  the board window, so a surviving tray remains usable after its creator
+  closes.
+
 - **Pointer drags on renderers without native capture** (desktop
   webviews; web without the `web` feature) no longer freeze when the
   cursor leaves the dragged element or container: while native capture

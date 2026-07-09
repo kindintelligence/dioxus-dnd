@@ -30,13 +30,13 @@ pub use registry::{RectRefresh, ZoneRecord, ZoneRegistry};
 pub use state::{DndContext, DragState};
 pub use strings::{use_dnd_strings, DndStrings};
 pub use types::{
-    edge_of, effective_effect, Direction, DragId, DragMode, DropEffect, DropOutcome, Edge, EdgeSet,
-    Point, Rect, TouchSense, ZoneId,
+    edge_of, effective_effect, Direction, DragId, DragMode, DragSessionId, DropEffect, DropOutcome,
+    Edge, EdgeSet, Point, PointerKind, Rect, TouchSense, ZoneId,
 };
 pub use viewport::{
     screen_delta_to_world, screen_to_world, world_delta_to_screen, world_to_screen, CanvasViewport,
 };
 pub use world::{
     use_dnd_world, use_joined_window, DndWorld, JoinedWindow, WindowGeometry, WindowKey,
-    WindowRecord,
+    WindowRecord, ZoneLocation,
 };

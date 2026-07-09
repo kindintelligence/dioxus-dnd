@@ -11,6 +11,7 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
+use crate::core::world::WorldMembership;
 use crate::core::{
     use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone, Rect, ZoneRecord,
 };
@@ -120,6 +121,7 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     children: Element,
 ) -> Element {
     let dnd = use_dnd::<T>();
+    let membership = try_use_context::<WorldMembership<T>>().and_then(|m| m.0);
     let mut registry = use_zone_registry::<T>();
     let mut label_now = use_signal(|| label.clone());
     let mut accepts_now = use_signal(|| accepts);
@@ -193,9 +195,16 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     // Pointer drags derive a live band from the shared pointer position, so
     // fingers see the same before/into/after feedback as mice.
     let display_intent = move || -> Option<DropIntent> {
-        if dnd.dragging() && dnd.mode() == DragMode::Pointer && dnd.over() == Some(zone_id) {
+        let over = match membership {
+            Some(joined) => joined.is_over(zone_id),
+            None => dnd.over() == Some(zone_id),
+        };
+        if dnd.dragging() && dnd.mode() == DragMode::Pointer && over {
             let r = (*rect.peek())?;
-            return Some(intent_from_offset(dnd.pointer().y - r.y, row_height));
+            let pointer = membership
+                .and_then(|joined| joined.local_pointer())
+                .unwrap_or_else(|| dnd.pointer());
+            return Some(intent_from_offset(pointer.y - r.y, row_height));
         }
         None
     };

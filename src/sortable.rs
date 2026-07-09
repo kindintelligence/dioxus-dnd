@@ -477,8 +477,7 @@ pub fn SortableList(
     // Rows glide via inline transitions; honor prefers-reduced-motion.
     let reduced_motion_css = use_reduced_motion_css();
 
-    let primary_pointer =
-        move |evt: &PointerEvent| crate::core::components::primary_press(evt);
+    let primary_pointer = move |evt: &PointerEvent| crate::core::components::primary_press(evt);
     // Consecutive empty-held moves seen mid-drag (lost-release debounce).
     let mut empty_held_moves = use_signal(|| 0u8);
     // Did native pointer capture engage for the current press? Decides

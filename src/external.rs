@@ -178,7 +178,7 @@ pub mod typed {
     pub const MIME: &str = "application/json";
 
     /// Store a typed payload on a `DataTransfer` directly. The building
-    /// block behind [`store`]; also the testable seam.
+    /// block behind [`store()`]; also the testable seam.
     pub fn store_in<T: serde::Serialize>(dt: &DataTransfer, value: &T) -> Result<(), String> {
         let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
         dt.set_data(MIME, &json)

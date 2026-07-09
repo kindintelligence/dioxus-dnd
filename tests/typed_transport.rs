@@ -162,5 +162,8 @@ fn typed_drop_zone_renders_without_hover_state() {
     dom.rebuild_in_place();
     let html = dioxus_ssr::render(&dom);
     assert!(html.contains("typed zone"));
-    assert!(!html.contains("data-over"), "not hovered until a drag enters");
+    assert!(
+        !html.contains("data-over"),
+        "not hovered until a drag enters"
+    );
 }

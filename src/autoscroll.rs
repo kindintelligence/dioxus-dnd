@@ -135,6 +135,15 @@ pub fn AutoScroll(
     /// pointer contact heuristic.
     #[props(default)]
     active: Option<bool>,
+    /// Optional externally tracked pointer in this container's client
+    /// coordinate space. Desktop multi-window receivers can pass
+    /// `use_joined_window::<T>().and_then(|w| w.local_pointer())` so edge
+    /// scrolling continues while their webview is event-blind. This feed is
+    /// acted on only with `active: Some(true)`; pass the matching drag
+    /// context's `dragging()` state so a retained pointer cannot scroll idle
+    /// or settling content.
+    #[props(default)]
+    drag_pointer: Option<Point>,
     /// Fired with the container's scroll offset when a sample sees it
     /// changed - after the auto-scroll's own scrolling, a wheel/trackpad
     /// scroll, or pointer movement over the container - following the
@@ -219,6 +228,14 @@ pub fn AutoScroll(
         });
     };
 
+    use_effect(move || {
+        if active == Some(true) {
+            if let Some(point) = drag_pointer {
+                scroll_for(point);
+            }
+        }
+    });
+
     rsx! {
         div {
             onmounted: move |evt: Event<MountedData>| {
@@ -265,6 +282,23 @@ pub fn AutoScroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn external_pointer_app() -> Element {
+        rsx! {
+            AutoScroll {
+                active: true,
+                drag_pointer: Point::new(5.0, 5.0),
+                "receiver"
+            }
+        }
+    }
+
+    #[test]
+    fn external_pointer_feed_is_available_without_dom_pointer_events() {
+        let mut dom = VirtualDom::new(external_pointer_app);
+        dom.rebuild_in_place();
+        assert!(dioxus_ssr::render(&dom).contains("receiver"));
+    }
 
     #[test]
     fn deltas_ramp_toward_edges() {

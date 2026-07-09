@@ -15,10 +15,15 @@
 //!   (Try `GDK_BACKEND=x11` under WSLg/X11 for the full cross-window path.)
 
 use dioxus::desktop::tao::dpi::LogicalSize;
-use dioxus::desktop::tao::event::{ElementState, Event, WindowEvent};
+use dioxus::desktop::tao::event::{ElementState, Event, MouseButton, WindowEvent};
+use dioxus::desktop::tao::keyboard::ModifiersState as TaoModifiers;
+#[cfg(target_os = "linux")]
+use dioxus::desktop::tao::platform::unix::EventLoopWindowTargetExtUnix;
 use dioxus::desktop::{use_wry_event_handler, window, Config, WindowBuilder};
 use dioxus::prelude::*;
+use dioxus::signals::{AnyStorage, Owner, UnsyncStorage};
 use dioxus_dnd::prelude::*;
+use std::rc::Rc;
 
 const BOARD: ZoneId = ZoneId(1);
 const TRAY: ZoneId = ZoneId(2);
@@ -29,14 +34,83 @@ struct Card {
     label: &'static str,
 }
 
-/// The app model, shared across windows the same way the world is: signals
-/// created in the board window, handed to the tray via root context. (All
-/// windows run on one thread, so cross-window signals subscribe and wake
-/// correctly - the same mechanism the world itself rides on.)
+/// Copy handles into app-lifetime signal storage shared by every window.
 #[derive(Clone, Copy, PartialEq)]
 struct Model {
     board: Signal<Vec<Card>>,
     tray: Signal<Vec<Card>>,
+}
+
+/// Owns the model's signal storage independently of any window runtime.
+/// Every window holds an `Rc`, so the board may close before its trays and
+/// the signals are reclaimed only after the final window releases them.
+struct ModelOwner {
+    model: Model,
+    _owner: Owner<UnsyncStorage>,
+}
+
+impl ModelOwner {
+    fn new() -> Rc<Self> {
+        let owner = UnsyncStorage::owner();
+        let model = dioxus::core::with_owner(owner.clone(), || Model {
+            board: Signal::new(vec![
+                Card {
+                    id: 1,
+                    label: "Scout the webviews",
+                },
+                Card {
+                    id: 2,
+                    label: "Shared-world pointer drags",
+                },
+                Card {
+                    id: 3,
+                    label: "Per-window ghost handoff",
+                },
+                Card {
+                    id: 4,
+                    label: "Honest platform notes",
+                },
+            ]),
+            tray: Signal::new(Vec::new()),
+        });
+        Rc::new(Self {
+            model,
+            _owner: owner,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum GlobalGeometry {
+    #[default]
+    Unknown,
+    Available,
+    Unavailable,
+}
+
+fn global_geometry_for_backend(is_wayland: bool) -> GlobalGeometry {
+    if is_wayland {
+        GlobalGeometry::Unavailable
+    } else {
+        GlobalGeometry::Available
+    }
+}
+
+fn map_modifiers(native: TaoModifiers) -> Modifiers {
+    let mut mapped = Modifiers::empty();
+    if native.shift_key() {
+        mapped.insert(Modifiers::SHIFT);
+    }
+    if native.control_key() {
+        mapped.insert(Modifiers::CONTROL);
+    }
+    if native.alt_key() {
+        mapped.insert(Modifiers::ALT);
+    }
+    if native.super_key() {
+        mapped.insert(Modifiers::META);
+    }
+    mapped
 }
 
 impl Model {
@@ -68,9 +142,26 @@ fn main() {
 /// it ABOVE the `DndProvider`, which picks the geometry up from context
 /// when it joins the world.
 fn use_window_geometry_feed() -> WindowGeometry {
-    let geometry = use_context_provider(WindowGeometry::new);
+    let geometry = use_context_provider(|| {
+        let geometry = WindowGeometry::new();
+        // Do not expose plausible-looking coordinates until the event-loop
+        // target tells us which Linux backend is actually running.
+        geometry.set_eligible(false);
+        geometry
+    });
+    let mut capability = use_signal(GlobalGeometry::default);
     let desktop = window();
     let sample = use_callback(move |_: ()| {
+        if *capability.peek() != GlobalGeometry::Available {
+            geometry.set_eligible(false);
+            geometry.clear();
+            return;
+        }
+        let eligible = desktop.is_visible() && !desktop.is_minimized();
+        geometry.set_eligible(eligible);
+        if !eligible {
+            return;
+        }
         let scale = desktop.scale_factor();
         let size = desktop.inner_size();
         match desktop.inner_position() {
@@ -79,25 +170,43 @@ fn use_window_geometry_feed() -> WindowGeometry {
                 (size.width as f64, size.height as f64),
                 scale,
             ),
-            // Wayland: window positions are unknowable by design; leave
-            // geometry cleared and this window drags per-window only.
-            Err(_) => geometry.clear(),
+            Err(_) => {
+                geometry.set_eligible(false);
+                geometry.clear();
+            }
         }
     });
-    use_hook(move || {
-        sample.call(());
-        geometry.mark_focused();
-    });
     // WindowEvents arrive pre-filtered to the registering window.
-    use_wry_event_handler(move |event, _| {
+    use_wry_event_handler(move |event, target| {
+        if *capability.peek() == GlobalGeometry::Unknown {
+            #[cfg(target_os = "linux")]
+            let detected = global_geometry_for_backend(target.is_wayland());
+            #[cfg(not(target_os = "linux"))]
+            let detected = global_geometry_for_backend(false);
+
+            capability.set(detected);
+            if detected == GlobalGeometry::Available {
+                geometry.mark_focused();
+                sample.call(());
+            } else {
+                geometry.set_eligible(false);
+                geometry.clear();
+            }
+        }
         if let Event::WindowEvent { event, .. } = event {
             match event {
                 WindowEvent::Moved(_)
                 | WindowEvent::Resized(_)
-                | WindowEvent::ScaleFactorChanged { .. } => sample.call(()),
+                | WindowEvent::ScaleFactorChanged { .. }
+                | WindowEvent::CursorEntered { .. }
+                | WindowEvent::Focused(false) => sample.call(()),
                 WindowEvent::Focused(true) => {
                     geometry.mark_focused();
                     sample.call(());
+                }
+                WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                    geometry.set_eligible(false);
+                    geometry.clear();
                 }
                 _ => {}
             }
@@ -109,20 +218,13 @@ fn use_window_geometry_feed() -> WindowGeometry {
 fn board_window() -> Element {
     let world = use_dnd_world::<Card>();
     let geometry = use_window_geometry_feed();
-    let model = use_hook(|| Model {
-        board: Signal::new(vec![
-            Card { id: 1, label: "Scout the webviews" },
-            Card { id: 2, label: "Shared-world pointer drags" },
-            Card { id: 3, label: "Per-window ghost handoff" },
-            Card { id: 4, label: "Honest platform notes" },
-        ]),
-        tray: Signal::new(Vec::new()),
-    });
+    let model_owner = use_hook(ModelOwner::new);
+    let model = model_owner.model;
 
     let open_tray = move |_| {
         let dom = VirtualDom::new(tray_window)
             .with_root_context(world)
-            .with_root_context(model);
+            .with_root_context(model_owner.clone());
         window().new_window(
             dom,
             Config::new().with_window(
@@ -151,7 +253,8 @@ fn board_window() -> Element {
 
 fn tray_window() -> Element {
     use_window_geometry_feed();
-    let model = use_context::<Model>();
+    let model_owner = use_context::<Rc<ModelOwner>>();
+    let model = model_owner.model;
     rsx! {
         Chrome {
             header: rsx! {
@@ -193,11 +296,10 @@ fn Chrome(header: Element, children: Element) -> Element {
 ///   `cursor_position`, works even where events are dead) and feeds
 ///   `world.track_global` - the ghost and zone hovers keep working
 ///   across windows.
-/// - A NON-origin window receiving any pointer event mid-drag proves the
-///   button was released (it was blind while held): its bridge completes
-///   the drop at that position via `world.drop_at_global`. Releases back
-///   inside the origin window arrive as normal pointerups; both paths
-///   are idempotent.
+/// - A primary raw mouse release completes the drag in either the origin or
+///   a foreign window. A foreign window's first cursor event remains the
+///   fallback for platforms that suppress the raw release. The generation
+///   and source callback make native and webview echoes idempotent.
 #[component]
 fn DragBridge() -> Element {
     let Some(joined) = use_joined_window::<Card>() else {
@@ -205,60 +307,97 @@ fn DragBridge() -> Element {
     };
     let ctx = joined.world.context();
 
-    // Origin-side poller: spawned when a drag starts, ends itself when
-    // the drag does. ~30ms keeps the ghost smooth without busy-waiting.
-    use_effect(move || {
-        if !ctx.dragging() {
-            return;
-        }
-        if joined.world.origin_window() != Some(joined.key) {
-            return;
-        }
+    // A resource restarts by cancelling its previous task whenever the drag,
+    // pointer kind, or geometry capability changes. Capturing the generation
+    // also prevents a sleeper from attaching itself to a rapid restart.
+    let _poller = use_resource(move || {
+        let session = joined.world.drag_session();
+        let should_poll = ctx.dragging()
+            && joined.world.origin_window() == Some(joined.key)
+            && joined.world.pointer_kind() == PointerKind::Mouse
+            && joined.geometry.live();
         let desktop = window();
-        spawn(async move {
+        async move {
+            let Some(session) = session.filter(|_| should_poll) else {
+                return;
+            };
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                if !ctx.dragging() {
+                if !joined.world.is_drag_session(session)
+                    || joined.world.origin_window() != Some(joined.key)
+                    || joined.world.pointer_kind() != PointerKind::Mouse
+                    || !joined.geometry.live()
+                {
                     break;
                 }
-                // Wayland: no global cursor by design - the bridge simply
-                // never engages and drags stay per-window.
                 let Ok(pos) = desktop.cursor_position() else {
                     break;
                 };
                 let global = Point::new(pos.x, pos.y);
                 // Inside the origin window the webview owns the stream;
                 // outside it, the poller is the drag's eyes.
-                if !joined.geometry.contains_global(global) {
+                if !joined.geometry.contains_global(global) && joined.world.is_drag_session(session)
+                {
                     joined.world.track_global(global);
                 }
             }
-        });
+        }
     });
 
-    // Foreign-side release detection.
+    // Native release detection and foreign-window fallback.
     use_wry_event_handler(move |event, _| {
-        let dragging_foreign = ctx.dragging()
-            && joined.world.origin_window().is_some()
-            && joined.world.origin_window() != Some(joined.key);
-        if !dragging_foreign {
-            return;
-        }
         if let Event::WindowEvent { event, .. } = event {
             match event {
-                WindowEvent::CursorMoved { position, .. } => {
-                    // Physical window px -> this window's CSS px -> global.
-                    let scale = joined.geometry.scale().max(f64::EPSILON);
-                    let client = Point::new(position.x / scale, position.y / scale);
-                    if let Some(global) = joined.geometry.to_global(client) {
-                        joined.world.drop_at_global(global);
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    joined.world.update_modifiers(map_modifiers(*modifiers));
+                }
+                WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                    if ctx.dragging() {
+                        joined.world.refresh_all_rects();
                     }
                 }
-                WindowEvent::MouseInput { state: ElementState::Released, .. } => {
-                    if let Ok(pos) = window().cursor_position() {
-                        joined
-                            .world
-                            .drop_at_global(Point::new(pos.x, pos.y));
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    let session = joined.world.drag_session();
+                    if joined.world.pointer_kind() == PointerKind::Mouse
+                        && joined.geometry.live()
+                        && session.is_some_and(|id| joined.world.is_drag_session(id))
+                    {
+                        if let Ok(pos) = window().cursor_position() {
+                            joined.world.drop_at_global(Point::new(pos.x, pos.y));
+                        }
+                    }
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    let session = joined.world.drag_session();
+                    let dragging_foreign = joined.world.pointer_kind() == PointerKind::Mouse
+                        && joined.geometry.live()
+                        && joined.world.origin_window().is_some()
+                        && joined.world.origin_window() != Some(joined.key)
+                        && session.is_some_and(|id| joined.world.is_drag_session(id));
+                    if dragging_foreign {
+                        // Physical window px -> this window's CSS px -> global.
+                        let scale = joined.geometry.scale().max(f64::EPSILON);
+                        let client = Point::new(position.x / scale, position.y / scale);
+                        if let Some(global) = joined.geometry.to_global(client) {
+                            joined.world.drop_at_global(global);
+                        }
+                    }
+                }
+                WindowEvent::CursorEntered { .. } => {
+                    let session = joined.world.drag_session();
+                    let dragging_foreign = joined.world.pointer_kind() == PointerKind::Mouse
+                        && joined.geometry.live()
+                        && joined.world.origin_window().is_some()
+                        && joined.world.origin_window() != Some(joined.key)
+                        && session.is_some_and(|id| joined.world.is_drag_session(id));
+                    if dragging_foreign {
+                        if let Ok(pos) = window().cursor_position() {
+                            joined.world.drop_at_global(Point::new(pos.x, pos.y));
+                        }
                     }
                 }
                 _ => {}
@@ -323,3 +462,85 @@ const STYLE: &str = r#"
     .ghost .card { box-shadow: 0 6px 18px rgba(31, 36, 33, 0.25); border-color: #2e5339; }
     .empty { opacity: 0.5; font-size: 13px; text-align: center; margin: auto; }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static MODEL_SLOT: RefCell<Option<Rc<ModelOwner>>> = const { RefCell::new(None) };
+        static SURVIVOR_RENDERS: Cell<usize> = const { Cell::new(0) };
+        static SURVIVOR_VIEW: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+
+    fn model_creator_window() -> Element {
+        let model_owner = use_hook(ModelOwner::new);
+        MODEL_SLOT.with_borrow_mut(|slot| *slot = Some(model_owner));
+        rsx! {}
+    }
+
+    fn model_survivor_window() -> Element {
+        let model_owner = use_context::<Rc<ModelOwner>>();
+        let board_len = model_owner.model.board.read().len();
+        let tray_len = model_owner.model.tray.read().len();
+        SURVIVOR_RENDERS.set(SURVIVOR_RENDERS.get() + 1);
+        SURVIVOR_VIEW.with_borrow_mut(|view| *view = format!("board:{board_len};tray:{tray_len}"));
+        rsx! { div { "board:{board_len};tray:{tray_len}" } }
+    }
+
+    #[test]
+    fn model_storage_outlives_the_window_that_created_it() {
+        let mut creator = VirtualDom::new(model_creator_window);
+        creator.rebuild_in_place();
+        let survivor = MODEL_SLOT
+            .with_borrow_mut(Option::take)
+            .expect("creator parked its model owner");
+        let model = survivor.model;
+        let mut tray = VirtualDom::new(model_survivor_window).with_root_context(survivor.clone());
+
+        SURVIVOR_RENDERS.set(0);
+        tray.rebuild_in_place();
+        SURVIVOR_VIEW.with_borrow(|view| assert_eq!(view, "board:4;tray:0"));
+        drop(creator);
+        tray.in_runtime(|| {
+            model.move_card(
+                Card {
+                    id: 1,
+                    label: "Scout the webviews",
+                },
+                TRAY,
+            )
+        });
+        tray.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+        SURVIVOR_VIEW.with_borrow(|view| assert_eq!(view, "board:3;tray:1"));
+        assert!(SURVIVOR_RENDERS.get() >= 2);
+        drop(tray);
+        drop(survivor);
+        assert!(model.board.try_read().is_err());
+        assert!(model.tray.try_read().is_err());
+    }
+
+    #[test]
+    fn tao_modifiers_map_to_drop_effect_modifiers() {
+        let native =
+            TaoModifiers::SHIFT | TaoModifiers::CONTROL | TaoModifiers::ALT | TaoModifiers::SUPER;
+        let mapped = map_modifiers(native);
+        assert!(mapped.contains(Modifiers::SHIFT));
+        assert!(mapped.contains(Modifiers::CONTROL));
+        assert!(mapped.contains(Modifiers::ALT));
+        assert!(mapped.contains(Modifiers::META));
+    }
+
+    #[test]
+    fn wayland_disables_global_geometry() {
+        assert_eq!(
+            global_geometry_for_backend(true),
+            GlobalGeometry::Unavailable
+        );
+        assert_eq!(
+            global_geometry_for_backend(false),
+            GlobalGeometry::Available
+        );
+    }
+}

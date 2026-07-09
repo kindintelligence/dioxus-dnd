@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const AUTO_ID_BASE: u64 = 1 << 32;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(AUTO_ID_BASE);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Identifies a drop zone (a list, a column, a canvas, a tree node…).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -48,6 +49,18 @@ impl DragId {
 impl From<u64> for DragId {
     fn from(v: u64) -> Self {
         Self(v)
+    }
+}
+
+/// Identifies one pointer-drag gesture from pickup through its exactly-once
+/// completion. Unlike [`DragId`], which applications may use as item
+/// identity, this id is generated afresh for every gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DragSessionId(pub u64);
+
+impl DragSessionId {
+    pub(crate) fn auto() -> Self {
+        Self(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -223,6 +236,32 @@ pub enum DragMode {
     Keyboard,
 }
 
+/// Physical pointer that initiated a drag.
+///
+/// Desktop multi-window adapters use this to avoid sampling the operating
+/// system mouse cursor for touch or pen gestures, whose coordinates are a
+/// different input stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PointerKind {
+    Mouse,
+    Touch,
+    Pen,
+    #[default]
+    Unknown,
+}
+
+impl PointerKind {
+    /// Convert the browser pointer-type string reported by Dioxus.
+    pub fn from_pointer_type(value: &str) -> Self {
+        match value {
+            "mouse" => Self::Mouse,
+            "touch" => Self::Touch,
+            "pen" => Self::Pen,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// How a `Draggable` (or a whole-row sortable) shares touch input with the
 /// page's native gestures.
 ///
@@ -349,6 +388,18 @@ mod tests {
             effective_effect(DropEffect::None, Modifiers::CONTROL),
             DropEffect::None
         );
+    }
+
+    #[test]
+    fn pointer_kind_parses_browser_values() {
+        assert_eq!(PointerKind::from_pointer_type("mouse"), PointerKind::Mouse);
+        assert_eq!(PointerKind::from_pointer_type("touch"), PointerKind::Touch);
+        assert_eq!(PointerKind::from_pointer_type("pen"), PointerKind::Pen);
+        assert_eq!(
+            PointerKind::from_pointer_type("eraser"),
+            PointerKind::Unknown
+        );
+        assert_eq!(PointerKind::from_pointer_type(""), PointerKind::Unknown);
     }
 
     #[test]

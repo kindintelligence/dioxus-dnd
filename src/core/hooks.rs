@@ -198,6 +198,7 @@ pub fn use_bridge_world<T: Clone + PartialEq + 'static>(
     rect: Signal<Option<Rect>>,
 ) -> BridgeWorld {
     let dnd = use_dnd::<T>();
+    let membership = try_use_context::<WorldMembership<T>>().and_then(|m| m.0);
     let mut reg = use_zone_registry::<T>();
     use_hook(|| {
         reg.register(ZoneRecord {
@@ -219,7 +220,10 @@ pub fn use_bridge_world<T: Clone + PartialEq + 'static>(
     };
     BridgeWorld {
         active: dnd.dragging() && acceptable,
-        over: dnd.over() == Some(zone_id) && acceptable,
+        over: match membership {
+            Some(joined) => joined.is_over(zone_id),
+            None => dnd.over() == Some(zone_id),
+        } && acceptable,
     }
 }
 

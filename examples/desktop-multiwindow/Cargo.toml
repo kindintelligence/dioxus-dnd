@@ -17,7 +17,6 @@ publish = false
 
 [dependencies]
 dioxus = { version = "0.7", features = ["desktop"] }
-dioxus-dnd = { path = "../..", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+dioxus-dnd = { path = "../.." }
 # The drag bridge's cursor poller; dioxus-desktop already runs on tokio.
 tokio = { version = "1", features = ["time"] }

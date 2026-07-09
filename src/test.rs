@@ -48,11 +48,11 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
-use crate::core::components::deliver_drop;
+use crate::core::components::{deliver_drop, DropCompletion, SettleRoute};
 use crate::core::hooks::SettleFlag;
 use crate::core::world::{JoinedWindow, WorldHit, WorldMembership};
 use crate::core::{
-    use_dnd, use_zone_registry, DndContext, DragMode, DropEffect, Point, Rect, WindowKey, ZoneId,
+    use_dnd, use_zone_registry, DndContext, DropEffect, Point, Rect, WindowKey, ZoneId,
     ZoneRegistry,
 };
 
@@ -73,11 +73,18 @@ pub fn DragSimProbe<T: Clone + PartialEq + 'static>(
     phantom: std::marker::PhantomData<T>,
 ) -> Element {
     let _ = phantom;
+    let completions = use_signal(Vec::<bool>::new);
+    let completion = use_callback(move |dropped| {
+        let mut completions = completions;
+        completions.write().push(dropped);
+    });
     let sim = DragSim {
         dnd: use_dnd::<T>(),
         registry: use_zone_registry::<T>(),
         settle: try_use_context::<SettleFlag<T>>(),
         membership: try_use_context::<WorldMembership<T>>().and_then(|m| m.0),
+        completion,
+        completions,
     };
     use_hook(move || {
         SIMS.with_borrow_mut(|m| {
@@ -111,6 +118,8 @@ pub struct DragSim<T: Clone + 'static> {
     /// The provider's world membership, when it joined a `DndWorld` -
     /// moves and releases then resolve across windows, like the gesture.
     membership: Option<JoinedWindow<T>>,
+    completion: Callback<bool>,
+    completions: Signal<Vec<bool>>,
 }
 
 impl<T: Clone + 'static> Copy for DragSim<T> {}
@@ -176,13 +185,13 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
         let mut dnd = self.dnd;
         let membership = self.membership;
         dom.in_runtime(|| {
-            dnd.start(
+            dnd.start_tracked(
                 payload,
                 from,
                 Point::default(),
                 Point::default(),
                 DropEffect::Move,
-                DragMode::Pointer,
+                self.completion,
             );
             // Like the gesture: a world drag anchors to this window.
             if let Some(j) = membership {
@@ -203,18 +212,23 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
             // Same resolution order as the gesture: world hits (any
             // window) are authoritative, unresolved points fall back to
             // the local registry.
-            let hit = match membership.map(|j| j.zone_under(point)) {
-                Some(WorldHit::Zone(z)) => Some(z),
-                Some(WorldHit::Window) => None,
-                Some(WorldHit::Unresolved) | None => registry.hit_test(point),
-            };
-            match hit {
-                Some(z) => dnd.enter(z),
-                None => {
-                    if let Some(over) = dnd.over() {
-                        dnd.leave(over);
+            match membership {
+                Some(j) => match j.zone_under(point) {
+                    WorldHit::Zone(location) => j.enter(location),
+                    WorldHit::Window => j.clear_hover(),
+                    WorldHit::Unresolved => match registry.hit_test(point) {
+                        Some(zone) => j.enter(j.location(zone)),
+                        None => j.clear_hover(),
+                    },
+                },
+                None => match registry.hit_test(point) {
+                    Some(zone) => dnd.enter(zone),
+                    None => {
+                        if let Some(over) = dnd.over() {
+                            dnd.leave(over);
+                        }
                     }
-                }
+                },
             }
         });
     }
@@ -236,6 +250,7 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
         let membership = self.membership;
         dom.in_runtime(|| {
             let point = dnd.pointer();
+            let session = dnd.active_session();
             // A release the world resolves into a foreign window delivers
             // there, mirroring the gesture (the snap runs in the target
             // window's own CSS px). Headless rects are placed, so the
@@ -248,14 +263,32 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                     });
                     let delivered = target
                         .filter(|t| {
-                            deliver_drop(rec.registry, &mut dnd, Some(rec.settle), *t, local, effect)
+                            deliver_drop(
+                                rec.registry,
+                                &mut dnd,
+                                SettleRoute {
+                                    flag: Some(rec.settle),
+                                    owner: Some((&j.world, rec.key)),
+                                },
+                                DropCompletion::World {
+                                    world: &j.world,
+                                    session,
+                                },
+                                *t,
+                                local,
+                                effect,
+                            )
                         })
                         .is_some();
                     if !delivered {
-                        dnd.cancel();
+                        match session {
+                            Some(session) => {
+                                j.world.finish_session(session, false);
+                            }
+                            None => j.world.finish_untracked(false),
+                        }
                         return None;
                     }
-                    j.world.present_settle_in(rec.key);
                     return target;
                 }
             }
@@ -264,10 +297,54 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                     .and_then(|p| registry.hit_test_closest(point, &p, 48.0))
             });
             let delivered = target
-                .filter(|t| deliver_drop(registry, &mut dnd, settle, *t, point, effect))
+                .filter(|t| match membership {
+                    Some(j) => deliver_drop(
+                        registry,
+                        &mut dnd,
+                        SettleRoute {
+                            flag: settle,
+                            owner: Some((&j.world, j.key)),
+                        },
+                        DropCompletion::World {
+                            world: &j.world,
+                            session,
+                        },
+                        *t,
+                        point,
+                        effect,
+                    ),
+                    None => deliver_drop(
+                        registry,
+                        &mut dnd,
+                        SettleRoute {
+                            flag: settle,
+                            owner: None,
+                        },
+                        match session {
+                            Some(session) => DropCompletion::Local(session),
+                            None => DropCompletion::None,
+                        },
+                        *t,
+                        point,
+                        effect,
+                    ),
+                })
                 .is_some();
             if !delivered {
-                dnd.cancel();
+                match membership {
+                    Some(j) => match session {
+                        Some(session) => {
+                            j.world.finish_session(session, false);
+                        }
+                        None => j.world.finish_untracked(false),
+                    },
+                    None => match session {
+                        Some(session) => {
+                            dnd.cancel_session(session);
+                        }
+                        None => dnd.cancel(),
+                    },
+                }
                 return None;
             }
             target
@@ -277,7 +354,30 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
     /// Abort the drag, as Escape or a pointer cancel would.
     pub fn cancel(&mut self, dom: &VirtualDom) {
         let mut dnd = self.dnd;
-        dom.in_runtime(|| dnd.cancel());
+        let membership = self.membership;
+        dom.in_runtime(|| {
+            let session = dnd.active_session();
+            match membership {
+                Some(j) => match session {
+                    Some(session) => {
+                        j.world.finish_session(session, false);
+                    }
+                    None => j.world.finish_untracked(false),
+                },
+                None => match session {
+                    Some(session) => {
+                        dnd.cancel_session(session);
+                    }
+                    None => dnd.cancel(),
+                },
+            }
+        });
+    }
+
+    /// Exactly-once source completion results observed by the simulated
+    /// source (`true` for delivered, `false` for cancelled).
+    pub fn completions(&self, dom: &VirtualDom) -> Vec<bool> {
+        dom.in_runtime(|| self.completions.read().clone())
     }
 
     /// The zone currently hovered.
