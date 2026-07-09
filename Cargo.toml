@@ -45,6 +45,9 @@ dioxus-ssr = "0.7"
 web-sys = { version = "0.3", features = ["Location"] }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
+# serde derive for the typed-transport tests and fixtures (the library's
+# own optional serde dep stays derive-free).
+serde = { version = "1", features = ["derive"] }
 # The gallery's Packing list page wires DndStrings to dioxus-i18n (the
 # Fluent-based crate the Dioxus docs recommend); the library itself stays
 # dependency-free.

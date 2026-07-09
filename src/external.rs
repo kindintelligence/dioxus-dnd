@@ -159,29 +159,151 @@ pub fn ExternalDropZone(
 }
 
 /// Typed payloads over the native `DataTransfer` (JSON-encoded under
-/// `application/json`, wire-compatible with dioxus-html's own
+/// [`typed::MIME`], wire-compatible with dioxus-html's own
 /// `store`/`retrieve`). Useful when the browser must carry the data - e.g.
-/// dragging between two separate Dioxus apps or windows - at the cost of
-/// requiring `Serialize`/`Deserialize`.
+/// dragging between two separate Dioxus apps - at the cost of requiring
+/// `Serialize`/`Deserialize`. (Between windows of ONE app, prefer a
+/// [`crate::core::DndWorld`]: live Rust payloads, no serialization.)
+///
+/// Component wrappers: [`TypedDropZone`] here and
+/// [`crate::dragout::TypedDragSource`] on the outbound side.
 #[cfg(feature = "serde")]
 pub mod typed {
+    use dioxus::html::DataTransfer;
     use dioxus::prelude::*;
+
+    /// The format typed payloads travel under. A single hardcoded MIME
+    /// keeps the wire format compatible with dioxus-html's own
+    /// `DataTransfer::store`/`retrieve` helpers.
+    pub const MIME: &str = "application/json";
+
+    /// Store a typed payload on a `DataTransfer` directly. The building
+    /// block behind [`store`]; also the testable seam.
+    pub fn store_in<T: serde::Serialize>(dt: &DataTransfer, value: &T) -> Result<(), String> {
+        let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
+        dt.set_data(MIME, &json)
+    }
+
+    /// Retrieve a typed payload from a `DataTransfer` directly.
+    /// `Ok(None)` when the drag carries no [`MIME`] entry (not a typed
+    /// drag); `Err` when it does but the JSON doesn't decode as `T`.
+    /// "No entry" includes the empty string: the DOM's `getData` returns
+    /// `""` for absent formats rather than null, so on web every untyped
+    /// drag reads as `Some("")` (the same reality [`super::classify`]
+    /// guards against).
+    pub fn retrieve_from<T: for<'de> serde::Deserialize<'de>>(
+        dt: &DataTransfer,
+    ) -> Result<Option<T>, String> {
+        match dt.get_data(MIME) {
+            Some(json) if !json.trim().is_empty() => serde_json::from_str(&json)
+                .map(Some)
+                .map_err(|e| e.to_string()),
+            _ => Ok(None),
+        }
+    }
 
     /// Store a typed payload on the drag's `DataTransfer`. Call in `ondragstart`.
     pub fn store<T: serde::Serialize>(evt: &DragEvent, value: &T) -> Result<(), String> {
-        let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
-        evt.data_transfer().set_data("application/json", &json)
+        store_in(&evt.data_transfer(), value)
     }
 
     /// Retrieve a typed payload from a drop's `DataTransfer`. Call in `ondrop`.
     pub fn retrieve<T: for<'de> serde::Deserialize<'de>>(
         evt: &DragEvent,
     ) -> Result<Option<T>, String> {
-        match evt.data_transfer().get_data("application/json") {
-            Some(json) => serde_json::from_str(&json)
-                .map(Some)
-                .map_err(|e| e.to_string()),
-            None => Ok(None),
+        retrieve_from(&evt.data_transfer())
+    }
+}
+
+/// A successfully decoded typed drop, as delivered by [`TypedDropZone`].
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedDrop<T> {
+    /// The decoded payload. Like every external payload it crossed an app
+    /// boundary and is untrusted input - validate it like any other.
+    pub payload: T,
+    /// Pointer position in client (viewport) coordinates at drop time.
+    pub client: Point,
+    /// Pointer position relative to the zone's element.
+    pub element: Point,
+}
+
+/// A zone accepting typed drags (see [`typed`]) - JSON under
+/// [`typed::MIME`] decoded to `T` and delivered as a [`TypedDrop`].
+///
+/// Handles the HTML5 boilerplate like [`ExternalDropZone`]: `preventDefault`
+/// on dragover, enter/leave depth counting, and `data-over="true"` while
+/// hovered. One honest limitation, spec-imposed: during hover the payload
+/// is unreadable (`DataTransfer` protected mode) and dioxus exposes no
+/// `types` list, so `data-over` lights for ANY drag hovering the zone -
+/// acceptance can only be judged at drop time. Drags with no typed entry
+/// at all are ignored silently at drop; drags whose JSON fails to decode
+/// as `T` fire `on_invalid` with the decode error.
+#[cfg(feature = "serde")]
+#[component]
+pub fn TypedDropZone<T: serde::de::DeserializeOwned + Clone + PartialEq + 'static>(
+    /// Fired with the decoded payload on a successful typed drop.
+    on_drop: EventHandler<TypedDrop<T>>,
+    /// Fired when a drop carried a [`typed::MIME`] entry that failed to
+    /// decode as `T` (the decode error, for diagnostics).
+    #[props(default)]
+    on_invalid: Option<EventHandler<String>>,
+    /// Fired with `true`/`false` on hover enter/leave.
+    #[props(default)]
+    on_hover: Option<EventHandler<bool>>,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    let mut depth = use_signal(|| 0u32);
+
+    rsx! {
+        div {
+            "data-over": if depth() > 0 { "true" },
+            ondragover: move |evt: DragEvent| {
+                evt.prevent_default();
+            },
+            ondragenter: move |evt: DragEvent| {
+                evt.prevent_default();
+                let d = depth() + 1;
+                depth.set(d);
+                if d == 1 {
+                    if let Some(h) = &on_hover {
+                        h.call(true);
+                    }
+                }
+            },
+            ondragleave: move |_| {
+                let d = depth().saturating_sub(1);
+                depth.set(d);
+                if d == 0 {
+                    if let Some(h) = &on_hover {
+                        h.call(false);
+                    }
+                }
+            },
+            ondrop: move |evt: DragEvent| {
+                evt.prevent_default();
+                depth.set(0);
+                if let Some(h) = &on_hover {
+                    h.call(false);
+                }
+                match typed::retrieve::<T>(&evt) {
+                    Ok(Some(payload)) => on_drop.call(TypedDrop {
+                        payload,
+                        client: client_point(&evt),
+                        element: element_point(&evt),
+                    }),
+                    // No typed entry: not a typed drag - not ours.
+                    Ok(None) => {}
+                    Err(e) => {
+                        if let Some(h) = &on_invalid {
+                            h.call(e);
+                        }
+                    }
+                }
+            },
+            ..attributes,
+            {children}
         }
     }
 }

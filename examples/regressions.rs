@@ -5,7 +5,7 @@
 //! `tests/browser/web-pointer-regressions.spec.js`.
 //!
 //! ```sh
-//! dx serve --example regressions --platform web --features web
+//! dx serve --example regressions --platform web --features web,serde
 //! ```
 
 use std::collections::HashMap;
@@ -39,6 +39,55 @@ fn App() -> Element {
         TouchSenseFixture {}
         FlipFixture {}
         MatchSourceFixture {}
+        TypedFixture {}
+    }
+}
+
+// --- typed DataTransfer transport (serde) ---------------------------------
+// TypedDragSource serializes its payload (JSON under application/json plus
+// a text/plain fallback) at dragstart; TypedDropZone decodes drops back to
+// the type, ignores untyped drags, and reports undecodable JSON through
+// on_invalid. The spec drives it with real DragEvents carrying a real
+// DataTransfer - the boundary a headless VirtualDom cannot cross.
+
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct TypedCard {
+    id: u32,
+    name: String,
+}
+
+#[component]
+fn TypedFixture() -> Element {
+    let mut landed = use_signal(String::new);
+    let mut invalid = use_signal(|| 0u32);
+    rsx! {
+        section {
+            h2 { "Typed transport" }
+            TypedDragSource::<TypedCard> {
+                payload: TypedCard { id: 7, name: "seven".into() },
+                id: "typed-source",
+                "typed source"
+            }
+            TypedDragSource::<TypedCard> {
+                payload: TypedCard { id: 9, name: "nine".into() },
+                fallback_text: "card nine".to_string(),
+                id: "typed-source-fallback",
+                "typed source with fallback"
+            }
+            TypedDropZone::<TypedCard> {
+                id: "typed-zone",
+                on_drop: move |d: TypedDrop<TypedCard>| {
+                    landed.set(format!("{}:{}", d.payload.id, d.payload.name));
+                },
+                on_invalid: move |_| invalid += 1,
+                "typed zone"
+            }
+            div {
+                id: "typed-status",
+                "data-landed": landed(),
+                "data-invalid": "{invalid}",
+            }
+        }
     }
 }
 

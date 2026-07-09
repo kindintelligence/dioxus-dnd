@@ -45,7 +45,11 @@ pub mod prelude {
     };
     pub use crate::debug::DndDebugOverlay;
     pub use crate::dragout::{ExternalDragSource, OutboundContent};
+    #[cfg(feature = "serde")]
+    pub use crate::dragout::TypedDragSource;
     pub use crate::external::{classify, ExternalDrop, ExternalDropZone, ExternalPayload};
+    #[cfg(feature = "serde")]
+    pub use crate::external::{TypedDrop, TypedDropZone};
     pub use crate::files::{FileDrop, FileDropZone, FileFilter, FileRejection};
     pub use crate::grid::{cell_of, index_of, SortableGrid};
     pub use crate::multiselect::{use_selection, SelectableDraggable, Selection, SelectionCount};

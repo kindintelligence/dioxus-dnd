@@ -155,6 +155,72 @@ pub fn ExternalDragSource(
     }
 }
 
+/// Makes its children draggable with a **typed** payload on the native
+/// `DataTransfer`: `payload` is serialized to JSON under
+/// [`crate::external::typed::MIME`] at drag start, always alongside a
+/// `text/plain` fallback so non-typed targets (text editors, other apps)
+/// still receive something legible. The receiving end is
+/// [`crate::external::TypedDropZone`] (yours, in another app) - or any
+/// consumer of dioxus-html's wire-compatible `retrieve`.
+///
+/// For drags between windows of ONE app, prefer a
+/// [`crate::core::DndWorld`]: live Rust payloads, no serialization.
+///
+/// Serialization failures are contained: the drag degrades to carrying
+/// only the fallback text (and reports through `on_error` if wired).
+#[cfg(feature = "serde")]
+#[component]
+pub fn TypedDragSource<T: serde::Serialize + Clone + PartialEq + 'static>(
+    /// The value serialized onto the drag's `DataTransfer`.
+    payload: T,
+    /// The `text/plain` fallback written alongside the JSON. Defaults to
+    /// the JSON itself, which pastes legibly into text targets.
+    #[props(default)]
+    fallback_text: Option<String>,
+    /// Effect advertised to the receiving application. Defaults to `Copy`.
+    #[props(default = DropEffect::Copy)]
+    effect: DropEffect,
+    /// Disable without unmounting.
+    #[props(default)]
+    disabled: bool,
+    /// Fired when the payload fails to serialize at drag start.
+    #[props(default)]
+    on_error: Option<EventHandler<String>>,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    rsx! {
+        div {
+            draggable: !disabled,
+            ondragstart: move |evt: DragEvent| {
+                if disabled {
+                    return;
+                }
+                evt.stop_propagation();
+                let dt = evt.data_transfer();
+                let json = match serde_json::to_string(&payload) {
+                    Ok(json) => {
+                        let _ = dt.set_data(crate::external::typed::MIME, &json);
+                        Some(json)
+                    }
+                    Err(e) => {
+                        if let Some(h) = &on_error {
+                            h.call(e.to_string());
+                        }
+                        None
+                    }
+                };
+                if let Some(text) = fallback_text.clone().or(json) {
+                    let _ = dt.set_data("text/plain", &text);
+                }
+                dt.set_effect_allowed(effect.as_str());
+            },
+            ..attributes,
+            {children}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -22,7 +22,7 @@ module.exports = defineConfig({
       // parses the value as a subcommand. `--hot-patch` is a bare flag that
       // already defaults to off.
       command:
-        "dx serve --example regressions --platform web --features web --interactive=false --open=false --port 8080",
+        "dx serve --example regressions --platform web --features web,serde --interactive=false --open=false --port 8080",
       url: "http://127.0.0.1:8080/dioxus-dnd/",
       timeout: 10 * 60 * 1000,
       reuseExistingServer: !process.env.CI,

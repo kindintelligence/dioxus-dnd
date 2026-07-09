@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Typed transport components** (`serde` feature):
+  `TypedDragSource<T>` serializes its payload to JSON under
+  `application/json` at drag start - always alongside a `text/plain`
+  fallback (defaults to the JSON; override with `fallback_text`) so
+  non-typed targets still receive something legible - and
+  `TypedDropZone<T>` decodes drops back to `T` as a `TypedDrop<T>`
+  (payload + client/element points), silently ignores untyped drags, and
+  reports undecodable JSON through `on_invalid`. `external::typed` grew
+  the underlying seam (`store_in`/`retrieve_from` over a `DataTransfer`,
+  plus the `MIME` const) and its first test coverage: headless
+  round-trips through a mutable `DataTransfer` double and Playwright
+  specs driving real `DragEvent`s. Fixed along the way: an untyped drop
+  no longer reads as a decode error on web, where the DOM's `getData`
+  returns `""` for absent formats rather than null.
 - **Multi-window desktop drags** (`core::world`): drag between windows of
   one desktop app with the payload as a live Rust value - no
   serialization, no `DataTransfer`. `use_dnd_world::<T>()` creates a
