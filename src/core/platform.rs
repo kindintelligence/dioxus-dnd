@@ -24,16 +24,19 @@ use dioxus::prelude::*;
 /// web renderer delegates events at the document root (so `currentTarget` is
 /// the root, not your element), and a target child can re-render mid-drag
 /// (live-preview transforms), which would drop the capture.
-pub(crate) fn capture_pointer(node: &MountedData, pointer_id: i32) {
+/// Returns whether capture was actually taken - callers use it to decide
+/// whether a capture *substitute* (the full-viewport layer) is needed.
+pub(crate) fn capture_pointer(node: &MountedData, pointer_id: i32) -> bool {
     #[cfg(feature = "web")]
     if let Some(el) = node.downcast::<web_sys::Element>() {
         // Fails only for an already-released/invalid pointer id - harmless.
-        let _ = el.set_pointer_capture(pointer_id);
+        return el.set_pointer_capture(pointer_id).is_ok();
     }
     #[cfg(not(feature = "web"))]
     {
         let _ = (node, pointer_id);
     }
+    false
 }
 
 /// Run one FLIP handoff on the real DOM element, synchronously: write the

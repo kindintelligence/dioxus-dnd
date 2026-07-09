@@ -477,7 +477,10 @@ pub fn SortableList(
     // Rows glide via inline transitions; honor prefers-reduced-motion.
     let reduced_motion_css = use_reduced_motion_css();
 
-    let primary_pointer = move |evt: &PointerEvent| evt.is_primary();
+    let primary_pointer =
+        move |evt: &PointerEvent| crate::core::components::primary_press(evt);
+    // Consecutive empty-held moves seen mid-drag (lost-release debounce).
+    let mut empty_held_moves = use_signal(|| 0u8);
     let mut cancel_drag = move || {
         feed(GestureEvent::Cancel);
         press_from.set(None);
@@ -521,14 +524,23 @@ pub fn SortableList(
                 // returns over the list with no button held we finish the drop
                 // rather than track a phantom drag. Touch/pen hold a button
                 // throughout contact, so this only trips for a released mouse.
+                // Debounced: move events carry the display server's state
+                // mask, which some pipelines corrupt for isolated events
+                // (see core::components::RELEASE_RECOVERY_MOVES).
                 if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
-                    if let Some(from) = *drag_from.peek() {
-                        if let Some(n) = mounteds.peek().get(&from).cloned() {
-                            platform::release_pointer(&n, evt.pointer_id());
+                    let streak = empty_held_moves.peek().saturating_add(1);
+                    empty_held_moves.set(streak);
+                    if streak >= crate::core::components::RELEASE_RECOVERY_MOVES {
+                        if let Some(from) = *drag_from.peek() {
+                            if let Some(n) = mounteds.peek().get(&from).cloned() {
+                                platform::release_pointer(&n, evt.pointer_id());
+                            }
                         }
+                        feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() });
+                        return;
                     }
-                    feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() });
-                    return;
+                } else if *empty_held_moves.peek() != 0 {
+                    empty_held_moves.set(0);
                 }
                 feed(GestureEvent::Move { at, pointer_id: evt.pointer_id() });
             },

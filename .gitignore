@@ -1,4 +1,5 @@
 /target/
+examples/desktop-multiwindow/target/
 **/*.rs.bk
 node_modules/
 test-results/

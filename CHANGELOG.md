@@ -4,6 +4,43 @@
 
 ### Added
 
+- **Multi-window desktop drags** (`core::world`): drag between windows of
+  one desktop app with the payload as a live Rust value - no
+  serialization, no `DataTransfer`. `use_dnd_world::<T>()` creates a
+  process-lived `DndWorld<T>` (windows may close in any order); pass it to
+  sibling windows via `VirtualDom::with_root_context` and each window's
+  `DndProvider` joins automatically. Zones light up and deliver across
+  windows through the shared context; `DragOverlay` elects exactly one
+  presenting window per frame (scale-aware, so mixed-DPI ghosts keep their
+  physical size), and drop-settle glides in the receiving window. Feed
+  each window's `WindowGeometry` from your windowing layer (recipe plus a
+  working two-window example in `examples/desktop-multiwindow/`, probe
+  binary included); without geometry - Wayland - drags gracefully stay
+  per-window. Host-drive API (`track_global`, `drop_at_global`,
+  `cancel_drag`, `use_joined_window`) lets desktop glue bridge what
+  webviews cannot see: pointer events stop at the viewport edge, and
+  non-origin windows are event-blind while a button is held, so the
+  origin's glue polls the global cursor and a blind window's first event
+  completes the drop. The headless `DragSim` speaks world too
+  (`place_in`, `window_key`), and two new test suites
+  (`tests/multiwindow.rs`, `tests/multiwindow_seam.rs`) pin the
+  cross-VirtualDom contracts this rides on.
+
+### Fixed
+
+- **Pointer drags on renderers without native capture** (desktop
+  webviews; web without the `web` feature) no longer freeze when the
+  cursor leaves the dragged element: while native capture is not engaged,
+  `Draggable` renders a full-viewport capture substitute that keeps the
+  move stream flowing (with capture engaged the substitute never exists,
+  so web behavior and DOM are unchanged).
+- **Press detection and lost-release recovery hardened against corrupt
+  button state** (observed on WSLg, where the display server's move-event
+  button masks can be stale): mice now begin drags on the reliable
+  trigger button instead of `is_primary`, and the "no buttons held"
+  recovery in `Draggable`, `SortableList` and `SortableGrid` requires
+  three consecutive empty moves instead of trusting one.
+
 - **Size-matched ghosts**: `DragOverlay { match_source: true }` dresses the
   ghost in the grabbed element's measured client rect (recorded in the new
   `DragState::source_rect` / `dnd.source_rect()`, set by `Draggable` at

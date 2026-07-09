@@ -23,6 +23,7 @@ use super::hooks::{
 use super::registry::{ZoneRecord, ZoneRegistry};
 use super::state::DndContext;
 use super::strings::use_dnd_strings;
+use super::world::{WorldHit, WorldMembership};
 use super::{platform, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion};
 
 /// Context marker a `DropZone` provides so zones nested inside it can
@@ -161,6 +162,30 @@ fn pointer_client(evt: &PointerEvent) -> Point {
     Point::new(c.x, c.y)
 }
 
+/// Should this press begin a drag? The `button` field on down events is
+/// reliable everywhere (GTK reads it from the event itself, not the
+/// modifier state mask), while `is_primary` is only meaningful for
+/// touch/pen: WebKit hardcodes it `true` for mouse-derived pointers, and
+/// synthesized mouse streams (RDP under WSLg, some test harnesses) can
+/// flake it `false` - silently swallowing real presses. So mice gate on
+/// the trigger button; fingers and pens gate on primacy.
+pub(crate) fn primary_press(evt: &PointerEvent) -> bool {
+    if evt.pointer_type() == "mouse" {
+        evt.trigger_button() == Some(dioxus::html::input_data::MouseButton::Primary)
+    } else {
+        evt.is_primary()
+    }
+}
+
+/// How many CONSECUTIVE moves must report no held buttons before the
+/// lost-release recovery synthesizes a pointer-up. Move events carry the
+/// display server's button state mask, which some pipelines corrupt for
+/// isolated events (WSLg's RDP translation is the documented case) - one
+/// bogus "empty" move must not phantom-drop a drag. A genuinely lost
+/// release produces a steady empty stream, so the debounce costs a few
+/// milliseconds, not correctness.
+pub(crate) const RELEASE_RECOVERY_MOVES: u8 = 3;
+
 /// Deliver the in-flight payload to `target`: acceptance check, settle
 /// routing, outcome construction, the zone's callback. THE drop path - the
 /// `Draggable` pointer gesture and [`crate::test::DragSim`] both end here,
@@ -265,6 +290,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     let mut dnd = use_dnd::<T>();
     let registry = use_zone_registry::<T>();
     let settle_flag = try_use_context::<SettleFlag<T>>();
+    // Multi-window: when the provider joined a `DndWorld`, pointer moves
+    // and releases resolve across every joined window. `None` (the normal
+    // single-window case) leaves every path below exactly as it was.
+    let membership = try_use_context::<WorldMembership<T>>().and_then(|m| m.0);
     // Everything the keyboard path voices, localizable through context.
     let strings = use_dnd_strings();
     // Separate clones for the two closures that need the payload.
@@ -277,6 +306,12 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     // For claiming a keyboard drop's focus restoration on mount.
     let mount_payload = payload.clone();
     let mut phase = use_signal(|| GesturePhase::Idle);
+    // Did native pointer capture engage for the current press? When it
+    // did, events retarget to this element and no capture substitute is
+    // needed (or wanted - see the layer below).
+    let mut captured = use_signal(|| false);
+    // Consecutive empty-held moves seen mid-drag (lost-release debounce).
+    let mut empty_held_moves = use_signal(|| 0u8);
     // Some(pid) while a touch press under `Auto` waits on its hold timer;
     // doubles as the timer element's render condition.
     let mut hold_pid = use_signal(|| None::<i32>);
@@ -335,7 +370,15 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 }
             });
         }
-        registry.refresh_rects();
+        // A world drag anchors its coordinates to this window and needs
+        // every joined window's rects fresh, not just this one's.
+        match membership {
+            Some(j) => {
+                j.world.begin_from(j.key);
+                j.world.refresh_all_rects();
+            }
+            None => registry.refresh_rects(),
+        }
         if let Some(h) = &on_drag_start {
             h.call(());
         }
@@ -347,6 +390,44 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
 
     let mut finish_drop = move |point: Point| {
         let effect = effective_effect(effect, *mods.peek());
+        // A release the world resolves into a FOREIGN window delivers
+        // there: that window's registry and settle flag, coordinates in
+        // its client px (including its own 48px snap, in its own CSS px).
+        // Own-window and unresolved releases (no geometry, outside every
+        // window) fall through to the classic path below, so
+        // single-window behavior is untouched - origin-window snap
+        // included.
+        if let Some(j) = membership {
+            if let Some((rec, local)) = j.foreign_window_under(point) {
+                let mut dnd = dnd;
+                spawn(async move {
+                    let target = match rec.registry.hit_test(local) {
+                        Some(t) => Some(t),
+                        None => {
+                            rec.registry.measure_all().await;
+                            dnd.payload()
+                                .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
+                        }
+                    };
+                    let dropped = target
+                        .map(|t| {
+                            deliver_drop(rec.registry, &mut dnd, Some(rec.settle), t, local, effect)
+                        })
+                        .unwrap_or(false);
+                    if dropped {
+                        // If the drop settled, the ghost glides in the
+                        // receiving window (a guarded no-op otherwise).
+                        j.world.present_settle_in(rec.key);
+                    } else {
+                        dnd.cancel();
+                    }
+                    if let Some(h) = &on_drag_end {
+                        h.call(dropped);
+                    }
+                });
+                return;
+            }
+        }
         if let Some(target) = registry.hit_test(point) {
             if deliver_to(target, point, effect) {
                 if let Some(h) = &on_drag_end {
@@ -391,9 +472,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 }
             },
             onpointerdown: move |evt: PointerEvent| {
-                if disabled || !evt.is_primary() {
+                if disabled || !primary_press(&evt) {
                     return;
                 }
+                empty_held_moves.set(0);
                 // Suppress the press's default actions - the same line the
                 // sortable rows carry. The one that matters: `tabindex=0`
                 // makes this div mouse-focusable as a browser side effect,
@@ -404,9 +486,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 // compatibility mouse event).
                 evt.prevent_default();
                 evt.stop_propagation();
-                if let Some(n) = node.peek().clone() {
-                    platform::capture_pointer(&n, evt.pointer_id());
-                }
+                captured.set(match node.peek().clone() {
+                    Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
+                    None => false,
+                });
                 let o = evt.element_coordinates();
                 press_offset.set(Point::new(o.x, o.y));
                 // Measure at press so a later promotion can size the ghost
@@ -441,9 +524,21 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             onpointermove: move |evt: PointerEvent| {
                 let at = pointer_client(&evt);
                 mods.set(evt.modifiers());
-                let event = if matches!(*phase.peek(), GesturePhase::Dragging { .. })
+                // Lost-release recovery, debounced: only a RUN of empty-
+                // held moves is believed (see RELEASE_RECOVERY_MOVES).
+                let released = if matches!(*phase.peek(), GesturePhase::Dragging { .. })
                     && evt.held_buttons().is_empty()
                 {
+                    let streak = empty_held_moves.peek().saturating_add(1);
+                    empty_held_moves.set(streak);
+                    streak >= RELEASE_RECOVERY_MOVES
+                } else {
+                    if *empty_held_moves.peek() != 0 {
+                        empty_held_moves.set(0);
+                    }
+                    false
+                };
+                let event = if released {
                     if let Some(n) = node.peek().clone() {
                         platform::release_pointer(&n, evt.pointer_id());
                     }
@@ -455,7 +550,15 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     GestureEffect::Begin { at, .. } => begin_drag.call(at),
                     GestureEffect::Track { at } => {
                         dnd.update_pointer(at);
-                        match registry.hit_test(at) {
+                        // World-resolved hits are authoritative even when
+                        // zoneless: a foreign window IN FRONT of one of our
+                        // zones must not let the covered zone light up.
+                        let hit = match membership.map(|j| j.zone_under(at)) {
+                            Some(WorldHit::Zone(z)) => Some(z),
+                            Some(WorldHit::Window) => None,
+                            Some(WorldHit::Unresolved) | None => registry.hit_test(at),
+                        };
+                        match hit {
                             Some(z) => dnd.enter(z),
                             None => {
                                 if let Some(over) = dnd.over() {
@@ -654,6 +757,28 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 }
             },
             ..attributes,
+            // Pointer-capture SUBSTITUTE, rendered only when native capture
+            // did not engage. With capture (the `web` feature), events
+            // retarget to this element already - and the layer must not
+            // exist, so the page's own hit-testing (`elementFromPoint`
+            // introspection included) stays untouched. Without capture
+            // (desktop webviews, web without the feature) nothing
+            // retargets: the moment the cursor left this element mid-drag
+            // the move stream died and the ghost froze. This full-viewport
+            // child then owns every pointer event and lets it bubble to
+            // the handlers above - no separate handlers, no renderer API.
+            // Gated on the shared context too, so a drag completed from
+            // outside this element (host-driven drop, another window's
+            // delivery) can never leave a stale layer eating input.
+            // (Being position: fixed, it is clipped by any transformed
+            // ancestor - the standard containing-block caveat, shared with
+            // the overlay.)
+            if matches!(phase(), GesturePhase::Dragging { .. }) && dnd.dragging() && !captured() {
+                div {
+                    style: "position: fixed; inset: 0; z-index: 9998; touch-action: none;",
+                    aria_hidden: true,
+                }
+            }
             // Armed only while a touch press waits under `Auto`; the alarm
             // promotes exactly like a threshold crossing, at the origin.
             if let Some(pid) = hold_pid() {
@@ -1100,6 +1225,10 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
 ) -> Element {
     let _ = phantom;
     let mut dnd = use_dnd::<T>();
+    // Multi-window: when the provider joined a `DndWorld`, exactly one
+    // joined window presents the ghost each frame (the one under the
+    // global pointer; the receiving one during a settle).
+    let membership = try_use_context::<WorldMembership<T>>().and_then(|m| m.0);
 
     // Arm settle-aware drops for this provider while mounted. Draggables
     // check the flag at delivery time, so mount order doesn't matter.
@@ -1117,8 +1246,12 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
                 f.armed.set(false);
             }
             // Unmounting mid-glide: nobody is left to hear transitionend,
-            // so reset now (guarded no-op otherwise).
-            dnd.finish_settle();
+            // so reset now (guarded no-op otherwise). The aliveness gate
+            // covers app shutdown in multi-window use, where the shared
+            // context can die before this window's overlay unmounts.
+            if dnd.alive() {
+                dnd.finish_settle();
+            }
         }
     });
 
@@ -1230,6 +1363,18 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     if match_source && dnd.dragging() && dnd.source_rect().is_none() {
         return rsx! {};
     }
+    // Multi-window presentation: the world elects one window's overlay per
+    // frame and hands it the anchor in ITS client px, plus the
+    // origin-to-here scale ratio so a size-matched ghost keeps its physical
+    // size across differently-scaled windows. Without a world this is the
+    // classic raw anchor.
+    let (anchor, scale_ratio) = match membership {
+        Some(j) => match j.present_overlay(dnd.pointer(), dnd.grab(), settling) {
+            Some(placed) => placed,
+            None => return rsx! {},
+        },
+        None => (dnd.pointer() - dnd.grab(), 1.0),
+    };
 
     // Size-matched ghost: the grabbed element's measured rect, border-box
     // so the ghost's own padding/border stay inside it.
@@ -1239,7 +1384,8 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
         .map(|r| {
             format!(
                 " width: {}px; height: {}px; box-sizing: border-box;",
-                r.width, r.height
+                r.width * scale_ratio,
+                r.height * scale_ratio
             )
         })
         .unwrap_or_default();
@@ -1250,10 +1396,10 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
         };
         format!(
             "{}{size} transform: {transform}; transition: transform {duration}ms {easing};",
-            overlay_style(dnd.pointer() - dnd.grab()),
+            overlay_style(anchor),
         )
     } else {
-        format!("{}{size}", overlay_style(dnd.pointer() - dnd.grab()))
+        format!("{}{size}", overlay_style(anchor))
     };
     let mut attributes = attributes;
     let style = merge_style(&mut attributes, &functional);

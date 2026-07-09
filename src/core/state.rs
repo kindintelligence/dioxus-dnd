@@ -237,6 +237,19 @@ impl<T: Clone + 'static> DndContext<T> {
         }
     }
 
+    /// Is the underlying state still alive? Destructors check this before
+    /// touching the context, because store lens access on a dead store
+    /// panics (even `try_` reads - the selector internals do) and a panic
+    /// in a destructor aborts the process. A world context is process-
+    /// lived so this holds by construction there; the gate keeps every
+    /// other wiring (custom `from_parts` contexts, unforeseen drop orders)
+    /// degrading gracefully instead. Probed through the announcement
+    /// signal, a plain `Signal` created alongside the store, whose
+    /// `try_peek` IS dead-safe.
+    pub(crate) fn alive(&self) -> bool {
+        self.announcement.try_peek().is_ok()
+    }
+
     /// Abort the drag and reset all state.
     pub fn cancel(&mut self) {
         self.state.set(DragState::default());

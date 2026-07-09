@@ -50,8 +50,10 @@ use dioxus::prelude::*;
 
 use crate::core::components::deliver_drop;
 use crate::core::hooks::SettleFlag;
+use crate::core::world::{JoinedWindow, WorldHit, WorldMembership};
 use crate::core::{
-    use_dnd, use_zone_registry, DndContext, DragMode, DropEffect, Point, Rect, ZoneId, ZoneRegistry,
+    use_dnd, use_zone_registry, DndContext, DragMode, DropEffect, Point, Rect, WindowKey, ZoneId,
+    ZoneRegistry,
 };
 
 thread_local! {
@@ -75,6 +77,7 @@ pub fn DragSimProbe<T: Clone + PartialEq + 'static>(
         dnd: use_dnd::<T>(),
         registry: use_zone_registry::<T>(),
         settle: try_use_context::<SettleFlag<T>>(),
+        membership: try_use_context::<WorldMembership<T>>().and_then(|m| m.0),
     };
     use_hook(move || {
         SIMS.with_borrow_mut(|m| {
@@ -105,6 +108,9 @@ pub struct DragSim<T: Clone + 'static> {
     dnd: DndContext<T>,
     registry: ZoneRegistry<T>,
     settle: Option<SettleFlag<T>>,
+    /// The provider's world membership, when it joined a `DndWorld` -
+    /// moves and releases then resolve across windows, like the gesture.
+    membership: Option<JoinedWindow<T>>,
 }
 
 impl<T: Clone + 'static> Copy for DragSim<T> {}
@@ -130,6 +136,35 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
         });
     }
 
+    /// The key this sim's provider joined its world under, when it did.
+    pub fn window_key(&self) -> Option<WindowKey> {
+        self.membership.map(|j| j.key)
+    }
+
+    /// [`Self::place`] for a zone living in another joined window's
+    /// registry - `rect` is in **that window's** client px.
+    ///
+    /// # Panics
+    /// Panics when this sim's provider joined no world, the window is
+    /// unknown, or the zone isn't registered there.
+    pub fn place_in(&self, dom: &VirtualDom, window: WindowKey, zone: ZoneId, rect: Rect) {
+        let world = self
+            .membership
+            .expect("place_in: this provider joined no DndWorld")
+            .world;
+        dom.in_runtime(|| {
+            let rec = world
+                .record(window)
+                .unwrap_or_else(|| panic!("place_in: no window {} joined", window.0));
+            let record = rec
+                .registry
+                .get(zone)
+                .unwrap_or_else(|| panic!("place_in: no zone {} in window {}", zone.0, window.0));
+            let mut slot = record.rect;
+            slot.set(Some(rect));
+        });
+    }
+
     /// Begin a pointer drag carrying `payload`, from no particular zone.
     pub fn pick_up(&mut self, dom: &VirtualDom, payload: T) {
         self.pick_up_from(dom, payload, None);
@@ -139,6 +174,7 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
     /// (arrives in `DropOutcome::from`).
     pub fn pick_up_from(&mut self, dom: &VirtualDom, payload: T, from: Option<ZoneId>) {
         let mut dnd = self.dnd;
+        let membership = self.membership;
         dom.in_runtime(|| {
             dnd.start(
                 payload,
@@ -148,6 +184,10 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                 DropEffect::Move,
                 DragMode::Pointer,
             );
+            // Like the gesture: a world drag anchors to this window.
+            if let Some(j) = membership {
+                j.world.begin_from(j.key);
+            }
         });
     }
 
@@ -157,9 +197,18 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
     pub fn move_to(&mut self, dom: &VirtualDom, point: Point) {
         let mut dnd = self.dnd;
         let registry = self.registry;
+        let membership = self.membership;
         dom.in_runtime(|| {
             dnd.update_pointer(point);
-            match registry.hit_test(point) {
+            // Same resolution order as the gesture: world hits (any
+            // window) are authoritative, unresolved points fall back to
+            // the local registry.
+            let hit = match membership.map(|j| j.zone_under(point)) {
+                Some(WorldHit::Zone(z)) => Some(z),
+                Some(WorldHit::Window) => None,
+                Some(WorldHit::Unresolved) | None => registry.hit_test(point),
+            };
+            match hit {
                 Some(z) => dnd.enter(z),
                 None => {
                     if let Some(over) = dnd.over() {
@@ -184,8 +233,32 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
         let mut dnd = self.dnd;
         let registry = self.registry;
         let settle = self.settle;
+        let membership = self.membership;
         dom.in_runtime(|| {
             let point = dnd.pointer();
+            // A release the world resolves into a foreign window delivers
+            // there, mirroring the gesture (the snap runs in the target
+            // window's own CSS px). Headless rects are placed, so the
+            // gesture's pre-snap re-measure is skipped as documented.
+            if let Some(j) = membership {
+                if let Some((rec, local)) = j.foreign_window_under(point) {
+                    let target = rec.registry.hit_test(local).or_else(|| {
+                        dnd.payload()
+                            .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
+                    });
+                    let delivered = target
+                        .filter(|t| {
+                            deliver_drop(rec.registry, &mut dnd, Some(rec.settle), *t, local, effect)
+                        })
+                        .is_some();
+                    if !delivered {
+                        dnd.cancel();
+                        return None;
+                    }
+                    j.world.present_settle_in(rec.key);
+                    return target;
+                }
+            }
             let target = registry.hit_test(point).or_else(|| {
                 dnd.payload()
                     .and_then(|p| registry.hit_test_closest(point, &p, 48.0))

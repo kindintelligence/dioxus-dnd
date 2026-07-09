@@ -12,6 +12,7 @@ pub mod state;
 pub mod strings;
 pub mod types;
 pub mod viewport;
+pub mod world;
 
 pub use components::{
     BridgeDropZone, DndProvider, DragOverlay, Draggable, DropZone, ParentZone, SettleSlot,
@@ -34,4 +35,8 @@ pub use types::{
 };
 pub use viewport::{
     screen_delta_to_world, screen_to_world, world_delta_to_screen, world_to_screen, CanvasViewport,
+};
+pub use world::{
+    use_dnd_world, use_joined_window, DndWorld, JoinedWindow, WindowGeometry, WindowKey,
+    WindowRecord,
 };

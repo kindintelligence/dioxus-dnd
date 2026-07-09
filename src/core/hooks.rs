@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use super::registry::{RectRefresh, ZoneRecord, ZoneRegistry};
 use super::state::{DndContext, DragState};
 use super::types::{DragId, DropOutcome, Point, Rect, ZoneId};
+use super::world::{DndWorld, JoinedWindow, WindowGeometry, WorldMembership};
 
 /// Marker flag: a settle-enabled `DragOverlay<T>` is mounted somewhere in
 /// this provider's subtree, so `Draggable<T>` should route successful
@@ -29,14 +30,56 @@ impl<T> Clone for SettleFlag<T> {
 /// Provide a `DndContext<T>` (and its zone registry) to this component's
 /// subtree. Call once, high up (or use the
 /// [`crate::core::components::DndProvider`] component).
+///
+/// When a [`DndWorld<T>`] is in context (see
+/// [`crate::core::world::use_dnd_world`]), the provider **joins** it
+/// instead of creating isolated state: it re-provides the world's shared
+/// context and registers this window's zones for cross-window drags.
+/// Nested providers of the same `T` keep today's shadowing semantics -
+/// only the outermost provider in a window joins.
 pub fn use_dnd_provider<T: Clone + 'static>() -> DndContext<T> {
+    // Fallback state, created unconditionally (hooks must be stable) and
+    // simply unused when a world is joined.
     let state = use_store(DragState::<T>::default);
     let announcement = use_signal(String::new);
     let registry = use_context_provider(|| ZoneRegistry::<T>::from_signal(Signal::new(Vec::new())));
-    let ctx = use_context_provider(move || DndContext::from_parts(state, announcement));
-    use_context_provider(|| SettleFlag::<T> {
+    let settle_flag = use_context_provider(|| SettleFlag::<T> {
         armed: Signal::new(false),
         marker: std::marker::PhantomData,
+    });
+    // World membership is decided once, at mount: a provider that finds a
+    // world (and isn't nested under a provider of the same T) joins as one
+    // window. `provide_context` inside the hook is deliberate - every
+    // provider publishes a membership (even `None`), so nested providers
+    // shadow their ancestors' membership exactly like they shadow contexts.
+    let membership = use_hook(move || {
+        let joined = try_consume_context::<DndWorld<T>>()
+            .filter(|_| try_consume_context::<WorldMembership<T>>().is_none())
+            .map(|world| {
+                let geometry = try_consume_context::<WindowGeometry>().unwrap_or_default();
+                let key = world.join(
+                    geometry,
+                    registry,
+                    settle_flag,
+                    Callback::new(move |_| registry.refresh_rects()),
+                );
+                JoinedWindow {
+                    world,
+                    key,
+                    geometry,
+                }
+            });
+        provide_context(WorldMembership::<T>(joined));
+        joined
+    });
+    use_drop(move || {
+        if let Some(j) = membership {
+            j.world.leave(j.key);
+        }
+    });
+    let ctx = use_context_provider(move || match membership {
+        Some(j) => j.world.context(),
+        None => DndContext::from_parts(state, announcement),
     });
 
     // One rect-refresh channel per provider *tree*: the outermost provider

@@ -1,0 +1,23 @@
+# Standalone crate on purpose (note the empty [workspace]): dioxus-desktop
+# pulls wry/tao and the system webkit stack, which must not weigh down
+# `cargo test` / `cargo build` of the main crate. Run from this directory:
+#
+#     cargo run                # or: dx serve --platform desktop
+#
+# Linux needs the usual dioxus-desktop system libs:
+#     apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libxdo-dev
+
+[package]
+name = "desktop-multiwindow"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+dioxus = { version = "0.7", features = ["desktop"] }
+dioxus-dnd = { path = "../..", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+# The drag bridge's cursor poller; dioxus-desktop already runs on tokio.
+tokio = { version = "1", features = ["time"] }

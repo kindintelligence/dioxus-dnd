@@ -191,7 +191,10 @@ pub fn SortableGrid(
         }
         GestureEffect::None => {}
     };
-    let primary_pointer = move |evt: &PointerEvent| evt.is_primary();
+    let primary_pointer =
+        move |evt: &PointerEvent| crate::core::components::primary_press(evt);
+    // Consecutive empty-held moves seen mid-drag (lost-release debounce).
+    let mut empty_held_moves = use_signal(|| 0u8);
     // The grid itself doesn't animate, but its tiles commonly do (FlipItem
     // siblings can't share context with each other) - anchor the
     // reduced-motion stylesheet once for the whole subtree.
@@ -212,14 +215,23 @@ pub fn SortableGrid(
                 // it, so no `pointerup` reached us - finalize the drop instead
                 // of tracking a phantom drag that can never end. No-op with the
                 // `web` feature (capture delivers the real pointerup).
+                // Debounced: move events carry the display server's state
+                // mask, which some pipelines corrupt for isolated events
+                // (see core::components::RELEASE_RECOVERY_MOVES).
                 if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
-                    if let Some(from) = *drag_from.peek() {
-                        if let Some(n) = mounteds.peek().get(&from).cloned() {
-                            platform::release_pointer(&n, evt.pointer_id());
+                    let streak = empty_held_moves.peek().saturating_add(1);
+                    empty_held_moves.set(streak);
+                    if streak >= crate::core::components::RELEASE_RECOVERY_MOVES {
+                        if let Some(from) = *drag_from.peek() {
+                            if let Some(n) = mounteds.peek().get(&from).cloned() {
+                                platform::release_pointer(&n, evt.pointer_id());
+                            }
                         }
+                        feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() }, None);
+                        return;
                     }
-                    feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() }, None);
-                    return;
+                } else if *empty_held_moves.peek() != 0 {
+                    empty_held_moves.set(0);
                 }
                 feed(GestureEvent::Move { at, pointer_id: evt.pointer_id() }, None);
             },
