@@ -1116,7 +1116,8 @@ npm install && npm run test:web
       DnD in WebView2 (wry#1639), so create drop-target windows visible.
   - **macOS (WKWebView)**: expected to work on the same reasoning
     (AppKit routes the whole drag sequence to the mousedown view;
-    `cursor_position` supported); not yet hand-verified.
+    `cursor_position` supported); not yet hand-verified (call for
+    testers: [#20](https://github.com/kindintelligence/dioxus-dnd/issues/20)).
 - **Windows desktop file drops** have a history of platform quirks in
   wry-based webviews. Test on your target and consider a file input
   fallback. Note the tradeoff wry imposes on Windows: its drop handler
