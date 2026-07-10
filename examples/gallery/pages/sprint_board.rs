@@ -118,10 +118,8 @@ const SNIPPET: &str = r#"BoardColumn::<Task> {
 
 // --- 8. sprint board (kanban: insertion slots + a WIP limit that refuses) ----
 
-// High ids, far above the `use_zone_id` auto counter: `BoardSlot`s draw
-// auto ids (11, 12, ...) from the same process-wide sequence, and the zone
-// registry replaces by id, so a low explicit column id can collide with a
-// slot's auto id and silently knock it out of the registry.
+// Explicit column ids. `BoardSlot` auto ids start at 2^32, so explicit
+// ids anywhere in u32 range can never collide with them.
 const BACKLOG: ContainerId = ZoneId(9101);
 const DOING: ContainerId = ZoneId(9102);
 const SHIPPED: ContainerId = ZoneId(9103);

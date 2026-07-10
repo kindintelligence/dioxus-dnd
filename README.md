@@ -76,6 +76,9 @@ walkthroughs and API references, and it is built with this crate.
   styling wiring you need.
 - **Accessible by default.** Space picks up, arrows navigate zones
   spatially, Escape cancels, and `LiveRegion` voices it to screen readers.
+- **Unit-testable in CI.** `DragSim` drives whole drag interactions inside
+  a `VirtualDom`, no browser, and drops run the production delivery path.
+  See [Testing](#testing).
 
 ## Install
 
@@ -87,6 +90,10 @@ cargo add dioxus-dnd
 |---|---|---|
 | 2.1 - 2.4 | **0.7** (verified against `0.7.9`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
+
+The inversion is deliberate: 2.0 was an early spike against the Dioxus
+0.8 alpha, the 2.1+ line tracks stable 0.7, and an 0.8 line will follow
+when 0.8 stabilizes.
 
 The crate depends on `dioxus` with `default-features = false, features =
 ["minimal"]`, so it adds no renderer and no extra dependencies of its own.
@@ -619,9 +626,9 @@ BoardColumn::<Task> {
 
 A column's `accepts` inherits to every slot inside it through context, so
 a WIP limit is one closure: the full column refuses on pointer, touch and
-keyboard alike. Give columns explicit ids well above the auto-id range
-(`ZoneId(9101)` style), because slots draw auto ids from the same
-process-wide sequence. The gallery's
+keyboard alike. Explicit column ids never collide with slot auto ids:
+auto ids start at 2^32, so any explicit id in u32 range is safe. The
+gallery's
 [*Sprint board*](https://kindintelligence.github.io/dioxus-dnd/sprint-board)
 page runs the pattern with a live WIP limit.
 
@@ -781,6 +788,25 @@ feature** (`dioxus_dnd::desktop`):
 The feature pulls dioxus-desktop (wry/tao), so it is off by default and
 the core stays dependency-free.
 
+### Payloads that own reactivity
+
+The showcase GIF puts a live `Signal` handle inside the payload. That is
+safe only when the signal's storage outlives every window that can
+render it. A signal created inside a window's component scope dies with
+that window; a surviving window still holding the payload then reads a
+dead signal.
+
+The cure is model-owned storage: a root `Owner<UnsyncStorage>` held in
+an `Rc` that every window keeps alive, with every payload signal created
+under it via `dioxus::core::with_owner`.
+[`examples/desktop-showcase/src/model.rs`](examples/desktop-showcase/src/model.rs)
+(`ModelOwner`) is the reference implementation. The board example's card
+model follows the same pattern and earns the same close-order guarantee
+as the world itself: every window retains an `Rc<ModelOwner>` whose
+signal storage belongs to the app rather than the board `VirtualDom`.
+Closing the board and one tray leaves another tray fully live, while
+each closed tray's separately owned card signal is reclaimed promptly.
+
 ### The invariants
 
 A few invariants hold the world together:
@@ -810,12 +836,6 @@ clears the hover if it was only being hovered), and where geometry is
 unavailable - Wayland forbids it by design - everything gracefully
 degrades to normal per-window drags. Headless tests drive all of it: the
 world-aware `DragSim` simulates whole cross-window arcs in CI.
-
-The example's card model has the same close-order guarantee for a
-different reason: every window retains an `Rc<ModelOwner>` whose signal
-storage belongs to the app rather than the board `VirtualDom`. Closing
-the board and one tray therefore leaves another tray fully live, while
-each closed tray's separately owned card signal is reclaimed promptly.
 
 ## Nesting
 
