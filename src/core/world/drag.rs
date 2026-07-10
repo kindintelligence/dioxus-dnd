@@ -105,6 +105,7 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// Private host-adapter token for the current world drag. The generation
     /// is mandatory; the optional source session adds exactly-once completion
     /// ownership for built-in tracked sources.
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
     pub(crate) fn drag_generation(&self) -> Option<(u64, Option<DragSessionId>)> {
         let active = self.active.read();
         let active = active.as_ref()?;
@@ -114,6 +115,7 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// Non-subscribing generation read for imperative host event handlers.
     /// Async resources use [`Self::drag_generation`] so `begin_from` wakes a
     /// new run even when all other drag gates retain the same values.
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
     pub(crate) fn drag_generation_peek(&self) -> Option<(u64, Option<DragSessionId>)> {
         let active = self.active_drag()?;
         Some((active.generation, active.session))
@@ -122,6 +124,7 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// Whether both halves of a captured host token still name the active
     /// drag. For untracked custom sources, `None` is valid only alongside the
     /// matching mandatory world generation.
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
     pub(crate) fn is_drag_generation(
         &self,
         generation: u64,
