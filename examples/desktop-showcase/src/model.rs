@@ -100,6 +100,8 @@ pub struct Satellite {
 pub struct Model {
     pub dock: Signal<Vec<Widget>>,
     pub satellites: Signal<Vec<Satellite>>,
+    /// Bumped by the `D` key; every window snaps itself to the demo layout.
+    pub layout_epoch: Signal<u32>,
 }
 
 /// Owns the model independently of any one window runtime (the pattern the
@@ -143,6 +145,7 @@ impl ModelOwner {
             Model {
                 dock: Signal::new(dock),
                 satellites: Signal::new(Vec::new()),
+                layout_epoch: Signal::new(0),
             }
         });
         Rc::new(Self {
@@ -206,7 +209,16 @@ impl ModelOwner {
     /// the clone outlives whichever window minted it.
     pub fn clone_widget(&self, widget: &Widget) -> Widget {
         let snapshot = widget.state.peek().clone();
-        let state = dioxus::core::with_owner(self.root.clone(), || Signal::new(snapshot));
+        // Mint from the runtime's ROOT scope, not the drop handler's zone
+        // scope: dioxus records the creating scope for its dead-signal
+        // diagnostics, and a zone-scoped origin makes every later ticker
+        // write warn. Storage lifetime still belongs to the model root via
+        // `with_owner`, so the clone outlives every window regardless.
+        let root = self.root.clone();
+        let runtime = dioxus::core::Runtime::current();
+        let state = runtime.in_scope(ScopeId::ROOT, || {
+            dioxus::core::with_owner(root, || Signal::new(snapshot))
+        });
         Widget {
             id: self.mint_id(),
             kind: widget.kind,
