@@ -25,9 +25,13 @@
 //! documented no-op outside Windows, but apps with their own raw-input
 //! needs should know the bridge flips it.
 
+use dioxus::prelude::{use_hook, Modifiers};
 use dioxus_desktop::tao::event::{DeviceEvent, ElementState, Event};
 use dioxus_desktop::tao::event_loop::DeviceEventFilter;
+use dioxus_desktop::tao::keyboard::KeyCode;
 use dioxus_desktop::{use_wry_event_handler, window};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::{DndContext, JoinedWindow, Point};
@@ -48,6 +52,58 @@ fn filter_setup_action(was_claimed: bool) -> FilterSetupAction {
     } else {
         FilterSetupAction::Install
     }
+}
+
+// Live modifiers need the same raw layer as the pointer (probed on Win 11,
+// same recordings): tao never fires `ModifiersChanged` because the WebView2
+// child HWND owns keyboard focus, and the origin's streamed `<html>`-target
+// events carry the state but reach no component handler. The
+// `DeviceEventFilter::Never` registration below already includes keyboards,
+// so `DeviceEvent::Key` arrives here regardless of focus; each physical
+// modifier side is tracked so releasing one Ctrl while the other is held
+// cannot clear the state.
+const CONTROL_SIDES: u8 = 0b0000_0011;
+const ALT_SIDES: u8 = 0b0000_1100;
+const SHIFT_SIDES: u8 = 0b0011_0000;
+const SUPER_SIDES: u8 = 0b1100_0000;
+
+fn raw_modifier_bit(key: KeyCode) -> Option<u8> {
+    Some(match key {
+        KeyCode::ControlLeft => 1 << 0,
+        KeyCode::ControlRight => 1 << 1,
+        KeyCode::AltLeft => 1 << 2,
+        KeyCode::AltRight => 1 << 3,
+        KeyCode::ShiftLeft => 1 << 4,
+        KeyCode::ShiftRight => 1 << 5,
+        KeyCode::SuperLeft => 1 << 6,
+        KeyCode::SuperRight => 1 << 7,
+        _ => return None,
+    })
+}
+
+fn apply_raw_key(mask: u8, key: KeyCode, pressed: bool) -> u8 {
+    match raw_modifier_bit(key) {
+        Some(bit) if pressed => mask | bit,
+        Some(bit) => mask & !bit,
+        None => mask,
+    }
+}
+
+fn mask_modifiers(mask: u8) -> Modifiers {
+    let mut mods = Modifiers::empty();
+    if mask & CONTROL_SIDES != 0 {
+        mods.insert(Modifiers::CONTROL);
+    }
+    if mask & ALT_SIDES != 0 {
+        mods.insert(Modifiers::ALT);
+    }
+    if mask & SHIFT_SIDES != 0 {
+        mods.insert(Modifiers::SHIFT);
+    }
+    if mask & SUPER_SIDES != 0 {
+        mods.insert(Modifiers::META);
+    }
+    mods
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +144,7 @@ pub(crate) fn use_raw_input_leg<T: Clone + PartialEq + 'static>(
     joined: JoinedWindow<T>,
     ctx: DndContext<T>,
 ) {
+    let key_mask = use_hook(|| Rc::new(Cell::new(0u8)));
     use_wry_event_handler(move |event, target| {
         if !cfg!(target_os = "windows") {
             return;
@@ -98,6 +155,28 @@ pub(crate) fn use_raw_input_leg<T: Clone + PartialEq + 'static>(
             // The process-global first claim owns raw-input installation;
             // mounting or retiring any individual window cannot re-arm it.
             target.set_device_event_filter(DeviceEventFilter::Never);
+        }
+        if let Event::DeviceEvent {
+            event: DeviceEvent::Key(key),
+            ..
+        } = event
+        {
+            // Track modifier keys even while idle so a drag that starts with
+            // one already held sees it; every window's mask converges on the
+            // same stream, and only the origin's live drag feeds the world.
+            let mask = apply_raw_key(
+                key_mask.get(),
+                key.physical_key,
+                key.state == ElementState::Pressed,
+            );
+            key_mask.set(mask);
+            if bridged(&ctx)
+                && joined.world.origin_window() == Some(joined.key)
+                && current_bridged_generation(joined, &ctx).is_some()
+            {
+                joined.world.update_modifiers(mask_modifiers(mask));
+            }
+            return;
         }
         if !bridged(&ctx) || joined.world.origin_window() != Some(joined.key) {
             return;
@@ -167,6 +246,36 @@ mod tests {
             filter_setup_action(claimed),
             FilterSetupAction::AlreadyInstalled
         );
+    }
+
+    #[test]
+    fn raw_key_mask_tracks_paired_modifier_sides() {
+        let mut mask = 0;
+        mask = apply_raw_key(mask, KeyCode::ControlLeft, true);
+        assert_eq!(mask_modifiers(mask), Modifiers::CONTROL);
+        mask = apply_raw_key(mask, KeyCode::ControlRight, true);
+        mask = apply_raw_key(mask, KeyCode::ControlLeft, false);
+        assert_eq!(mask_modifiers(mask), Modifiers::CONTROL);
+        mask = apply_raw_key(mask, KeyCode::ControlRight, false);
+        assert_eq!(mask_modifiers(mask), Modifiers::empty());
+    }
+
+    #[test]
+    fn raw_key_mask_maps_each_modifier_and_ignores_other_keys() {
+        assert_eq!(
+            mask_modifiers(apply_raw_key(0, KeyCode::AltRight, true)),
+            Modifiers::ALT
+        );
+        assert_eq!(
+            mask_modifiers(apply_raw_key(0, KeyCode::ShiftLeft, true)),
+            Modifiers::SHIFT
+        );
+        assert_eq!(
+            mask_modifiers(apply_raw_key(0, KeyCode::SuperLeft, true)),
+            Modifiers::META
+        );
+        assert_eq!(apply_raw_key(0, KeyCode::KeyA, true), 0);
+        assert_eq!(apply_raw_key(0, KeyCode::ControlLeft, false), 0);
     }
 
     #[test]
