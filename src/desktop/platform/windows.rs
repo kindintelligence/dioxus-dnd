@@ -146,6 +146,7 @@ pub(crate) fn use_raw_input_leg<T: Clone + PartialEq + 'static>(
     ctx: DndContext<T>,
 ) {
     let key_mask = use_hook(|| Rc::new(Cell::new(0u8)));
+    let engaged = use_hook(|| Rc::new(Cell::new(None::<BridgeGeneration>)));
     use_wry_event_handler(move |event, target| {
         if !cfg!(target_os = "windows") {
             return;
@@ -171,7 +172,7 @@ pub(crate) fn use_raw_input_leg<T: Clone + PartialEq + 'static>(
                 key.state == ElementState::Pressed,
             );
             key_mask.set(mask);
-            if bridged(&ctx)
+            if bridged(joined, &ctx)
                 && joined.world.origin_window() == Some(joined.key)
                 && current_bridged_generation(joined, &ctx).is_some()
             {
@@ -179,7 +180,7 @@ pub(crate) fn use_raw_input_leg<T: Clone + PartialEq + 'static>(
             }
             return;
         }
-        if !bridged(&ctx) || joined.world.origin_window() != Some(joined.key) {
+        if !bridged(joined, &ctx) || joined.world.origin_window() != Some(joined.key) {
             return;
         }
         let Event::DeviceEvent { event, .. } = event else {
@@ -215,10 +216,17 @@ pub(crate) fn use_raw_input_leg<T: Clone + PartialEq + 'static>(
             kind,
             generation,
             live,
-            bridged(&ctx),
+            bridged(joined, &ctx),
             joined.world.origin_window() == Some(joined.key),
             !joined.geometry.contains_global(global),
         );
+        // Leg diagnostics, once per drag (motion arrives at event rate):
+        // after an upstream update, a bug report's engaged-leg trace tells
+        // us which platform assumption moved.
+        if action.is_some() && engaged.get() != Some(generation) {
+            engaged.set(Some(generation));
+            tracing::debug!(leg = "raw-input", ?generation, "bridge leg engaged");
+        }
         // The captured generation owns this raw observation. Completion or
         // replacement invalidates it immediately before any world mutation.
         match action {

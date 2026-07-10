@@ -48,6 +48,12 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// expects) and enters/leaves zones across every joined window. No-op
     /// when nothing is dragging or the origin window is unknown.
     pub fn track_global(&self, global: Point) {
+        // The kill switch gates the world entry point, not just the tao
+        // legs, so a custom host cannot keep cross-window drive alive on a
+        // world whose app disabled bridging (see `set_bridging`).
+        if !self.bridging_enabled() {
+            return;
+        }
         let mut ctx = self.ctx;
         if !ctx.dragging() || ctx.mode() != DragMode::Pointer {
             return;
@@ -87,6 +93,13 @@ impl<T: Clone + 'static> DndWorld<T> {
     where
         T: PartialEq,
     {
+        // Same kill-switch gate as `track_global`. An in-flight drag is not
+        // stranded: the origin webview still completes in-viewport releases
+        // itself, and out-of-viewport ones reconcile through the same
+        // held-button paths a Wayland session uses.
+        if !self.bridging_enabled() {
+            return None;
+        }
         let mut ctx = self.ctx;
         if !ctx.dragging() || ctx.mode() != DragMode::Pointer {
             return None;

@@ -188,9 +188,24 @@ fn use_x11_dead_space_release<T: Clone + PartialEq + 'static>(
                             // keyed to this composite generation. A modifier
                             // update retains ownership; drag N+1 cannot use it.
                             pressed_generation.set(Some(generation));
+                            // Leg diagnostics: after an upstream update, a bug
+                            // report's engaged-leg trace tells us which
+                            // platform assumption moved.
+                            tracing::debug!(
+                                leg = "x11-deadspace",
+                                event = "press-observed",
+                                ?generation,
+                                "bridge leg engaged"
+                            );
                         }
                     }
                     X11ReleaseAction::Release => {
+                        tracing::debug!(
+                            leg = "x11-deadspace",
+                            event = "release",
+                            ?generation,
+                            "bridge leg engaged"
+                        );
                         // Retire this run's proof before delivery invokes user
                         // code. A synchronously started N+1 can then install
                         // its own proof without this N callback erasing it.

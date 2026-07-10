@@ -767,6 +767,56 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
 }
 
 #[test]
+fn kill_switch_makes_host_drive_inert_and_reversible() {
+    let mut tw = two_windows(window_b);
+    let mut sim = tw.sim;
+
+    assert!(
+        tw.dom_a.in_runtime(|| tw.world.bridging_enabled()),
+        "worlds default to bridging on"
+    );
+    tw.dom_a.in_runtime(|| tw.world.set_bridging(false));
+
+    sim.pick_up(&tw.dom_a, "card".to_string());
+
+    // Host drive is inert at the world boundary, not merely unpolled: even
+    // a custom host calling `track_global` directly moves nothing.
+    tw.dom_a
+        .in_runtime(|| tw.world.track_global(Point::new(1200.0, 200.0)));
+    assert_eq!(sim.over(&tw.dom_a), None);
+    rerender_both(&mut tw);
+    assert!(!dioxus_ssr::render(&tw.dom_b).contains("data-over"));
+
+    // A host-reported release cannot deliver either; the drag survives for
+    // the origin webview's own event paths.
+    let dropped = tw
+        .dom_b
+        .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0)));
+    assert_eq!(dropped, None);
+    assert!(sim.dragging(&tw.dom_a));
+    DROPS.with_borrow(|d| assert!(d.is_empty()));
+
+    // Per-window drags stay fully alive - the modeled Wayland degradation,
+    // not a dead app: the origin's local gesture hovers and drops normally.
+    sim.move_to(&tw.dom_a, Point::new(100.0, 140.0));
+    assert_eq!(sim.over(&tw.dom_a), Some(ZONE_A1));
+    assert_eq!(sim.release(&tw.dom_a), Some(ZONE_A1));
+    DROPS.with_borrow(|d| assert_eq!(d.len(), 1));
+
+    // Re-enabling restores cross-window drive for the next gesture.
+    tw.dom_a.in_runtime(|| tw.world.set_bridging(true));
+    sim.pick_up(&tw.dom_a, "card-2".to_string());
+    tw.dom_a
+        .in_runtime(|| tw.world.track_global(Point::new(1200.0, 200.0)));
+    assert_eq!(sim.over(&tw.dom_a), Some(ZONE_B1));
+    let dropped = tw
+        .dom_b
+        .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0)));
+    assert_eq!(dropped, Some(ZONE_B1));
+    DROPS.with_borrow(|d| assert_eq!(d.len(), 2));
+}
+
+#[test]
 fn local_completion_is_idempotent_with_a_late_host_echo() {
     let tw = two_windows(window_b);
     let mut sim = tw.sim;

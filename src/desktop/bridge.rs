@@ -14,13 +14,20 @@ use super::platform;
 /// Does the current drag need host-side bridging from this window?
 /// Mouse and pen do (they go blind at the viewport edge without native
 /// capture); touch must be left to the browser's implicit capture - see
-/// the module docs on double-driving.
-fn bridge_needed(dragging: bool, pointer_kind: PointerKind) -> bool {
-    dragging && !pointer_kind.implicitly_captured()
+/// the module docs on double-driving. The world's kill switch
+/// ([`crate::core::DndWorld::set_bridging`]) vetoes everything: when an
+/// upstream update ships a bridge regression, every leg must stand down
+/// from this one gate rather than each growing its own check.
+fn bridge_needed(dragging: bool, pointer_kind: PointerKind, bridging_enabled: bool) -> bool {
+    dragging && bridging_enabled && !pointer_kind.implicitly_captured()
 }
 
-pub(super) fn bridged<T: Clone + 'static>(ctx: &DndContext<T>) -> bool {
-    bridge_needed(ctx.dragging(), ctx.pointer_kind())
+pub(super) fn bridged<T: Clone + 'static>(joined: JoinedWindow<T>, ctx: &DndContext<T>) -> bool {
+    bridge_needed(
+        ctx.dragging(),
+        ctx.pointer_kind(),
+        joined.world.bridging_enabled(),
+    )
 }
 
 /// A host observation's complete authority token. The world generation is
@@ -56,7 +63,7 @@ pub(super) fn current_bridged_generation<T: Clone + 'static>(
     joined: JoinedWindow<T>,
     ctx: &DndContext<T>,
 ) -> Option<BridgeGeneration> {
-    if !bridged(ctx) {
+    if !bridged(joined, ctx) {
         return None;
     }
     current_generation(joined)
@@ -147,10 +154,18 @@ mod tests {
 
     #[test]
     fn implicitly_captured_touch_never_bridges() {
-        assert!(bridge_needed(true, PointerKind::Mouse));
-        assert!(bridge_needed(true, PointerKind::Pen));
-        assert!(!bridge_needed(true, PointerKind::Touch));
-        assert!(!bridge_needed(false, PointerKind::Mouse));
+        assert!(bridge_needed(true, PointerKind::Mouse, true));
+        assert!(bridge_needed(true, PointerKind::Pen, true));
+        assert!(!bridge_needed(true, PointerKind::Touch, true));
+        assert!(!bridge_needed(false, PointerKind::Mouse, true));
+    }
+
+    #[test]
+    fn kill_switch_vetoes_every_bridgeable_pointer() {
+        assert!(!bridge_needed(true, PointerKind::Mouse, false));
+        assert!(!bridge_needed(true, PointerKind::Pen, false));
+        assert!(!bridge_needed(true, PointerKind::Touch, false));
+        assert!(!bridge_needed(false, PointerKind::Mouse, false));
     }
 
     #[test]

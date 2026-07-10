@@ -1067,6 +1067,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "unic-langid",
  "web-sys",
  "x11rb",

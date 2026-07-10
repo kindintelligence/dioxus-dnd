@@ -28,6 +28,18 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
+/// The world's initial bridging policy from `DIOXUS_DND_NO_BRIDGE`,
+/// read once at creation so end users can disable host-side bridging
+/// without a rebuild. Opt-out semantics: only an explicit non-`0`,
+/// non-empty value disables - an unset or neutered variable must never
+/// strand the flagship feature by accident.
+fn default_bridging(no_bridge: Option<&str>) -> bool {
+    match no_bridge {
+        None | Some("") | Some("0") => true,
+        Some(_) => false,
+    }
+}
+
 /// A drop-zone identity qualified by the joined window that owns it.
 ///
 /// Legacy single-window APIs continue to expose [`ZoneId`]; worlds use this
@@ -81,6 +93,10 @@ pub struct DndWorld<T: Clone + 'static> {
     /// The elected settle presenter and its freshness generation. Kept as
     /// one value so owner and generation can never disagree.
     pub(super) settle_claim: Signal<Option<SettleClaim>>,
+    /// Host-side bridging kill switch (see [`DndWorld::set_bridging`]).
+    /// Owned by the world, not the desktop adapter, so a custom host
+    /// cannot keep driving a world whose app disabled bridging.
+    bridging: Signal<bool>,
 }
 
 impl<T: Clone + 'static> Copy for DndWorld<T> {}
@@ -114,6 +130,9 @@ impl<T: Clone + 'static> DndWorld<T> {
                 global_pointer: Signal::new(None),
                 over_location: Signal::new(None),
                 settle_claim: Signal::new(None),
+                bridging: Signal::new(default_bridging(
+                    std::env::var("DIOXUS_DND_NO_BRIDGE").ok().as_deref(),
+                )),
             })
         });
         WORLD_OWNERS.with_borrow_mut(|owners| owners.push((owner, sync_owner)));
@@ -123,6 +142,33 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// The shared drag context every joined provider re-provides.
     pub fn context(&self) -> DndContext<T> {
         self.ctx
+    }
+
+    /// Enable or disable host-side bridging at runtime - the lever for the
+    /// day a webview or OS update ships a cross-window regression that a
+    /// rebuild cannot wait for. While disabled, every host-drive entry
+    /// point ([`Self::track_global`], [`Self::drop_at_global`]) is inert
+    /// and the `desktop` feature's bridge legs stand down, so drags
+    /// degrade to per-window - exactly the already-modeled Wayland
+    /// behavior. Local drags, geometry, settle and delivery are untouched.
+    /// [`Self::cancel_drag`] deliberately stays live: it is an escape
+    /// hatch, not a bridge leg.
+    ///
+    /// End users can flip the same switch without a rebuild by setting
+    /// `DIOXUS_DND_NO_BRIDGE=1` before launch (read once at world
+    /// creation; `0` or an empty value leaves bridging on).
+    pub fn set_bridging(&self, enabled: bool) {
+        let mut bridging = self.bridging;
+        if *bridging.peek() != enabled {
+            bridging.set(enabled);
+        }
+    }
+
+    /// Is host-side bridging currently enabled? (See [`Self::set_bridging`].)
+    pub fn bridging_enabled(&self) -> bool {
+        // try_peek: callable from destructors and foreign runtimes, like
+        // every other world read on the leg paths.
+        self.bridging.try_peek().map(|b| *b).unwrap_or(true)
     }
 
     /// Join a window. Called by `use_dnd_provider` when it finds a world in
@@ -293,5 +339,19 @@ impl<T: Clone + 'static> DndWorld<T> {
 impl<T: Clone + 'static> Default for DndWorld<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridging_defaults_on_unless_no_bridge_is_meaningfully_set() {
+        assert!(default_bridging(None));
+        assert!(default_bridging(Some("")));
+        assert!(default_bridging(Some("0")));
+        assert!(!default_bridging(Some("1")));
+        assert!(!default_bridging(Some("true")));
     }
 }

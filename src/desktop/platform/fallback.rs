@@ -40,7 +40,7 @@ pub(super) fn poller_owns_generation<T: Clone + 'static>(
     poller_run_current(
         expected,
         current_generation(joined),
-        bridged(ctx),
+        bridged(joined, ctx),
         joined.world.origin_window() == Some(joined.key),
         capability.peek().available(),
         joined.geometry.live(),
@@ -62,7 +62,7 @@ pub(crate) fn use_cursor_poller_leg<T: Clone + PartialEq + 'static>(
         // a run. The composite world/source generation is captured separately
         // as the run's authority token.
         let capability_available = capability().available();
-        let bridge_active = bridged(&ctx);
+        let bridge_active = bridged(joined, &ctx);
         let owns_origin = joined.world.origin_window() == Some(joined.key);
         let geometry_live = joined.geometry.live();
         let generation = subscribed_generation(joined);
@@ -83,6 +83,9 @@ pub(crate) fn use_cursor_poller_leg<T: Clone + PartialEq + 'static>(
             let Some(generation) = generation.filter(|_| should_poll) else {
                 return;
             };
+            // Leg diagnostics: after an upstream update, a bug report's
+            // engaged-leg trace tells us which platform assumption moved.
+            tracing::debug!(leg = "cursor-poller", ?generation, "bridge leg engaged");
 
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -154,6 +157,12 @@ pub(crate) fn use_release_leg<T: Clone + PartialEq + 'static>(
                 // The captured composite generation owns this release.
                 // Completion or replacement invalidates it before action.
                 if release_owns_generation(joined, &ctx, capability, generation, false) {
+                    tracing::debug!(
+                        leg = "release",
+                        event = "mouse-up",
+                        ?generation,
+                        "bridge leg engaged"
+                    );
                     joined.world.drop_at_global(Point::new(pos.x, pos.y));
                 }
             }
@@ -166,6 +175,12 @@ pub(crate) fn use_release_leg<T: Clone + PartialEq + 'static>(
                 let client = Point::new(position.x / scale, position.y / scale);
                 if let Some(global) = joined.geometry.to_global(client) {
                     if release_owns_generation(joined, &ctx, capability, generation, true) {
+                        tracing::debug!(
+                            leg = "release",
+                            event = "foreign-move",
+                            ?generation,
+                            "bridge leg engaged"
+                        );
                         joined.world.drop_at_global(global);
                     }
                 }
@@ -177,6 +192,12 @@ pub(crate) fn use_release_leg<T: Clone + PartialEq + 'static>(
                 // Geometry resampling for CursorEntered stays in `feed`; this
                 // is only the foreign-release fallback at the global cursor.
                 if release_owns_generation(joined, &ctx, capability, generation, true) {
+                    tracing::debug!(
+                        leg = "release",
+                        event = "foreign-enter",
+                        ?generation,
+                        "bridge leg engaged"
+                    );
                     joined.world.drop_at_global(Point::new(pos.x, pos.y));
                 }
             }

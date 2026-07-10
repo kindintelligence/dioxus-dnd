@@ -4,6 +4,21 @@
 
 ### Added
 
+- **Runtime bridging kill switch + per-leg diagnostics**:
+  `DndWorld::set_bridging(false)` (read back with `bridging_enabled()`)
+  stands down every host-side bridge leg AND the world's own
+  `track_global`/`drop_at_global` entry points - the lever for the day a
+  webview or OS update ships a cross-window regression that a rebuild
+  cannot wait for. Drags degrade to per-window, the already-modeled
+  Wayland behavior; local drags, settle and delivery are untouched, and
+  `cancel_drag` stays live as an escape hatch. End users can set
+  `DIOXUS_DND_NO_BRIDGE=1` before launch (read once at world creation)
+  to flip the same switch without a rebuild. With `tracing` at `debug`
+  (`desktop` feature), each leg now logs when it engages a drag
+  (`cursor-poller` / `release` / `x11-deadspace` / `raw-input`), so a
+  post-update bug report arrives pre-triaged; tracing was chosen over
+  surfacing legs in `DndDebugOverlay` because the overlay is core and
+  must not learn desktop leg names.
 - **Scheduled upstream canary CI**
   (`.github/workflows/upstream-canary.yml`): the multi-window design rides
   two cross-VirtualDom contracts that Dioxus does not document as public

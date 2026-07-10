@@ -61,6 +61,19 @@
 //! implicit capture; bridging it too double-drives the drag from
 //! Windows' touch-synthesized mouse (a cursor trailing the finger, plus
 //! synthesized button transitions that can end the drag early).
+//!
+//! # The kill switch
+//!
+//! Every leg also honors the world's runtime bridging switch
+//! ([`crate::core::DndWorld::set_bridging`]; end users can set
+//! `DIOXUS_DND_NO_BRIDGE=1` before launch, no rebuild). If a webview or
+//! OS update ever ships a regression in these mechanics, the app can
+//! degrade to per-window drags - the already-modeled Wayland behavior -
+//! instead of shipping broken cross-window gestures. With `tracing` at
+//! `debug`, each leg logs when it engages a drag (`cursor-poller` /
+//! `release` / `x11-deadspace` / `raw-input`), so a post-update bug
+//! report arrives pre-triaged to the leg whose platform assumption
+//! moved.
 
 mod bridge;
 mod feed;
