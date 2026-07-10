@@ -12,7 +12,8 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone, Rect, ZoneRecord,
+    use_dnd, use_joined_window, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone,
+    Rect, ZoneRecord,
 };
 
 /// Identifies a tree node.
@@ -120,6 +121,7 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     children: Element,
 ) -> Element {
     let dnd = use_dnd::<T>();
+    let joined = use_joined_window::<T>();
     let mut registry = use_zone_registry::<T>();
     let mut label_now = use_signal(|| label.clone());
     let mut accepts_now = use_signal(|| accepts);
@@ -191,9 +193,16 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     // Pointer drags derive a live band from the shared pointer position, so
     // fingers see the same before/into/after feedback as mice.
     let display_intent = move || -> Option<DropIntent> {
-        if dnd.dragging() && dnd.mode() == DragMode::Pointer && dnd.over() == Some(zone_id) {
+        let over = match joined {
+            Some(joined) => joined.is_over(zone_id),
+            None => dnd.over() == Some(zone_id),
+        };
+        if dnd.dragging() && dnd.mode() == DragMode::Pointer && over {
             let r = registry.cached_rect(zone_id)?;
-            return Some(intent_from_offset(dnd.pointer().y - r.y, row_height));
+            let pointer = joined
+                .and_then(|joined| joined.local_pointer())
+                .unwrap_or_else(|| dnd.pointer());
+            return Some(intent_from_offset(pointer.y - r.y, row_height));
         }
         None
     };

@@ -13,12 +13,12 @@ use crate::core::types::{
     effective_effect, Direction, DragMode, DragSessionId, DropEffect, DropOutcome, Point,
     PointerKind, Rect, TouchSense, ZoneId,
 };
-use crate::core::world::{WorldHit, WorldMembership};
+use crate::core::world::{use_joined_window, WorldHit};
 use crate::core::{
     platform, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion,
 };
 
-use super::delivery::{deliver_drop, DropCompletion, RELEASE_RECOVERY_MOVES};
+use super::delivery::{deliver_drop, DropCompletion, SettleRoute, RELEASE_RECOVERY_MOVES};
 use super::merge_style;
 use super::pointer::{pointer_client, primary_press, touch_style, HoldTimer};
 
@@ -119,7 +119,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     // Multi-window: when the provider joined a `DndWorld`, pointer moves
     // and releases resolve across every joined window. `None` (the normal
     // single-window case) leaves every path below exactly as it was.
-    let membership = try_use_context::<WorldMembership<T>>().and_then(|m| m.0);
+    let membership = use_joined_window::<T>();
     // Everything the keyboard path voices, localizable through context.
     let strings = use_dnd_strings();
     // Separate clones for the two closures that need the payload.
@@ -245,6 +245,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
         match membership {
             Some(j) => {
                 j.world.begin_from(j.key);
+                j.world.update_modifiers(*mods.peek());
                 j.world.refresh_all_rects();
             }
             None => registry.refresh_rects(),
@@ -259,7 +260,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             Some(joined) => deliver_drop(
                 registry,
                 &mut dnd,
-                settle_flag,
+                SettleRoute {
+                    flag: settle_flag,
+                    owner: Some((&joined.world, joined.key)),
+                },
                 DropCompletion::World {
                     world: &joined.world,
                     session: *session.peek(),
@@ -271,7 +275,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             None => deliver_drop(
                 registry,
                 &mut dnd,
-                settle_flag,
+                SettleRoute {
+                    flag: settle_flag,
+                    owner: None,
+                },
                 match *session.peek() {
                     Some(session) => DropCompletion::Local(session),
                     None => DropCompletion::None,
@@ -288,6 +295,13 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             return;
         };
         dnd.update_pointer(point);
+        if let Some(joined) = membership {
+            // Record an authoritative release point even when no final move
+            // preceded it. Receiver intent and settle anchoring consume the
+            // global projection updated by this lookup.
+            let _ = joined.zone_under(point);
+            joined.world.update_modifiers(*mods.peek());
+        }
         let effect = effective_effect(effect, *mods.peek());
         // A release the world resolves into a FOREIGN window delivers
         // there: that window's registry and settle flag, coordinates in
@@ -316,7 +330,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                             deliver_drop(
                                 rec.registry,
                                 &mut dnd,
-                                Some(rec.settle),
+                                SettleRoute {
+                                    flag: Some(rec.settle),
+                                    owner: Some((&j.world, rec.key)),
+                                },
                                 DropCompletion::World {
                                     world: &j.world,
                                     session: Some(id),
@@ -327,11 +344,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                             )
                         })
                         .unwrap_or(false);
-                    if dropped {
-                        // If the drop settled, the ghost glides in the
-                        // receiving window (a guarded no-op otherwise).
-                        j.world.present_settle_in(rec.key);
-                    } else {
+                    if !dropped {
                         finish_pointer_source(Some(j), &mut dnd, id, false);
                     }
                 });
@@ -398,6 +411,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     }
                 }
                 empty_held_moves.set(0);
+                mods.set(evt.modifiers());
                 // Suppress the press's default actions - the same line the
                 // sortable rows carry. The one that matters: `tabindex=0`
                 // makes this div mouse-focusable as a browser side effect,
@@ -454,6 +468,9 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             onpointermove: move |evt: PointerEvent| {
                 let at = pointer_client(&evt);
                 mods.set(evt.modifiers());
+                if let Some(joined) = membership {
+                    joined.world.update_modifiers(evt.modifiers());
+                }
                 // Lost-release recovery, debounced: only a RUN of empty-
                 // held moves is believed (see RELEASE_RECOVERY_MOVES).
                 let released = if matches!(*phase.peek(), GesturePhase::Dragging { .. })
@@ -483,18 +500,23 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                         // World-resolved hits are authoritative even when
                         // zoneless: a foreign window IN FRONT of one of our
                         // zones must not let the covered zone light up.
-                        let hit = match membership.map(|j| j.zone_under(at)) {
-                            Some(WorldHit::Zone(z)) => Some(z),
-                            Some(WorldHit::Window) => None,
-                            Some(WorldHit::Unresolved) | None => registry.hit_test(at),
-                        };
-                        match hit {
-                            Some(z) => dnd.enter(z),
-                            None => {
-                                if let Some(over) = dnd.over() {
-                                    dnd.leave(over);
+                        match membership {
+                            Some(joined) => match joined.zone_under(at) {
+                                WorldHit::Zone(location) => joined.enter(location),
+                                WorldHit::Window => joined.clear_hover(),
+                                WorldHit::Unresolved => match registry.hit_test(at) {
+                                    Some(zone) => joined.enter(joined.location(zone)),
+                                    None => joined.clear_hover(),
+                                },
+                            },
+                            None => match registry.hit_test(at) {
+                                Some(zone) => dnd.enter(zone),
+                                None => {
+                                    if let Some(over) = dnd.over() {
+                                        dnd.leave(over);
+                                    }
                                 }
-                            }
+                            },
                         }
                     }
                     GestureEffect::Drop { at: point } => finish_drop(point),
@@ -506,6 +528,9 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     platform::release_pointer(&n, evt.pointer_id());
                 }
                 mods.set(evt.modifiers());
+                if let Some(joined) = membership {
+                    joined.world.update_modifiers(evt.modifiers());
+                }
                 let GestureEffect::Drop { at: point } = step(
                     GestureEvent::Up { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                     threshold,
@@ -576,6 +601,9 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                         effect,
                         DragMode::Keyboard,
                     );
+                    if let Some(joined) = membership {
+                        joined.world.begin_from(joined.key);
+                    }
                     // Measure zones so arrow-key order can follow visual
                     // (top-to-bottom, left-to-right) layout.
                     registry.refresh_rects();
@@ -612,7 +640,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                             .or_else(|| registry.step_sibling(over, &p, -1)),
                     };
                     if let Some(next) = next {
-                        dnd.enter(next);
+                        match membership {
+                            Some(joined) => joined.enter(joined.location(next)),
+                            None => dnd.enter(next),
+                        }
                         let record = registry.get(next);
                         let name = record
                             .as_ref()
@@ -671,6 +702,9 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                             if let Some(h) = &on_drag_end {
                                 h.call(true);
                             }
+                            if let Some(joined) = membership {
+                                joined.world.finish_untracked(true);
+                            }
                         }
                     }
                     return;
@@ -679,6 +713,9 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 if matches!(key, Key::Escape) {
                     evt.prevent_default();
                     dnd.cancel();
+                    if let Some(joined) = membership {
+                        joined.world.finish_untracked(false);
+                    }
                     dnd.announce((strings.cancelled)());
                     if let Some(h) = &on_drag_end {
                         h.call(false);

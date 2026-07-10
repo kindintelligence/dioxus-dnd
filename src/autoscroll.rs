@@ -113,6 +113,13 @@ fn pointer_move_should_scroll(
     }
 }
 
+/// Select a host-driven pointer sample only when the caller explicitly
+/// confirms that its drag is active. An externally retained coordinate must
+/// never keep scrolling idle or settling content.
+fn external_pointer_sample(active: Option<bool>, drag_pointer: Option<Point>) -> Option<Point> {
+    (active == Some(true)).then_some(drag_pointer).flatten()
+}
+
 /// A scrollable container that scrolls itself while a drag hovers near its
 /// edges. Give it the `overflow` CSS yourself (via `style`/`class`) - and
 /// consider `overscroll-behavior: contain` alongside it, so a wheel or
@@ -135,6 +142,13 @@ pub fn AutoScroll(
     /// pointer contact heuristic.
     #[props(default)]
     active: Option<bool>,
+    /// Optional pointer supplied by a host that tracks movement outside this
+    /// element's DOM event stream, expressed in this window's client
+    /// coordinates. The sample is used only with `active: Some(true)`; pass
+    /// the matching drag's live active state so a retained coordinate cannot
+    /// scroll idle or settling content.
+    #[props(default)]
+    drag_pointer: Option<Point>,
     /// Fired with the container's scroll offset when a sample sees it
     /// changed - after the auto-scroll's own scrolling, a wheel/trackpad
     /// scroll, or pointer movement over the container - following the
@@ -219,6 +233,15 @@ pub fn AutoScroll(
         });
     };
 
+    // A host-driven receiver may be event-blind while another surface owns
+    // the pointer. React to its client-space feed through the same scroll
+    // path as DOM pointer movement, with the explicit active gate above.
+    use_effect(move || {
+        if let Some(point) = external_pointer_sample(active, drag_pointer) {
+            scroll_for(point);
+        }
+    });
+
     rsx! {
         div {
             onmounted: move |evt: Event<MountedData>| {
@@ -265,6 +288,35 @@ pub fn AutoScroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn external_pointer_app() -> Element {
+        rsx! {
+            AutoScroll {
+                active: true,
+                drag_pointer: Point::new(5.0, 5.0),
+                "receiver"
+            }
+        }
+    }
+
+    #[test]
+    fn external_pointer_feed_is_available_without_dom_pointer_events() {
+        let mut dom = VirtualDom::new(external_pointer_app);
+        dom.rebuild_in_place();
+        assert!(dioxus_ssr::render(&dom).contains("receiver"));
+    }
+
+    #[test]
+    fn external_pointer_requires_an_explicit_active_gate() {
+        let point = Point::new(5.0, 5.0);
+        assert_eq!(
+            external_pointer_sample(Some(true), Some(point)),
+            Some(point)
+        );
+        assert_eq!(external_pointer_sample(Some(false), Some(point)), None);
+        assert_eq!(external_pointer_sample(None, Some(point)), None);
+        assert_eq!(external_pointer_sample(Some(true), None), None);
+    }
 
     #[test]
     fn deltas_ramp_toward_edges() {

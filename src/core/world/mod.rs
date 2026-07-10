@@ -74,7 +74,7 @@ mod state;
 pub use geometry::{WindowGeometry, WindowKey};
 pub use joined::JoinedWindow;
 pub(crate) use joined::{WorldHit, WorldMembership};
-pub use state::{DndWorld, WindowRecord};
+pub use state::{DndWorld, WindowRecord, ZoneLocation};
 
 /// Create a `DndWorld<T>` (process-lived - see the module docs on
 /// lifetimes) and provide it in context, so providers in this window join

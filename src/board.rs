@@ -30,8 +30,8 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_zone_id, use_zone_registry, Draggable, DropOutcome, DropZone, ParentZone, ZoneId,
-    ZoneRecord,
+    use_dnd, use_joined_window, use_zone_id, use_zone_registry, Draggable, DropOutcome, DropZone,
+    ParentZone, ZoneId, ZoneRecord,
 };
 
 /// Columns are just zones.
@@ -180,6 +180,7 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     children: Element,
 ) -> Element {
     let dnd = use_dnd::<BoardPayload<T>>();
+    let joined = use_joined_window::<BoardPayload<T>>();
     let mut registry = use_zone_registry::<BoardPayload<T>>();
     let zone_id = use_zone_id();
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
@@ -241,11 +242,15 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
 
     // Does the in-flight payload pass the inherited column filter?
     let acceptable = move || dnd.payload().map(accepts).unwrap_or(false);
+    let is_over = move || match joined {
+        Some(joined) => joined.is_over(zone_id),
+        None => dnd.over() == Some(zone_id),
+    };
 
     rsx! {
         div {
             "data-active": if acceptable() { "true" },
-            "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
+            "data-over": if is_over() && acceptable() { "true" },
             onmounted: move |evt: Event<MountedData>| {
                 let mut registry = registry;
                 registry.set_mounted(registration, evt.data());

@@ -48,7 +48,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
-use crate::core::components::{deliver_drop, DropCompletion};
+use crate::core::components::{deliver_drop, DropCompletion, SettleRoute};
 use crate::core::hooks::SettleFlag;
 use crate::core::world::{JoinedWindow, WorldHit, WorldMembership};
 use crate::core::{
@@ -215,18 +215,23 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
             // Same resolution order as the gesture: world hits (any
             // window) are authoritative, unresolved points fall back to
             // the local registry.
-            let hit = match membership.map(|j| j.zone_under(point)) {
-                Some(WorldHit::Zone(z)) => Some(z),
-                Some(WorldHit::Window) => None,
-                Some(WorldHit::Unresolved) | None => registry.hit_test(point),
-            };
-            match hit {
-                Some(z) => dnd.enter(z),
-                None => {
-                    if let Some(over) = dnd.over() {
-                        dnd.leave(over);
+            match membership {
+                Some(joined) => match joined.zone_under(point) {
+                    WorldHit::Zone(location) => joined.enter(location),
+                    WorldHit::Window => joined.clear_hover(),
+                    WorldHit::Unresolved => match registry.hit_test(point) {
+                        Some(zone) => joined.enter(joined.location(zone)),
+                        None => joined.clear_hover(),
+                    },
+                },
+                None => match registry.hit_test(point) {
+                    Some(zone) => dnd.enter(zone),
+                    None => {
+                        if let Some(over) = dnd.over() {
+                            dnd.leave(over);
+                        }
                     }
-                }
+                },
             }
         });
     }
@@ -254,6 +259,7 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
             // window's own CSS px). Headless rects are placed, so the
             // gesture's pre-snap re-measure is skipped as documented.
             if let Some(j) = membership {
+                let _ = j.zone_under(point);
                 if let Some((rec, local)) = j.foreign_window_under(point) {
                     let target = rec.registry.hit_test(local).or_else(|| {
                         dnd.payload()
@@ -264,7 +270,10 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                             deliver_drop(
                                 rec.registry,
                                 &mut dnd,
-                                Some(rec.settle),
+                                SettleRoute {
+                                    flag: Some(rec.settle),
+                                    owner: Some((&j.world, rec.key)),
+                                },
                                 DropCompletion::World {
                                     world: &j.world,
                                     session,
@@ -284,7 +293,6 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                         }
                         return None;
                     }
-                    j.world.present_settle_in(rec.key);
                     return target;
                 }
             }
@@ -297,7 +305,10 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                     Some(j) => deliver_drop(
                         registry,
                         &mut dnd,
-                        settle,
+                        SettleRoute {
+                            flag: settle,
+                            owner: Some((&j.world, j.key)),
+                        },
                         DropCompletion::World {
                             world: &j.world,
                             session,
@@ -309,7 +320,10 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                     None => deliver_drop(
                         registry,
                         &mut dnd,
-                        settle,
+                        SettleRoute {
+                            flag: settle,
+                            owner: None,
+                        },
                         match session {
                             Some(session) => DropCompletion::Local(session),
                             None => DropCompletion::None,

@@ -31,10 +31,10 @@ struct Card {
     label: &'static str,
 }
 
-/// One open tray window: its own zone id and its own card list. Zone ids
-/// must be unique across the whole world - two windows registering the
-/// same id would mirror each other's hover highlight and route drops into
-/// one shared list (exactly what an early version of this example did).
+/// One open tray window: its own zone id and its own card list. The world
+/// qualifies zone identity by window, so duplicate explicit ids are safe for
+/// hover and delivery. This example still assigns unique ids because its
+/// shared model uses the bare `ZoneId` as the key for each tray's card list.
 #[derive(Clone, Copy, PartialEq)]
 struct Tray {
     n: u32,

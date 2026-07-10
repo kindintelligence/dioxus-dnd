@@ -9,7 +9,7 @@ use dioxus::prelude::*;
 use super::registry::{RectRefresh, ZoneRecord, ZoneRegistration, ZoneRegistry};
 use super::state::{DndContext, DragState};
 use super::types::{DragId, DropOutcome, Point, Rect, ZoneId};
-use super::world::{DndWorld, JoinedWindow, WindowGeometry, WorldMembership};
+use super::world::{use_joined_window, DndWorld, JoinedWindow, WindowGeometry, WorldMembership};
 
 /// Marker flag: a settle-enabled `DragOverlay<T>` is mounted somewhere in
 /// this provider's subtree, so `Draggable<T>` should route successful
@@ -17,7 +17,7 @@ use super::world::{DndWorld, JoinedWindow, WindowGeometry, WorldMembership};
 /// [`DndContext::take`]. Typed so nested providers of different payloads
 /// can't arm each other.
 pub(crate) struct SettleFlag<T> {
-    pub(crate) armed: Signal<bool>,
+    armed: Signal<Option<u64>>,
     marker: std::marker::PhantomData<T>,
 }
 
@@ -25,6 +25,35 @@ impl<T> Copy for SettleFlag<T> {}
 impl<T> Clone for SettleFlag<T> {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<T> SettleFlag<T> {
+    pub(crate) fn arm(self, capability: u64) {
+        let mut armed = self.armed;
+        if let Ok(mut value) = armed.try_write() {
+            if *value != Some(capability) {
+                *value = Some(capability);
+            }
+        };
+    }
+
+    pub(crate) fn is_armed(self) -> bool {
+        matches!(self.armed.try_peek().as_deref(), Ok(Some(_)))
+    }
+
+    /// Retire `capability` only if it still owns this provider's settle
+    /// capability. The return value snapshots that ownership for teardown.
+    pub(crate) fn release(self, capability: u64) -> bool {
+        let mut armed = self.armed;
+        let Ok(mut value) = armed.try_write() else {
+            return false;
+        };
+        if *value != Some(capability) {
+            return false;
+        }
+        *value = None;
+        true
     }
 }
 
@@ -45,7 +74,7 @@ pub fn use_dnd_provider<T: Clone + 'static>() -> DndContext<T> {
     let announcement = use_signal(String::new);
     let registry = use_context_provider(|| ZoneRegistry::<T>::from_signal(Signal::new(Vec::new())));
     let settle_flag = use_context_provider(|| SettleFlag::<T> {
-        armed: Signal::new(false),
+        armed: Signal::new(None),
         marker: std::marker::PhantomData,
     });
     // World membership is decided once, at mount: a provider that finds a
@@ -260,6 +289,7 @@ pub fn use_bridge_world<T: Clone + PartialEq + 'static>(
     geometry: BridgeGeometry,
 ) -> BridgeWorld {
     let dnd = use_dnd::<T>();
+    let joined = use_joined_window::<T>();
     let mut reg = use_zone_registry::<T>();
     let registration = use_hook(|| {
         reg.register(ZoneRecord {
@@ -284,7 +314,10 @@ pub fn use_bridge_world<T: Clone + PartialEq + 'static>(
     };
     BridgeWorld {
         active: dnd.dragging() && acceptable,
-        over: dnd.over() == Some(zone_id) && acceptable,
+        over: match joined {
+            Some(joined) => joined.is_over(zone_id),
+            None => dnd.over() == Some(zone_id),
+        } && acceptable,
     }
 }
 

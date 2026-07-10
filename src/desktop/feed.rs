@@ -8,7 +8,8 @@ use dioxus_desktop::{use_wry_event_handler, window};
 use crate::core::{Point, WindowGeometry};
 
 /// Provide a [`WindowGeometry`] for this window and keep it fed from tao
-/// events (position/size/scale on move/resize/focus). Call it ABOVE the
+/// events (position/size/scale and visibility eligibility on
+/// move/resize/focus). Call it ABOVE the
 /// `DndProvider`, which picks the geometry up from context when it joins
 /// the world. Returns the geometry handle (rarely needed directly).
 ///
@@ -18,6 +19,13 @@ pub fn use_window_geometry_feed() -> WindowGeometry {
     let geometry = use_context_provider(WindowGeometry::new);
     let desktop = window();
     let sample = use_callback(move |_: ()| {
+        let eligible = desktop.is_visible() && !desktop.is_minimized();
+        geometry.set_eligible(eligible);
+        if !eligible {
+            // Minimized/hidden windows retain their last placement for a
+            // later restore, but cannot win global hit-testing meanwhile.
+            return;
+        }
         let scale = desktop.scale_factor();
         let size = desktop.inner_size();
         match desktop.inner_position() {
@@ -26,7 +34,10 @@ pub fn use_window_geometry_feed() -> WindowGeometry {
                 (size.width as f64, size.height as f64),
                 scale,
             ),
-            Err(_) => geometry.clear(),
+            Err(_) => {
+                geometry.set_eligible(false);
+                geometry.clear();
+            }
         }
     });
     use_hook(move || {
@@ -39,10 +50,16 @@ pub fn use_window_geometry_feed() -> WindowGeometry {
             match event {
                 WindowEvent::Moved(_)
                 | WindowEvent::Resized(_)
-                | WindowEvent::ScaleFactorChanged { .. } => sample.call(()),
+                | WindowEvent::ScaleFactorChanged { .. }
+                | WindowEvent::CursorEntered { .. } => sample.call(()),
                 WindowEvent::Focused(true) => {
                     geometry.mark_focused();
                     sample.call(());
+                }
+                WindowEvent::Focused(false) => sample.call(()),
+                WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                    geometry.set_eligible(false);
+                    geometry.clear();
                 }
                 _ => {}
             }

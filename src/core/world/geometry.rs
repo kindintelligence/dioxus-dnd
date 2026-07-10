@@ -47,8 +47,8 @@ pub(crate) fn window_contains(global: Point, origin: Point, size: (f64, f64)) ->
 /// One window's placement on the desktop, as reactive signals the host
 /// feeds. Copy handle; create one per window (the provider creates an inert
 /// one when none is in context) and keep it updated from your windowing
-/// layer. Inert (no origin/size) means "geometry unknown": the window still
-/// drags internally, it just can't take part in cross-window hit-testing.
+/// layer. Missing placement or host ineligibility makes it inert: the window
+/// still drags internally, but cannot take part in cross-window hit-testing.
 pub struct WindowGeometry {
     /// Client-area top-left in global physical px (`inner_position()`).
     origin: Signal<Option<Point>>,
@@ -60,6 +60,9 @@ pub struct WindowGeometry {
     /// when overlapping windows both contain a point (no z-order queries
     /// exist on desktop, so focus recency approximates it).
     focused: Signal<u64>,
+    /// Whether the host currently considers this window eligible for global
+    /// hit-testing (visible, restored, and otherwise interactive).
+    eligible: Signal<bool>,
 }
 
 impl Copy for WindowGeometry {}
@@ -88,6 +91,9 @@ impl WindowGeometry {
             size: Signal::new(None),
             scale: Signal::new(1.0),
             focused: Signal::new(0),
+            // Existing hosts only feed placement, so eligibility defaults on
+            // and remains an additive capability gate.
+            eligible: Signal::new(true),
         }
     }
 
@@ -133,6 +139,26 @@ impl WindowGeometry {
         }
     }
 
+    /// Include or exclude this window from global hit-testing without
+    /// discarding its last known placement.
+    pub fn set_eligible(&self, eligible: bool) {
+        let mut value = self.eligible;
+        if matches!(value.try_peek().as_deref(), Ok(current) if *current != eligible) {
+            if let Ok(mut writer) = value.try_write() {
+                *writer = eligible;
+            }
+        }
+    }
+
+    /// Whether the host currently allows this window to receive a global
+    /// drag. This is a subscribing, dead-safe read.
+    pub fn eligible(&self) -> bool {
+        self.eligible
+            .try_read()
+            .map(|value| *value)
+            .unwrap_or(false)
+    }
+
     /// Record that this window was just focused (see `focused`).
     pub fn mark_focused(&self) {
         let mut f = self.focused;
@@ -151,10 +177,19 @@ impl WindowGeometry {
     // DioxusLabs/dioxus#4466 failure class). Stale geometry is already a
     // modeled state (Wayland), so degrading is honest, not a mask.
 
-    /// Is the placement known?
+    /// Is the placement known and currently eligible for global hit-testing?
+    /// This is a subscribing, dead-safe read.
     pub fn live(&self) -> bool {
-        matches!(self.origin.try_peek().as_deref(), Ok(Some(_)))
-            && matches!(self.size.try_peek().as_deref(), Ok(Some(_)))
+        // Read every input independently so a currently inert geometry still
+        // subscribes to each capability that can make it live later.
+        let has_origin = matches!(self.origin.try_read().as_deref(), Ok(Some(_)));
+        let has_size = matches!(self.size.try_read().as_deref(), Ok(Some(_)));
+        let eligible = self
+            .eligible
+            .try_read()
+            .map(|value| *value)
+            .unwrap_or(false);
+        has_origin && has_size && eligible
     }
 
     fn origin_scale(&self) -> Option<(Point, f64)> {
@@ -177,9 +212,19 @@ impl WindowGeometry {
         Some(global_to_client(global, origin, scale))
     }
 
-    /// Does this window's client area contain `global` (physical px)?
-    /// Always false while the placement is unknown.
+    /// Does this eligible window's client area contain `global` (physical
+    /// px)? Always false while placement is unknown or eligibility is off.
     pub fn contains_global(&self, global: Point) -> bool {
+        // Imperative hit-testing must not subscribe its caller. Eligibility
+        // therefore peeks here even though the public status reads subscribe.
+        if !self
+            .eligible
+            .try_peek()
+            .map(|eligible| *eligible)
+            .unwrap_or(false)
+        {
+            return false;
+        }
         let origin = self.origin.try_peek().ok().and_then(|o| *o);
         let size = self.size.try_peek().ok().and_then(|s| *s);
         match (origin, size) {

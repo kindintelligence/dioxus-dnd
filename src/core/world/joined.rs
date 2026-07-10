@@ -1,10 +1,12 @@
 //! A provider's world membership and the joined-window handle: qualified
 //! zone resolution, foreign-window lookup, and overlay presentation.
 
+use dioxus::prelude::{ReadableExt, WritableExt};
+
 use crate::core::types::{Point, ZoneId};
 
 use super::geometry::{WindowGeometry, WindowKey};
-use super::state::{DndWorld, WindowRecord};
+use super::state::{DndWorld, WindowRecord, ZoneLocation};
 
 /// This provider tree's world membership: which world it joined and as
 /// which window. Every provider provides one (with `None` inside when it
@@ -44,7 +46,7 @@ impl<T: Clone + 'static> PartialEq for JoinedWindow<T> {
 /// window asking).
 pub(crate) enum WorldHit {
     /// Some window's zone is under the pointer.
-    Zone(ZoneId),
+    Zone(ZoneLocation),
     /// A window is under the pointer, but no zone in it.
     Window,
     /// The world can't resolve the point (no geometry, or outside every
@@ -59,13 +61,58 @@ impl<T: Clone + 'static> JoinedWindow<T> {
         let Some(global) = self.geometry.to_global(client) else {
             return WorldHit::Unresolved;
         };
+        let mut global_pointer = self.world.global_pointer;
+        if *global_pointer.peek() != Some(global) {
+            global_pointer.set(Some(global));
+        }
         let Some((rec, local)) = self.world.resolve_global(global) else {
             return WorldHit::Unresolved;
         };
         match rec.registry.hit_test(local) {
-            Some(zone) => WorldHit::Zone(zone),
+            Some(zone) => WorldHit::Zone(ZoneLocation {
+                window: rec.key,
+                zone,
+            }),
             None => WorldHit::Window,
         }
+    }
+
+    /// Qualify one of this window's local zone ids for world state.
+    pub fn location(&self, zone: ZoneId) -> ZoneLocation {
+        ZoneLocation {
+            window: self.key,
+            zone,
+        }
+    }
+
+    /// Mark a window-qualified zone as hovered. Custom world-aware sources
+    /// should use this rather than the legacy id-only context method.
+    pub fn enter(&self, location: ZoneLocation) {
+        self.world.enter_location(location);
+    }
+
+    /// Clear both qualified world hover and the legacy context hover.
+    pub fn clear_hover(&self) {
+        self.world.clear_hover();
+    }
+
+    /// Whether this exact window/zone pair owns the world hover.
+    pub fn is_over(&self, zone: ZoneId) -> bool {
+        self.world.over_location() == Some(self.location(zone))
+    }
+
+    /// Latest global pointer converted into this window's client CSS
+    /// coordinates. If geometry disappeared mid-gesture, the origin window
+    /// retains its established context-local fallback.
+    pub fn local_pointer(&self) -> Option<Point> {
+        if let Some(local) = self
+            .world
+            .global_pointer()
+            .and_then(|global| self.geometry.to_client(global))
+        {
+            return Some(local);
+        }
+        (self.world.origin_window() == Some(self.key)).then(|| self.world.ctx.pointer())
     }
 
     /// Resolve a point in this window's client px to a **foreign** window
@@ -94,23 +141,41 @@ impl<T: Clone + 'static> JoinedWindow<T> {
         settling: bool,
     ) -> Option<(Point, f64)> {
         let raw = pointer - grab;
-        let Some(origin) = self.world.active_record() else {
+        let Some(active) = self.world.active_drag() else {
             // The drag didn't register an origin window (custom source):
             // fall back to raw anchoring everywhere, as before worlds.
             return Some((raw, 1.0));
         };
-        let Some(global_anchor) = origin.geometry.to_global(raw) else {
+        let origin = self.world.record(active.origin);
+        let origin_scale = origin
+            .map(|record| record.geometry.scale())
+            .unwrap_or(active.origin_scale);
+        let global_anchor = origin
+            .and_then(|record| record.geometry.to_global(raw))
+            .or_else(|| {
+                self.world.global_pointer().map(|global| {
+                    Point::new(
+                        global.x - grab.x * origin_scale,
+                        global.y - grab.y * origin_scale,
+                    )
+                })
+            });
+        let Some(global_anchor) = global_anchor else {
             // Origin geometry unknown: only the origin window can place it.
-            return (self.key == origin.key).then_some((raw, 1.0));
+            return (self.key == active.origin).then_some((raw, 1.0));
         };
         let presenting = if settling {
-            self.world.settling_in().unwrap_or(origin.key)
+            self.world.settling_in()?
         } else {
-            let pointer_global = origin.geometry.to_global(pointer).unwrap_or(global_anchor);
+            let pointer_global = self
+                .world
+                .global_pointer()
+                .or_else(|| origin.and_then(|record| record.geometry.to_global(pointer)))
+                .unwrap_or(global_anchor);
             self.world
                 .window_under(pointer_global)
                 .map(|r| r.key)
-                .unwrap_or(origin.key)
+                .unwrap_or(active.origin)
         };
         if presenting != self.key {
             return None;
@@ -119,14 +184,14 @@ impl<T: Clone + 'static> JoinedWindow<T> {
             Some(local) => {
                 let own_scale = self.geometry.scale();
                 let ratio = if own_scale > 0.0 {
-                    origin.geometry.scale() / own_scale
+                    origin_scale / own_scale
                 } else {
                     1.0
                 };
                 Some((local, ratio))
             }
             // Presenting window without geometry can only be the origin.
-            None => (self.key == origin.key).then_some((raw, 1.0)),
+            None => (self.key == active.origin).then_some((raw, 1.0)),
         }
     }
 }

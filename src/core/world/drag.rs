@@ -6,12 +6,15 @@ use dioxus::prelude::*;
 use crate::core::types::{DragSessionId, Point};
 
 use super::geometry::WindowKey;
-use super::state::{DndWorld, WindowRecord};
+use super::state::{DndWorld, WindowRecord, ZoneLocation};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct ActiveDrag {
     pub(super) origin: WindowKey,
     pub(super) session: Option<DragSessionId>,
+    pub(super) origin_scale: f64,
+    pub(super) source_location: Option<ZoneLocation>,
+    pub(super) modifiers: Modifiers,
 }
 
 impl<T: Clone + 'static> DndWorld<T> {
@@ -19,6 +22,7 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// `Draggable` calls this at pickup; call it from custom drag sources
     /// so the world knows which window's client px `ctx.pointer()` is in.
     pub fn begin_from(&self, key: WindowKey) {
+        let origin = self.record(key);
         let active_drag = ActiveDrag {
             origin: key,
             // Receiver code may synchronously start an untracked drag while
@@ -28,14 +32,30 @@ impl<T: Clone + 'static> DndWorld<T> {
                 .ctx
                 .active_session()
                 .filter(|session| self.ctx.session_result(*session).is_none()),
+            origin_scale: origin.map_or(1.0, |record| record.geometry.scale()),
+            source_location: self
+                .ctx
+                .source()
+                .map(|zone| ZoneLocation { window: key, zone }),
+            modifiers: Modifiers::empty(),
         };
         let mut active = self.active;
         if *active.peek() != Some(active_drag) {
             active.set(Some(active_drag));
         }
-        let mut settling_in = self.settling_in;
-        if settling_in.peek().is_some() {
-            settling_in.set(None);
+        let mut settle_claim = self.settle_claim;
+        if settle_claim.peek().is_some() {
+            settle_claim.set(None);
+        }
+        let mut global_pointer = self.global_pointer;
+        let initial_global =
+            origin.and_then(|record| record.geometry.to_global(self.ctx.pointer()));
+        if *global_pointer.peek() != initial_global {
+            global_pointer.set(initial_global);
+        }
+        let mut over_location = self.over_location;
+        if over_location.peek().is_some() {
+            over_location.set(None);
         }
     }
 
@@ -45,12 +65,27 @@ impl<T: Clone + 'static> DndWorld<T> {
         self.record(origin)
     }
 
-    /// The in-flight pointer in global physical px: the origin window's
-    /// conversion of `ctx.pointer()`. `None` when no drag is active or the
-    /// origin window's geometry is unknown.
+    pub(super) fn active_drag(&self) -> Option<ActiveDrag> {
+        *self.active.peek()
+    }
+
+    /// The in-flight pointer in global physical px. `None` until a world
+    /// pointer can be resolved or after the world drag finishes.
     pub fn global_pointer(&self) -> Option<Point> {
-        let origin = self.active_record()?;
-        origin.geometry.to_global(self.ctx.pointer())
+        *self.global_pointer.read()
+    }
+
+    /// Window-qualified source and hover locations for the active world
+    /// drag. The legacy `DndContext` id accessors remain unchanged.
+    pub fn source_location(&self) -> Option<ZoneLocation> {
+        self.active
+            .read()
+            .as_ref()
+            .and_then(|active| active.source_location)
+    }
+
+    pub fn over_location(&self) -> Option<ZoneLocation> {
+        *self.over_location.read()
     }
 
     /// Current tracked pointer-drag generation, if this world owns one.
@@ -134,14 +169,31 @@ impl<T: Clone + 'static> DndWorld<T> {
     pub(super) fn clear_world_state(&self) {
         let mut active = self.active;
         active.set(None);
-        let mut settling_in = self.settling_in;
-        settling_in.set(None);
+        let mut global_pointer = self.global_pointer;
+        global_pointer.set(None);
+        let mut over_location = self.over_location;
+        over_location.set(None);
+        let mut settle_claim = self.settle_claim;
+        settle_claim.set(None);
     }
 
-    fn clear_hover(&self) {
+    pub(super) fn enter_location(&self, location: ZoneLocation) {
+        let mut over_location = self.over_location;
+        if *over_location.peek() != Some(location) {
+            over_location.set(Some(location));
+        }
+        let mut ctx = self.ctx;
+        ctx.enter(location.zone);
+    }
+
+    pub(super) fn clear_hover(&self) {
         let mut ctx = self.ctx;
         if let Some(over) = ctx.over() {
             ctx.leave(over);
+        }
+        let mut over_location = self.over_location;
+        if over_location.peek().is_some() {
+            over_location.set(None);
         }
     }
 }

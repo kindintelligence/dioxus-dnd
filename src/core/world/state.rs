@@ -9,10 +9,11 @@ use dioxus::signals::{AnyStorage, Owner, SyncStorage, UnsyncStorage};
 use crate::core::hooks::SettleFlag;
 use crate::core::registry::ZoneRegistry;
 use crate::core::state::{DndContext, DragState};
-use crate::core::types::Point;
+use crate::core::types::{Point, ZoneId};
 
 use super::drag::ActiveDrag;
 use super::geometry::{WindowGeometry, WindowKey};
+use super::settle::SettleClaim;
 
 thread_local! {
     /// Owners of every world's state, held for the life of the process
@@ -25,6 +26,16 @@ thread_local! {
     /// store's subscription tree allocates in SYNC storage.
     static WORLD_OWNERS: RefCell<Vec<(Owner<UnsyncStorage>, Owner<SyncStorage>)>> =
         const { RefCell::new(Vec::new()) };
+}
+
+/// A drop-zone identity qualified by the joined window that owns it.
+///
+/// Legacy single-window APIs continue to expose [`ZoneId`]; worlds use this
+/// richer identity so separate windows may safely reuse the same explicit id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ZoneLocation {
+    pub window: WindowKey,
+    pub zone: ZoneId,
 }
 
 /// One window joined to a [`DndWorld`]: its geometry, its zone registry,
@@ -60,9 +71,16 @@ pub struct DndWorld<T: Clone + 'static> {
     /// The window the in-flight drag started in - the coordinate anchor:
     /// `ctx.pointer()` is always in *this* window's client px.
     pub(super) active: Signal<Option<ActiveDrag>>,
-    /// The window whose overlay presents the current settle glide (set on
-    /// cross-window drops; `None` means the origin window presents).
-    pub(super) settling_in: Signal<Option<WindowKey>>,
+    /// Exact host- or world-resolved pointer position in global physical px.
+    /// Kept separate from `active` so pointer ticks do not invalidate
+    /// session-metadata subscribers.
+    pub(super) global_pointer: Signal<Option<Point>>,
+    /// Window-qualified hover identity. The legacy id remains in
+    /// `DragState` for single-window and custom-source compatibility.
+    pub(super) over_location: Signal<Option<ZoneLocation>>,
+    /// The elected settle presenter and its freshness generation. Kept as
+    /// one value so owner and generation can never disagree.
+    pub(super) settle_claim: Signal<Option<SettleClaim>>,
 }
 
 impl<T: Clone + 'static> Copy for DndWorld<T> {}
@@ -93,7 +111,9 @@ impl<T: Clone + 'static> DndWorld<T> {
                 ),
                 windows: Signal::new(Vec::new()),
                 active: Signal::new(None),
-                settling_in: Signal::new(None),
+                global_pointer: Signal::new(None),
+                over_location: Signal::new(None),
+                settle_claim: Signal::new(None),
             })
         });
         WORLD_OWNERS.with_borrow_mut(|owners| owners.push((owner, sync_owner)));
@@ -127,10 +147,11 @@ impl<T: Clone + 'static> DndWorld<T> {
     }
 
     /// Remove a window (its provider unmounted, usually because the window
-    /// closed). A drag that *originated* there aborts - its coordinate
-    /// anchor is gone; a drag merely *hovering* one of its zones just loses
-    /// the hover. Pruning matters: it keeps the world from ever calling
-    /// into a closed window's runtime.
+    /// closed). An active drag that originated there aborts because its
+    /// coordinate anchor is gone; a receiver-owned settle survives from its
+    /// snapshotted release point. A drag merely hovering one of the leaving
+    /// window's zones just loses the hover. Pruning keeps the world from ever
+    /// calling into a closed window's runtime.
     pub(crate) fn leave(&self, key: WindowKey) {
         // Worlds are process-lived, so this should be unreachable - but
         // leave runs inside a destructor, where a panic aborts the whole
@@ -143,18 +164,30 @@ impl<T: Clone + 'static> DndWorld<T> {
             let mut windows = self.windows;
             windows.write().retain(|w| w.key != key);
         }
-        // Clear a hover that now points into nowhere. Checked against the
-        // REMAINING windows, not the leaving one: scopes drop children
-        // first, so the leaving window's zones have usually unregistered
-        // themselves from its registry before the provider's leave runs.
-        if let Some(over) = ctx.over() {
-            let reachable = self
-                .windows
-                .peek()
-                .iter()
-                .any(|w| w.registry.contains(over));
-            if !reachable {
+        // Qualified hover tells us exactly which window disappeared, even
+        // when another survivor reuses the same explicit ZoneId. Retain the
+        // legacy reachability fallback for keyboard/custom paths that have
+        // not supplied world-qualified metadata.
+        let qualified_over = *self.over_location.peek();
+        if qualified_over.is_some_and(|over| over.window == key) {
+            if let Some(over) = ctx.over() {
                 ctx.leave(over);
+            }
+            let mut over_location = self.over_location;
+            over_location.set(None);
+        } else if qualified_over.is_none() {
+            // Checked against the REMAINING windows, not the leaving one:
+            // scopes drop children first, so the leaving window's zones have
+            // usually unregistered before its provider leaves.
+            if let Some(over) = ctx.over() {
+                let reachable = self
+                    .windows
+                    .peek()
+                    .iter()
+                    .any(|w| w.registry.contains(over));
+                if !reachable {
+                    ctx.leave(over);
+                }
             }
         }
         let active_drag = *self.active.peek();
@@ -172,14 +205,36 @@ impl<T: Clone + 'static> DndWorld<T> {
                     // window's drag without consuming that unrelated slot.
                     _ => ctx.cancel(),
                 }
+                self.clear_world_state();
+                return;
             }
-            let mut active = self.active;
-            active.set(None);
+            if ctx.settling().is_some() {
+                // A settle elected in another window no longer needs the
+                // origin runtime: the release point and origin scale were
+                // snapshotted into world state. Keep them until it lands.
+                match self.settle_presenter() {
+                    Some(presenter) if presenter != key => {}
+                    Some(_) => {
+                        self.finish_settle_from(key);
+                    }
+                    None => {
+                        // Compatibility for a custom source that entered the
+                        // context's public settle state without a world claim:
+                        // the origin is its only possible presenter.
+                        ctx.finish_settle();
+                        self.clear_world_state();
+                    }
+                }
+                return;
+            }
+            self.clear_world_state();
+            return;
         }
-        if *self.settling_in.peek() == Some(key) {
-            ctx.finish_settle();
-            let mut settling_in = self.settling_in;
-            settling_in.set(None);
+        if self.settle_presenter_is(key) {
+            // The elected overlay is gone, so no transition listener remains
+            // to finish the glide. Non-presenter closure is intentionally
+            // inert because this equality fails for every other window.
+            self.finish_settle_from(key);
         }
     }
 

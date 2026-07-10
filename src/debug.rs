@@ -23,7 +23,7 @@
 
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, use_zone_registry};
+use crate::core::{use_dnd, use_joined_window, use_zone_registry};
 
 /// Draws every registered zone of one payload world as a tinted outline
 /// (color derived from the zone id, so it's stable across renders), with
@@ -42,6 +42,7 @@ pub fn DndDebugOverlay<T: Clone + PartialEq + 'static>(
 ) -> Element {
     let _ = phantom;
     let dnd = use_dnd::<T>();
+    let joined = use_joined_window::<T>();
     let registry = use_zone_registry::<T>();
 
     // The core only measures rects at drag start; an inspector wants
@@ -76,7 +77,10 @@ pub fn DndDebugOverlay<T: Clone + PartialEq + 'static>(
                     // around the wheel.
                     let hue = (id.0.wrapping_mul(47)) % 360;
                     let accepts = payload.as_ref().map(|p| record.accepts_payload(p));
-                    let is_over = over == Some(id);
+                    let is_over = match joined {
+                        Some(joined) => joined.is_over(id),
+                        None => over == Some(id),
+                    };
                     let name = record.label.clone().unwrap_or_else(|| "zone".to_string());
                     rsx! {
                         if let Some(r) = rect {

@@ -4,11 +4,11 @@
 
 use dioxus::prelude::*;
 
-use crate::core::components::DropCompletion;
-use crate::core::types::{Point, ZoneId};
+use crate::core::components::{DropCompletion, SettleRoute};
+use crate::core::types::{effective_effect, DragMode, Point, ZoneId};
 
 use super::geometry::WindowKey;
-use super::state::DndWorld;
+use super::state::{DndWorld, ZoneLocation};
 
 /// Host-side drive: entry points for desktop glue that sees the pointer
 /// where webviews cannot. Webview pointer events stop at the viewport
@@ -16,7 +16,32 @@ use super::state::DndWorld;
 /// event-blind on all platforms), so cross-window pointer data must come
 /// from the windowing layer: poll the global cursor while a drag is in
 /// flight and feed it here.
-impl<T: Clone + PartialEq + 'static> DndWorld<T> {
+impl<T: Clone + 'static> DndWorld<T> {
+    /// Modifiers currently associated with host delivery. Returns an empty
+    /// set outside an active world drag.
+    pub fn modifiers(&self) -> Modifiers {
+        self.active
+            .read()
+            .as_ref()
+            .map_or_else(Modifiers::empty, |active| active.modifiers)
+    }
+
+    /// Update the live modifiers for the active world drag. Late host events
+    /// after completion are ignored once the context stops dragging.
+    pub fn update_modifiers(&self, modifiers: Modifiers) {
+        if !self.ctx.dragging() {
+            return;
+        }
+        let mut active = self.active;
+        let Some(mut current) = *active.peek() else {
+            return;
+        };
+        if current.modifiers != modifiers {
+            current.modifiers = modifiers;
+            active.set(Some(current));
+        }
+    }
+
     /// Track an in-flight pointer drag from a host-reported cursor
     /// position (global physical px): updates the shared pointer (in the
     /// origin window's client px, the coordinate anchor everything else
@@ -24,25 +49,28 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
     /// when nothing is dragging or the origin window is unknown.
     pub fn track_global(&self, global: Point) {
         let mut ctx = self.ctx;
-        if !ctx.dragging() {
+        if !ctx.dragging() || ctx.mode() != DragMode::Pointer {
             return;
         }
         let Some(origin) = self.active_record() else {
             return;
         };
+        let mut global_pointer = self.global_pointer;
+        if *global_pointer.peek() != Some(global) {
+            global_pointer.set(Some(global));
+        }
         if let Some(local) = origin.geometry.to_client(global) {
             ctx.update_pointer(local);
         }
-        let zone = self
-            .resolve_global(global)
-            .and_then(|(rec, local)| rec.registry.hit_test(local));
-        match zone {
-            Some(z) => ctx.enter(z),
-            None => {
-                if let Some(over) = ctx.over() {
-                    ctx.leave(over);
-                }
-            }
+        let location = self.resolve_global(global).and_then(|(rec, local)| {
+            rec.registry.hit_test(local).map(|zone| ZoneLocation {
+                window: rec.key,
+                zone,
+            })
+        });
+        match location {
+            Some(location) => self.enter_location(location),
+            None => self.clear_hover(),
         }
     }
 
@@ -55,11 +83,16 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
     /// the button is up. A no-op returning `None` when nothing is
     /// dragging, so double delivery (webview pointerup plus host echo)
     /// is harmless.
-    pub fn drop_at_global(&self, global: Point) -> Option<ZoneId> {
+    pub fn drop_at_global(&self, global: Point) -> Option<ZoneId>
+    where
+        T: PartialEq,
+    {
         let mut ctx = self.ctx;
-        if !ctx.dragging() {
+        if !ctx.dragging() || ctx.mode() != DragMode::Pointer {
             return None;
         }
+        // The release is authoritative even when no final tracking tick ran.
+        self.track_global(global);
         let session = self.drag_session();
         let Some((rec, local)) = self.resolve_global(global) else {
             match session {
@@ -74,12 +107,22 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
             ctx.payload()
                 .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
         });
-        let effect = ctx.effect();
+        // Imperative host delivery peeks the active snapshot rather than
+        // subscribing the bridge runtime to modifier updates.
+        let modifiers = self
+            .active
+            .peek()
+            .as_ref()
+            .map_or_else(Modifiers::empty, |active| active.modifiers);
+        let effect = effective_effect(ctx.effect(), modifiers);
         let delivered = target.filter(|t| {
             crate::core::components::deliver_drop(
                 rec.registry,
                 &mut ctx,
-                Some(rec.settle),
+                SettleRoute {
+                    flag: Some(rec.settle),
+                    owner: Some((self, rec.key)),
+                },
                 DropCompletion::World {
                     world: self,
                     session,
@@ -90,10 +133,7 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
             )
         });
         match delivered {
-            Some(zone) => {
-                self.present_settle_in(rec.key);
-                Some(zone)
-            }
+            Some(zone) => Some(zone),
             None => {
                 match session {
                     Some(session) => {

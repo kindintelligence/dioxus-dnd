@@ -12,6 +12,7 @@ use crate::core::hooks::{
 };
 use crate::core::registry::ZoneRecord;
 use crate::core::types::{edge_of, DragMode, DropOutcome, EdgeSet, Rect, ZoneId};
+use crate::core::world::use_joined_window;
 
 /// Context marker a `DropZone` provides so zones nested inside it can
 /// discover their parent - powering hierarchical keyboard traversal with no
@@ -63,6 +64,7 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     children: Element,
 ) -> Element {
     let dnd = use_dnd::<T>();
+    let joined = use_joined_window::<T>();
     let mut registry = use_zone_registry::<T>();
     let auto_id = use_zone_id();
     let zone_id = id.unwrap_or(auto_id);
@@ -109,23 +111,30 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
             None => false,
         }
     };
+    let is_over = move || match joined {
+        Some(joined) => joined.is_over(zone_id),
+        None => dnd.over() == Some(zone_id),
+    };
     // Live closest-edge readout while an acceptable pointer drag hovers.
     // Guards run cheapest-first, and the pointer signal is only read (so
     // this zone only re-renders per pointer move) once actually hovered
     // with the prop set.
     let live_edge = move || -> Option<&'static str> {
         let set = edge?;
-        if dnd.over() != Some(zone_id) || dnd.mode() != DragMode::Pointer || !acceptable() {
+        if !is_over() || dnd.mode() != DragMode::Pointer || !acceptable() {
             return None;
         }
         let r = registry.cached_rect(zone_id)?;
-        Some(edge_of(dnd.pointer(), r, set).as_str())
+        let pointer = joined
+            .and_then(|joined| joined.local_pointer())
+            .unwrap_or_else(|| dnd.pointer());
+        Some(edge_of(pointer, r, set).as_str())
     };
 
     rsx! {
         div {
             "data-active": if dnd.dragging() && acceptable() { "true" },
-            "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
+            "data-over": if is_over() && acceptable() { "true" },
             "data-edge": live_edge(),
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();

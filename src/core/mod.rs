@@ -39,5 +39,5 @@ pub use viewport::{
 };
 pub use world::{
     use_dnd_world, use_joined_window, DndWorld, JoinedWindow, WindowGeometry, WindowKey,
-    WindowRecord,
+    WindowRecord, ZoneLocation,
 };

@@ -19,6 +19,7 @@ use std::cell::RefCell;
 
 use dioxus::dioxus_core::NoOpMutations;
 use dioxus::prelude::*;
+use dioxus_dnd::core::ZoneLocation;
 use dioxus_dnd::prelude::*;
 use dioxus_dnd::test::{drag_sim, rerender, DragSim, DragSimProbe};
 
@@ -30,10 +31,12 @@ thread_local! {
     /// (window tag, payload, to, client point) per delivered drop.
     static DROPS: RefCell<Vec<(&'static str, String, ZoneId, Point)>> =
         const { RefCell::new(Vec::new()) };
+    static EFFECTS: RefCell<Vec<DropEffect>> = const { RefCell::new(Vec::new()) };
 }
 
 fn log_drop(tag: &'static str, o: &DropOutcome<String>) {
     DROPS.with_borrow_mut(|d| d.push((tag, o.payload.clone(), o.to, o.client)));
+    EFFECTS.with_borrow_mut(|effects| effects.push(o.effect));
 }
 
 fn window_a() -> Element {
@@ -49,6 +52,22 @@ fn window_a() -> Element {
                 "zone-a"
             }
             DragOverlay::<String> { "GHOST" }
+        }
+    }
+}
+
+fn window_a_settling() -> Element {
+    let world = use_dnd_world::<String>();
+    WORLD.with_borrow_mut(|slot| *slot = Some(world));
+    rsx! {
+        DndProvider::<String> {
+            DragSimProbe::<String> {}
+            DropZone::<String> {
+                id: ZONE_A1,
+                on_drop: move |o: DropOutcome<String>| log_drop("A", &o),
+                "zone-a"
+            }
+            DragOverlay::<String> { settle: true, "GHOST" }
         }
     }
 }
@@ -99,6 +118,54 @@ fn window_b_settling() -> Element {
     }
 }
 
+fn window_b_edge() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            DropZone::<String> {
+                id: ZONE_B1,
+                edge: EdgeSet::Vertical,
+                on_drop: move |o: DropOutcome<String>| log_drop("B", &o),
+                "zone-b"
+            }
+            DragOverlay::<String> { "GHOST" }
+        }
+    }
+}
+
+fn window_b_tree() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            TreeNodeTarget::<String> {
+                node: NodeId(1),
+                row_height: 100.0,
+                on_drop: move |_: TreeDropEvent<String>| {},
+                "tree-b"
+            }
+            DragOverlay::<String> { "GHOST" }
+        }
+    }
+}
+
+fn window_b_duplicate_id() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            DropZone::<String> {
+                id: ZONE_A1,
+                on_drop: move |o: DropOutcome<String>| log_drop("B", &o),
+                "zone-b-duplicate-id"
+            }
+        }
+    }
+}
+
+fn window_c_settling() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            DragOverlay::<String> { settle: true, "GHOST" }
+        }
+    }
+}
+
 fn window_b_observes_committed_source() -> Element {
     let world = use_context::<DndWorld<String>>();
     rsx! {
@@ -107,6 +174,10 @@ fn window_b_observes_committed_source() -> Element {
                 id: ZONE_B1,
                 on_drop: move |o: DropOutcome<String>| {
                     assert!(world.drag_session().is_some(), "source finalized before receiver");
+                    assert!(
+                        world.source_location().is_some(),
+                        "source window metadata cleared before receiver"
+                    );
                     // Simulate source cleanup during receiver user code. A
                     // committed success must remain true, not become a
                     // cancellation.
@@ -150,6 +221,11 @@ fn ReplacementDragZone() -> Element {
     }
 }
 
+fn geometry_status() -> Element {
+    let geometry = use_context::<WindowGeometry>();
+    rsx! { span { if geometry.live() { "live" } else { "inert" } } }
+}
+
 struct TwoWindows {
     dom_a: VirtualDom,
     dom_b: VirtualDom,
@@ -162,6 +238,7 @@ struct TwoWindows {
 /// Build both windows, feed the standard geometry, place both zones.
 fn two_windows(b_app: fn() -> Element) -> TwoWindows {
     DROPS.with_borrow_mut(|d| d.clear());
+    EFFECTS.with_borrow_mut(|effects| effects.clear());
     let mut dom_a = VirtualDom::new(window_a);
     dom_a.rebuild_in_place();
     let world = WORLD.with_borrow(|w| *w).expect("window A created a world");
@@ -329,6 +406,7 @@ fn overlapping_windows_resolve_to_the_most_recently_focused() {
 fn hovered_window_closing_clears_hover_and_the_drag_survives() {
     let tw = two_windows(window_b);
     let mut sim = tw.sim;
+    let closed_geometry = tw.world.record(tw.key_b).unwrap().geometry;
 
     sim.pick_up(&tw.dom_a, "card".to_string());
     sim.move_to(&tw.dom_a, Point::new(1200.0, 200.0));
@@ -344,6 +422,12 @@ fn hovered_window_closing_clears_hover_and_the_drag_survives() {
         "hover into the dead window cleared"
     );
     assert!(sim.dragging(&tw.dom_a), "the drag itself survives");
+    assert!(!closed_geometry.live(), "dead geometry degrades to inert");
+    assert!(
+        !closed_geometry.eligible(),
+        "dead eligibility degrades to false"
+    );
+    closed_geometry.set_eligible(false);
 
     // And the drag can still land at home.
     sim.move_to(&tw.dom_a, Point::new(100.0, 140.0));
@@ -425,6 +509,7 @@ fn cross_window_settle_presents_in_the_receiving_window() {
     let ctx = tw.world.context();
     assert!(!tw.dom_a.in_runtime(|| ctx.dragging()));
     assert!(tw.dom_a.in_runtime(|| ctx.settling().is_some()));
+    assert_eq!(tw.world.settling_in(), Some(tw.key_b));
     assert!(tw.dom_a.in_runtime(|| ctx.payload().is_some()));
     assert_eq!(sim.completions(&tw.dom_a), vec![true]);
 
@@ -436,11 +521,148 @@ fn cross_window_settle_presents_in_the_receiving_window() {
     // The glide completing resets everything (headless stand-in for the
     // overlay's transitionend).
     tw.dom_b.in_runtime(|| {
-        let mut ctx = ctx;
-        ctx.finish_settle();
+        assert!(!tw.world.finish_settle_from(tw.key_a));
+        assert!(tw.world.finish_settle_from(tw.key_b));
     });
     tw.dom_b.render_immediate(&mut NoOpMutations);
     assert!(tw.dom_a.in_runtime(|| ctx.payload().is_none()));
+    assert_eq!(tw.world.settling_in(), None);
+}
+
+#[test]
+fn only_the_elected_window_can_finish_a_world_settle() {
+    DROPS.with_borrow_mut(|drops| drops.clear());
+    let mut dom_a = VirtualDom::new(window_a_settling);
+    dom_a.rebuild_in_place();
+    let world = WORLD.with_borrow(|slot| *slot).unwrap();
+    let mut dom_b = VirtualDom::new(window_b_settling).with_root_context(world);
+    dom_b.rebuild_in_place();
+    let mut dom_c = VirtualDom::new(window_c_settling).with_root_context(world);
+    dom_c.rebuild_in_place();
+    let windows = world.windows();
+    assert_eq!(windows.len(), 3);
+    let (rec_a, rec_b, rec_c) = (windows[0], windows[1], windows[2]);
+    dom_a.in_runtime(|| {
+        rec_a
+            .geometry
+            .set(Point::new(0.0, 0.0), (800.0, 600.0), 1.0)
+    });
+    dom_b.in_runtime(|| {
+        rec_b
+            .geometry
+            .set(Point::new(1000.0, 0.0), (800.0, 600.0), 2.0)
+    });
+    dom_c.in_runtime(|| {
+        rec_c
+            .geometry
+            .set(Point::new(2000.0, 0.0), (400.0, 400.0), 1.0)
+    });
+    let mut sim = drag_sim::<String>();
+    sim.place(&dom_a, ZONE_A1, Rect::new(0.0, 100.0, 200.0, 80.0));
+    sim.place_in(
+        &dom_a,
+        rec_b.key,
+        ZONE_B1,
+        Rect::new(50.0, 50.0, 100.0, 100.0),
+    );
+    sim.pick_up(&dom_a, "card".to_string());
+    sim.move_to(&dom_a, Point::new(1200.0, 200.0));
+    assert_eq!(sim.release(&dom_a), Some(ZONE_B1));
+    assert_eq!(world.settling_in(), Some(rec_b.key));
+    assert!(!world.finish_settle_from(rec_a.key));
+    assert!(!world.finish_settle_from(rec_c.key));
+
+    // A non-presenter may render and close without resetting B's glide.
+    rerender(&mut dom_a);
+    rerender(&mut dom_c);
+    assert!(world.context().settling().is_some());
+    drop(dom_c);
+    assert!(world.context().settling().is_some());
+    assert_eq!(world.settling_in(), Some(rec_b.key));
+
+    // Closing the elected presenter leaves no transition listener, so its
+    // owner cleanup finishes the settle.
+    drop(dom_b);
+    assert!(world.context().settling().is_none());
+    assert!(world.context().payload().is_none());
+    assert_eq!(world.settling_in(), None);
+}
+
+#[test]
+fn receiver_settle_survives_origin_window_closing() {
+    let tw = two_windows(window_b_settling);
+    let mut sim = tw.sim;
+    sim.pick_up(&tw.dom_a, "card".to_string());
+    sim.move_to(&tw.dom_a, Point::new(1200.0, 200.0));
+    assert_eq!(sim.release(&tw.dom_a), Some(ZONE_B1));
+    assert_eq!(tw.world.settling_in(), Some(tw.key_b));
+
+    drop(tw.dom_a);
+    assert!(tw.world.context().settling().is_some());
+    let mut dom_b = tw.dom_b;
+    rerender(&mut dom_b);
+    let html = dioxus_ssr::render(&dom_b);
+    assert!(html.contains("GHOST"));
+    assert!(
+        html.contains("left: 100px; top: 100px"),
+        "receiver lost the origin-independent settle anchor: {html}"
+    );
+    assert!(tw.world.finish_settle_from(tw.key_b));
+    assert!(tw.world.context().payload().is_none());
+    assert_eq!(tw.world.origin_window(), None);
+}
+
+#[test]
+fn custom_world_settle_claim_and_finish_keep_metadata_coherent() {
+    let tw = two_windows(window_b);
+    let mut ctx = tw.world.context();
+    tw.dom_a.in_runtime(|| {
+        ctx.start(
+            "custom".to_string(),
+            Some(ZONE_A1),
+            Point::new(100.0, 140.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        tw.world.begin_from(tw.key_a);
+        tw.world.claim_settle(tw.key_b);
+        assert!(ctx
+            .take_settling(Rect::new(50.0, 50.0, 100.0, 100.0))
+            .is_some());
+    });
+    assert_eq!(tw.world.settling_in(), Some(tw.key_b));
+    assert!(!tw.world.finish_settle_from(tw.key_a));
+    assert!(tw.world.finish_settle_from(tw.key_b));
+    assert_eq!(tw.world.settling_in(), None);
+    assert_eq!(tw.world.origin_window(), None);
+    assert!(ctx.payload().is_none());
+}
+
+#[test]
+fn claimless_legacy_settle_cannot_outlive_its_origin_window() {
+    let tw = two_windows(window_b);
+    let mut ctx = tw.world.context();
+    tw.dom_a.in_runtime(|| {
+        ctx.start(
+            "legacy".to_string(),
+            Some(ZONE_A1),
+            Point::new(100.0, 140.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        tw.world.begin_from(tw.key_a);
+        assert!(ctx
+            .take_settling(Rect::new(50.0, 50.0, 100.0, 100.0))
+            .is_some());
+    });
+    assert_eq!(tw.world.settling_in(), None, "legacy settle has no claim");
+
+    drop(tw.dom_a);
+    assert!(ctx.settling().is_none());
+    assert!(ctx.payload().is_none());
+    assert_eq!(tw.world.origin_window(), None);
 }
 
 #[test]
@@ -540,6 +762,140 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
 }
 
 #[test]
+fn receiver_reads_the_host_pointer_in_its_own_coordinate_space() {
+    let mut tw = two_windows(window_b_edge);
+    let mut sim = tw.sim;
+    sim.pick_up(&tw.dom_a, "card".to_string());
+
+    // Global (1200, 102) is B-local (100, 51): one pixel below B's top
+    // edge. In origin-local coordinates y=102 would choose the bottom edge
+    // of B's (50..150) rect, so this distinguishes the coordinate spaces.
+    tw.dom_a
+        .in_runtime(|| tw.world.track_global(Point::new(1200.0, 102.0)));
+    let rec_b = tw.world.record(tw.key_b).unwrap();
+    let joined_b = JoinedWindow {
+        world: tw.world,
+        key: tw.key_b,
+        geometry: rec_b.geometry,
+    };
+    assert_eq!(
+        tw.dom_b.in_runtime(|| joined_b.local_pointer()),
+        Some(Point::new(100.0, 51.0))
+    );
+    rerender_both(&mut tw);
+    let html = dioxus_ssr::render(&tw.dom_b);
+    assert!(
+        html.contains("data-edge=\"top\""),
+        "receiver edge was wrong: {html}"
+    );
+}
+
+#[test]
+fn receiver_tree_intent_uses_the_receiver_local_pointer() {
+    DROPS.with_borrow_mut(|drops| drops.clear());
+    let mut dom_a = VirtualDom::new(window_a);
+    dom_a.rebuild_in_place();
+    let world = WORLD.with_borrow(|slot| *slot).unwrap();
+    let mut dom_b = VirtualDom::new(window_b_tree).with_root_context(world);
+    dom_b.rebuild_in_place();
+    let windows = world.windows();
+    let (rec_a, rec_b) = (windows[0], windows[1]);
+    dom_a.in_runtime(|| {
+        rec_a
+            .geometry
+            .set(Point::new(0.0, 0.0), (800.0, 600.0), 1.0)
+    });
+    dom_b.in_runtime(|| {
+        rec_b
+            .geometry
+            .set(Point::new(1000.0, 0.0), (800.0, 600.0), 2.0)
+    });
+    let tree_zone = dom_b.in_runtime(|| rec_b.registry.records()[0].id);
+    let mut sim = drag_sim::<String>();
+    sim.place_in(
+        &dom_a,
+        rec_b.key,
+        tree_zone,
+        Rect::new(50.0, 50.0, 100.0, 100.0),
+    );
+    sim.pick_up(&dom_a, "card".to_string());
+
+    // B-local y=51 is in the row's top quarter. The origin-local y=102
+    // would resolve to the middle band and incorrectly report `into`.
+    dom_a.in_runtime(|| world.track_global(Point::new(1200.0, 102.0)));
+    rerender(&mut dom_b);
+    let html = dioxus_ssr::render(&dom_b);
+    assert!(
+        html.contains("data-intent=\"before\""),
+        "receiver tree intent was wrong: {html}"
+    );
+}
+
+#[test]
+fn host_drop_applies_live_modifiers_and_resets_them_per_drag() {
+    let tw = two_windows(window_b);
+    let mut sim = tw.sim;
+    sim.pick_up(&tw.dom_a, "card".to_string());
+    tw.dom_a
+        .in_runtime(|| tw.world.update_modifiers(Modifiers::CONTROL));
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0))),
+        Some(ZONE_B1)
+    );
+
+    sim.pick_up(&tw.dom_a, "card-2".to_string());
+    tw.dom_a
+        .in_runtime(|| tw.world.update_modifiers(Modifiers::ALT));
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0))),
+        Some(ZONE_B1)
+    );
+
+    sim.pick_up(&tw.dom_a, "card-3".to_string());
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0))),
+        Some(ZONE_B1)
+    );
+    EFFECTS.with_borrow(|effects| {
+        assert_eq!(
+            effects.as_slice(),
+            &[DropEffect::Copy, DropEffect::Link, DropEffect::Move]
+        )
+    });
+}
+
+#[test]
+fn host_drive_cannot_hijack_a_keyboard_world_drag() {
+    let tw = two_windows(window_b);
+    let mut ctx = tw.world.context();
+    tw.dom_a.in_runtime(|| {
+        ctx.start(
+            "keyboard".to_string(),
+            Some(ZONE_A1),
+            Point::new(11.0, 12.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Keyboard,
+        );
+        tw.world.begin_from(tw.key_a);
+        tw.world.track_global(Point::new(1200.0, 200.0));
+        assert_eq!(tw.world.drop_at_global(Point::new(1200.0, 200.0)), None);
+    });
+    assert!(ctx.dragging());
+    assert_eq!(ctx.pointer(), Point::new(11.0, 12.0));
+    assert_eq!(ctx.over(), None);
+    assert_eq!(tw.world.origin_window(), Some(tw.key_a));
+
+    drop(tw.dom_a);
+    assert!(!ctx.dragging());
+    assert!(ctx.payload().is_none());
+    assert_eq!(tw.world.origin_window(), None);
+}
+
+#[test]
 fn source_success_is_committed_before_receiver_user_code() {
     let tw = two_windows(window_b_observes_committed_source);
     let mut sim = tw.sim;
@@ -571,6 +927,119 @@ fn receiver_started_drag_does_not_inherit_finalized_source_session() {
     assert_eq!(tw.world.origin_window(), Some(tw.key_b));
     assert_eq!(tw.world.drag_session(), None);
     tw.dom_b.in_runtime(|| tw.world.cancel_drag());
+}
+
+#[test]
+fn ineligible_window_is_excluded_without_losing_geometry() {
+    let tw = two_windows(window_b);
+    let rec_a = tw.world.record(tw.key_a).unwrap();
+    let rec_b = tw.world.record(tw.key_b).unwrap();
+    tw.dom_b.in_runtime(|| {
+        rec_b
+            .geometry
+            .set(Point::new(0.0, 0.0), (800.0, 600.0), 1.0);
+        rec_b.geometry.mark_focused();
+    });
+    let point = Point::new(100.0, 100.0);
+    assert_eq!(tw.world.window_under(point).map(|r| r.key), Some(tw.key_b));
+
+    tw.dom_b.in_runtime(|| rec_b.geometry.set_eligible(false));
+    assert!(!tw.dom_b.in_runtime(|| rec_b.geometry.live()));
+    assert_eq!(tw.world.window_under(point).map(|r| r.key), Some(tw.key_a));
+    assert_eq!(
+        rec_b.geometry.to_client(Point::new(100.0, 100.0)),
+        Some(Point::new(100.0, 100.0)),
+        "ineligibility must retain the last geometry"
+    );
+
+    tw.dom_b.in_runtime(|| rec_b.geometry.set_eligible(true));
+    assert!(tw.dom_b.in_runtime(|| rec_b.geometry.live()));
+    assert_eq!(tw.world.window_under(point).map(|r| r.key), Some(tw.key_b));
+    assert!(rec_a.geometry.contains_global(point));
+}
+
+#[test]
+fn live_geometry_status_reacts_when_capability_is_lost() {
+    let tw = two_windows(window_b);
+    let geometry = tw.world.record(tw.key_b).unwrap().geometry;
+    let mut status = VirtualDom::new(geometry_status).with_root_context(geometry);
+    status.rebuild_in_place();
+    assert!(dioxus_ssr::render(&status).contains("live"));
+
+    tw.dom_b.in_runtime(|| geometry.set_eligible(false));
+    status.render_immediate(&mut NoOpMutations);
+    assert!(dioxus_ssr::render(&status).contains("inert"));
+}
+
+#[test]
+fn duplicate_zone_ids_are_qualified_by_window() {
+    DROPS.with_borrow_mut(|drops| drops.clear());
+    let mut dom_a = VirtualDom::new(window_a);
+    dom_a.rebuild_in_place();
+    let world = WORLD.with_borrow(|slot| *slot).unwrap();
+    let mut dom_b = VirtualDom::new(window_b_duplicate_id).with_root_context(world);
+    dom_b.rebuild_in_place();
+    let windows = world.windows();
+    let (rec_a, rec_b) = (windows[0], windows[1]);
+    dom_a.in_runtime(|| {
+        rec_a
+            .geometry
+            .set(Point::new(0.0, 0.0), (800.0, 600.0), 1.0)
+    });
+    dom_b.in_runtime(|| {
+        rec_b
+            .geometry
+            .set(Point::new(1000.0, 0.0), (800.0, 600.0), 2.0)
+    });
+    let mut sim = drag_sim::<String>();
+    sim.place(&dom_a, ZONE_A1, Rect::new(0.0, 100.0, 200.0, 80.0));
+    sim.place_in(
+        &dom_a,
+        rec_b.key,
+        ZONE_A1,
+        Rect::new(50.0, 50.0, 100.0, 100.0),
+    );
+    sim.pick_up_from(&dom_a, "card".to_string(), Some(ZONE_A1));
+    sim.move_to(&dom_a, Point::new(100.0, 140.0));
+    assert_eq!(
+        world.source_location(),
+        Some(ZoneLocation {
+            window: rec_a.key,
+            zone: ZONE_A1,
+        })
+    );
+    assert_eq!(
+        world.over_location(),
+        Some(ZoneLocation {
+            window: rec_a.key,
+            zone: ZONE_A1,
+        })
+    );
+    rerender(&mut dom_a);
+    assert!(dioxus_ssr::render(&dom_a).contains("data-over"));
+
+    // Move to the same legacy id in B. `DndContext::over()` stays equal,
+    // so only the qualified location can transfer the highlight.
+    sim.move_to(&dom_a, Point::new(1200.0, 200.0));
+    assert_eq!(sim.over(&dom_a), Some(ZONE_A1));
+    assert_eq!(
+        world.over_location(),
+        Some(ZoneLocation {
+            window: rec_b.key,
+            zone: ZONE_A1,
+        })
+    );
+    rerender(&mut dom_a);
+    rerender(&mut dom_b);
+    assert!(!dioxus_ssr::render(&dom_a).contains("data-over"));
+    assert!(dioxus_ssr::render(&dom_b).contains("data-over"));
+
+    assert_eq!(sim.release(&dom_a), Some(ZONE_A1));
+    assert_eq!(sim.completions(&dom_a), vec![true]);
+    DROPS.with_borrow(|drops| {
+        assert_eq!(drops.len(), 1);
+        assert_eq!(drops[0].0, "B", "qualified registry must receive the drop");
+    });
 }
 
 #[test]

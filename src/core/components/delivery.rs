@@ -1,13 +1,11 @@
 //! THE drop path: payload delivery to a receiving zone, shared by the
 //! `Draggable` pointer gesture, host-side drops, and the test harness.
 
-use dioxus::prelude::*;
-
 use crate::core::hooks::SettleFlag;
 use crate::core::registry::ZoneRegistry;
 use crate::core::state::DndContext;
 use crate::core::types::{DragMode, DragSessionId, DropEffect, DropOutcome, Point, ZoneId};
-use crate::core::world::DndWorld;
+use crate::core::world::{DndWorld, WindowKey};
 
 /// How many CONSECUTIVE moves must report no held buttons before the
 /// lost-release recovery synthesizes a pointer-up. Move events carry the
@@ -78,6 +76,13 @@ impl<T: Clone + 'static> DropCompletion<'_, T> {
     }
 }
 
+/// Settle capability for one delivery. World deliveries carry the receiving
+/// window so it is elected before the shared context enters settling.
+pub(crate) struct SettleRoute<'a, T: Clone + 'static> {
+    pub(crate) flag: Option<SettleFlag<T>>,
+    pub(crate) owner: Option<(&'a DndWorld<T>, WindowKey)>,
+}
+
 /// Deliver the in-flight payload to `target`: acceptance check, settle
 /// routing, outcome construction, the zone's callback. THE drop path - the
 /// `Draggable` pointer gesture and [`crate::test::DragSim`] both end here,
@@ -85,7 +90,7 @@ impl<T: Clone + 'static> DropCompletion<'_, T> {
 pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     registry: ZoneRegistry<T>,
     dnd: &mut DndContext<T>,
-    settle_flag: Option<SettleFlag<T>>,
+    settle: SettleRoute<'_, T>,
     completion: DropCompletion<'_, T>,
     target: ZoneId,
     point: Point,
@@ -108,12 +113,17 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     // route the drop through the settling take so the payload stays
     // readable while it animates. Pointer drops only - a keyboard drag
     // renders no positioned ghost to glide.
-    let settle_to = match settle_flag {
-        Some(f) if mode == DragMode::Pointer && *f.armed.peek() => target_rect,
+    let settle_to = match settle.flag {
+        Some(f) if mode == DragMode::Pointer && f.is_armed() => target_rect,
         _ => None,
     };
     let taken = match settle_to {
-        Some(to) => dnd.take_settling(to),
+        Some(to) => {
+            if let Some((world, key)) = settle.owner {
+                world.claim_settle(key);
+            }
+            dnd.take_settling(to)
+        }
         None => dnd.take(),
     };
     if let Some((p, from)) = taken {
