@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Scheduled upstream canary CI**
+  (`.github/workflows/upstream-canary.yml`): the multi-window design rides
+  two cross-VirtualDom contracts that Dioxus does not document as public
+  API (`tests/multiwindow_seam.rs`), so a weekly workflow now runs the
+  full suite against the latest published Dioxus 0.7.x patch and the two
+  contract test files against Dioxus git main - upstream breakage
+  surfaces as a named red job instead of a user's bug report after
+  `cargo update`.
+
 - **Typed transport components** (`serde` feature):
   `TypedDragSource<T>` serializes its payload to JSON under
   `application/json` at drag start - always alongside a `text/plain`
