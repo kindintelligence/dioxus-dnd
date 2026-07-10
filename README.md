@@ -45,7 +45,7 @@ cargo add dioxus-dnd
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 2.1 – 2.4 | **0.7** (verified against `0.7.9`) | 1.85+ |
+| 2.1 - 2.4 | **0.7** (verified against `0.7.9`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
 
 The crate depends on `dioxus` with `default-features = false, features =
@@ -509,7 +509,8 @@ The file-manager convention works out of the box: holding **Ctrl/Cmd**
 during a drag forces a Copy effect, **Alt** forces Link, and the resolved
 value arrives in `DropOutcome::effect`, so your `on_drop` can branch on
 move-vs-copy. `effective_effect` is public if you need the same resolution
-in custom handlers.
+in custom handlers. Multi-window drags behave identically: a host-side
+drop in another window applies the modifiers held at release.
 
 For simple zone models, `apply_clone_or_move` applies that convention to a
 `HashMap<ZoneId, Vec<T>>`. Give it an identity function so moves can remove
@@ -650,6 +651,27 @@ for a working board-and-N-trays app, probe binary included):
 
 The feature pulls dioxus-desktop (wry/tao), so it is off by default and
 the core stays dependency-free.
+
+A few invariants hold the world together:
+
+- **Identity is window-qualified.** Two windows may reuse the same
+  explicit `ZoneId` without mirroring each other's hover highlight or
+  misrouting a drop. The world tracks `ZoneLocation { window, zone }`
+  internally; single-window code keeps using plain `ZoneId`, unchanged.
+- **Receivers think in their own coordinates.** Edge highlights, tree
+  drop intent and auto-scroll in the window under the cursor read the
+  shared pointer converted into that window's client space, never the
+  origin window's.
+- **Modifiers stay live across windows.** Ctrl/Cmd or Alt held at a
+  host-side release resolves to the same Copy/Link effect as a local
+  drop.
+- **Hidden windows don't catch drops.** A minimized or hidden window
+  keeps its last geometry for restore but cannot win hit-testing while
+  it is ineligible.
+- **The receiving window owns the drop-settle.** The glide presents in
+  the window that took the drop, survives the origin window closing
+  mid-animation, and only that window can finish it. (Custom delivery
+  code claims this with `DndWorld::claim_settle`.)
 
 Windows may close in **any order**: the world's state is process-lived, a
 window closing mid-drag aborts a drag that started there (and merely

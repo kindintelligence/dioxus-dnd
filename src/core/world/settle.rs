@@ -20,6 +20,12 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// Elect `key` to present the next world settle. Custom world delivery
     /// calls this before [`crate::core::DndContext::take_settling`]; built-in
     /// delivery claims automatically.
+    ///
+    /// The claim is required, not advisory: in a joined world, only the
+    /// elected window's overlay presents and finishes a settle. A custom
+    /// source that calls `take_settling` without claiming gets no glide
+    /// anywhere; that claimless settle is only cleaned up when its origin
+    /// window closes or the next drag begins.
     pub fn claim_settle(&self, key: WindowKey) {
         let mut claim = self.settle_claim;
         claim.set(Some(SettleClaim {
@@ -28,13 +34,22 @@ impl<T: Clone + 'static> DndWorld<T> {
         }));
     }
 
+    // Both token reads intersect the claim with the context's actual settle
+    // state (like `settling_in` does): custom code may cancel or reset the
+    // shared context mid-settle without world cleanup, and a lingering claim
+    // must not keep a `SettleSlot` hidden or an overlay in its settle state.
+
     pub(crate) fn settle_token(&self, key: WindowKey) -> Option<u64> {
+        self.ctx.settling()?;
         (*self.settle_claim.read())
             .filter(|claim| claim.presenter == key)
             .map(|claim| claim.generation)
     }
 
     pub(crate) fn peek_settle_token(&self, key: WindowKey) -> Option<u64> {
+        if !self.ctx.settling_peek() {
+            return None;
+        }
         (*self.settle_claim.peek())
             .filter(|claim| claim.presenter == key)
             .map(|claim| claim.generation)
@@ -133,6 +148,40 @@ mod tests {
             assert!(ctx.settling().is_some());
             assert!(world.finish_settle_generation(presenter, successor));
             assert!(ctx.payload().is_none());
+        });
+    }
+
+    #[test]
+    fn cancelled_context_settle_retires_the_claim_tokens() {
+        let mut dom = VirtualDom::new(test_app);
+        dom.rebuild_in_place();
+        let world = WORLD.with_borrow(|slot| slot.expect("test world"));
+        dom.in_runtime(|| {
+            let origin = WindowKey::auto();
+            let presenter = WindowKey::auto();
+            let mut ctx = world.context();
+            ctx.start(
+                "payload".to_string(),
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            world.begin_from(origin);
+            world.claim_settle(presenter);
+            assert!(ctx.take_settling(Rect::new(0.0, 0.0, 10.0, 10.0)).is_some());
+            assert!(world.settle_token(presenter).is_some());
+
+            // Custom code may reset the shared context mid-settle without
+            // world cleanup. The claim must stop presenting immediately, so
+            // a `SettleSlot` cannot stay hidden on a settle that no longer
+            // exists.
+            ctx.cancel();
+            assert_eq!(world.settle_token(presenter), None);
+            assert_eq!(world.peek_settle_token(presenter), None);
+            assert_eq!(world.settling_in(), None);
+            assert!(!world.finish_settle_from(presenter));
         });
     }
 }

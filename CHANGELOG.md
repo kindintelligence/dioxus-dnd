@@ -140,6 +140,42 @@
   the mechanism that notices a host-ended drag. `SortableList` and
   `SortableGrid` remain unaffected because they do not hand their gesture
   machines to the shared world.
+- **Multi-window world invariants: qualified identity, receiver-local
+  pointers, live modifiers, window eligibility, and receiver-owned
+  settles.** Five behaviors that used to lean on origin-window state now
+  live in `core::world` proper:
+  - Hover and source identity are window-qualified
+    (`ZoneLocation { window, zone }`, with `source_location()` /
+    `over_location()` on `DndWorld`): duplicate explicit `ZoneId`s in
+    different windows no longer mirror each other's highlight or misroute
+    delivery. Single-window `ZoneId` APIs are unchanged.
+  - Receivers read the shared pointer in their own client coordinates
+    (`JoinedWindow::local_pointer`), so `DropZone` edge readouts, tree
+    drop intent and `AutoScroll`'s new host-fed `drag_pointer` prop stop
+    reasoning in origin-window coordinates during cross-window hovers.
+  - Host-side drops apply the modifiers held at release
+    (`DndWorld::update_modifiers`, fed by `Draggable` from its DOM
+    events), so Ctrl/Alt resolve to the same Copy/Link effects as local
+    delivery, and each new drag starts from a clean modifier set.
+  - `WindowGeometry` gained an `eligible` gate (fed by
+    `use_window_geometry_feed` from visibility/minimize state): a hidden
+    or minimized window keeps its last placement for restore but cannot
+    win global hit-testing, and the live/inert status reads reactively.
+    All eligibility access keeps the dead-signal degradation above.
+  - Settles are owned. Delivery elects the receiving window with a
+    generation-stamped claim before the shared context enters settling;
+    only the elected presenter's overlay measures, retargets and
+    finishes the glide, a stale generation can never finish its
+    successor, non-presenter window closure is inert, and a
+    receiver-owned settle survives its origin window closing (the
+    release anchor and origin scale are snapshotted into world state).
+    Custom world delivery uses the new `DndWorld::claim_settle` /
+    `finish_settle_from`; the claim is required, not advisory - a
+    claimless `take_settling` in a world presents nowhere and is only
+    cleaned up at origin close or the next drag. Claim tokens are also
+    intersected with the context's actual settle state, so custom code
+    resetting the shared context mid-settle cannot leave a `SettleSlot`
+    hidden on a settle that no longer exists.
 - **`examples/regressions.rs` gained `required-features = ["serde"]`**
   in `Cargo.toml`, so a plain feature-less `cargo test` no longer fails
   compiling it. The fixture app uses the serde-gated typed transport
@@ -163,8 +199,11 @@
   window highlighting at each hop, drags across an intervening tray,
   close-with-cards, and closing the drag's ORIGIN window mid-drag
   (world aborts the drag, the app survives, the card comes home).
-  Lesson recorded in the example: zone ids must be unique across the
-  whole world.
+  The lesson recorded then ("zone ids must be unique across the whole
+  world") has since been superseded by window-qualified identity (see
+  the world-invariants entry above): duplicate explicit ids are now safe
+  for hover and delivery, and the example keeps unique ids only because
+  its shared model keys each tray's card list by bare `ZoneId`.
 - **Multi-window drags verified end to end on Windows (WebView2)**, and
   the example bridge grew the third leg that platform needs (no library
   change, no JavaScript). What the platform actually does, established

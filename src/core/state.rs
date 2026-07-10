@@ -231,6 +231,10 @@ impl<T: Clone + 'static> DndContext<T> {
     /// [`crate::core::components::DragOverlay`] can glide the ghost home.
     /// After this, `dragging()` is false and `over()` is cleared; call
     /// [`Self::finish_settle`] (the overlay does) to reset fully.
+    ///
+    /// Custom sources in a joined [`crate::core::world::DndWorld`] must call
+    /// [`crate::core::world::DndWorld::claim_settle`] first: world overlays
+    /// only present and finish a settle for the elected window.
     pub fn take_settling(&mut self, to: Rect) -> Option<(T, Option<ZoneId>)> {
         let mut s = self.state.write();
         let payload = s.payload.clone()?;
@@ -295,6 +299,12 @@ impl<T: Clone + 'static> DndContext<T> {
     /// [`Self::take_settling`]), if any.
     pub fn settling(&self) -> Option<Rect> {
         self.state.settle().cloned()
+    }
+
+    /// Non-subscribing version of [`Self::settling`] for imperative world
+    /// bookkeeping (destructors, event handlers) that must not subscribe.
+    pub(crate) fn settling_peek(&self) -> bool {
+        self.state.settle().peek().is_some()
     }
 
     /// Clone of the current payload, if dragging.
