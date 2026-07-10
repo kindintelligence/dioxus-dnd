@@ -47,6 +47,20 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// origin window's client px, the coordinate anchor everything else
     /// expects) and enters/leaves zones across every joined window. No-op
     /// when nothing is dragging or the origin window is unknown.
+    ///
+    /// Every host leg converges here, so overlapping legs are safe by
+    /// construction rather than by leg exclusivity:
+    /// - Two legs reporting the same tick are idempotent: every write below
+    ///   is guarded by an equality check, and re-entering the current zone
+    ///   is a no-op.
+    /// - Legs run on one event-loop thread, so ticks serialize; a staler
+    ///   position arriving after a fresher one moves the hover briefly and
+    ///   the next tick corrects it - visual, transient, never structural.
+    /// - A tick landing after a drop cannot resurrect the drag: the
+    ///   `dragging()` gate below is dead after completion, and each leg
+    ///   additionally re-validates its captured `BridgeGeneration`
+    ///   immediately before calling in, so drag N's sleeper cannot feed
+    ///   replacement drag N+1 even during the same event burst.
     pub fn track_global(&self, global: Point) {
         // The kill switch gates the world entry point, not just the tao
         // legs, so a custom host cannot keep cross-window drive alive on a

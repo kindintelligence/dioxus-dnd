@@ -117,16 +117,43 @@ fn use_legs<T: Clone + PartialEq + 'static>(joined: JoinedWindow<T>) {
 }
 
 /// Route platform-neutral Tao observations that remain useful regardless of
-/// which pointer leg is active. The handler contains no OS dispatch.
+/// which pointer leg is active. The handler contains no OS dispatch beyond
+/// the Windows model tripwire, which is a pure observation.
 fn use_shared_window_events<T: Clone + PartialEq + 'static>(
     joined: JoinedWindow<T>,
     ctx: DndContext<T>,
 ) {
+    // One tripwire warning per drag, keyed by the composite generation so a
+    // replacement drag re-arms it (see the CursorMoved/MouseInput arm).
+    let tripped = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(None::<BridgeGeneration>)));
     use_wry_event_handler(move |event, _| {
         let Event::WindowEvent { event, .. } = event else {
             return;
         };
         match event {
+            // Model tripwire: the Windows leg exists BECAUSE tao never
+            // delivers CursorMoved/MouseInput there (the WebView2 child HWND
+            // consumes them - see `platform::windows`). If a WebView2 or tao
+            // update changes that routing, these events and the raw-input leg
+            // would double-drive the drag. Warn once per drag and deliberately
+            // do NOT act on the event: the raw-input leg keeps sole ownership
+            // until the model is re-verified by a human.
+            WindowEvent::CursorMoved { .. } | WindowEvent::MouseInput { .. }
+                if cfg!(target_os = "windows") =>
+            {
+                let Some(generation) = current_bridged_generation(joined, &ctx) else {
+                    return;
+                };
+                if tripped.get() != Some(generation) {
+                    tripped.set(Some(generation));
+                    tracing::warn!(
+                        ?generation,
+                        "WebView2 event routing changed - tao window events arrived during a \
+                         raw-input-bridged drag; ignoring them. Cross-window drags may \
+                         double-drive on this platform; please report this warning upstream."
+                    );
+                }
+            }
             WindowEvent::ModifiersChanged(modifiers)
                 // The live current, non-captured generation owns modifier
                 // state; a late idle/touch/replaced event is inert.

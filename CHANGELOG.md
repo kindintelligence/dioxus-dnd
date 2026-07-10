@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Windows platform-model tripwire**: the raw-input bridge exists
+  because tao never delivers `CursorMoved`/`MouseInput` on
+  Windows/WebView2 (the child HWND consumes them). If a WebView2 or tao
+  update ever changes that routing, the bridge now emits one
+  `tracing::warn!` per drag naming the contradicted assumption - and
+  deliberately does not act on the events, so the raw-input leg keeps
+  sole ownership instead of double-driving the drag. The host
+  `track_global` docs now also record why overlapping legs are safe by
+  construction (same-tick idempotence, single-thread serialization, and
+  per-leg generation re-validation) rather than by leg exclusivity.
 - **Runtime bridging kill switch + per-leg diagnostics**:
   `DndWorld::set_bridging(false)` (read back with `bridging_enabled()`)
   stands down every host-side bridge leg AND the world's own
