@@ -256,6 +256,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     });
 
     let mut deliver_to = move |target: ZoneId, point: Point, effect: DropEffect| -> bool {
+        // Delivery may synchronously finish the source and run
+        // `source_completion`, which clears this signal. Snapshot the token so
+        // no `peek` guard remains borrowed across that callback boundary.
+        let active_session = *session.peek();
         match membership {
             Some(joined) => deliver_drop(
                 registry,
@@ -266,7 +270,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 },
                 DropCompletion::World {
                     world: &joined.world,
-                    session: *session.peek(),
+                    session: active_session,
                 },
                 target,
                 point,
@@ -279,7 +283,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     flag: settle_flag,
                     owner: None,
                 },
-                match *session.peek() {
+                match active_session {
                     Some(session) => DropCompletion::Local(session),
                     None => DropCompletion::None,
                 },

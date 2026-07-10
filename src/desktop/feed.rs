@@ -7,6 +7,8 @@ use dioxus_desktop::{use_wry_event_handler, window};
 
 use crate::core::{Point, WindowGeometry};
 
+use super::platform::{self, GlobalCapability};
+
 /// Provide a [`WindowGeometry`] for this window and keep it fed from tao
 /// events (position/size/scale and visibility eligibility on
 /// move/resize/focus). Call it ABOVE the
@@ -16,9 +18,21 @@ use crate::core::{Point, WindowGeometry};
 /// On Wayland, where a window cannot learn its own screen position, the
 /// feed leaves geometry cleared and this window drags per-window only.
 pub fn use_window_geometry_feed() -> WindowGeometry {
-    let geometry = use_context_provider(WindowGeometry::new);
+    let geometry = use_context_provider(|| {
+        let geometry = WindowGeometry::new();
+        // Linux must not expose plausible global placement before Tao's
+        // event-loop target identifies the backend actually in use.
+        geometry.set_eligible(false);
+        geometry
+    });
+    let capability = platform::use_global_capability();
     let desktop = window();
     let sample = use_callback(move |_: ()| {
+        if !capability.peek().available() {
+            geometry.set_eligible(false);
+            geometry.clear();
+            return;
+        }
         let eligible = desktop.is_visible() && !desktop.is_minimized();
         geometry.set_eligible(eligible);
         if !eligible {
@@ -35,14 +49,23 @@ pub fn use_window_geometry_feed() -> WindowGeometry {
                 scale,
             ),
             Err(_) => {
+                // A failed sample does not revise the backend decision. X11
+                // may recover on the next event; Wayland never reaches here.
                 geometry.set_eligible(false);
                 geometry.clear();
             }
         }
     });
-    use_hook(move || {
-        sample.call(());
-        geometry.mark_focused();
+    use_effect(move || match capability() {
+        GlobalCapability::Available => {
+            // The detected capability owns the first geometry publication.
+            geometry.mark_focused();
+            sample.call(());
+        }
+        GlobalCapability::Unknown | GlobalCapability::Unavailable => {
+            geometry.set_eligible(false);
+            geometry.clear();
+        }
     });
     // WindowEvents arrive pre-filtered to the registering window.
     use_wry_event_handler(move |event, _| {
@@ -53,7 +76,9 @@ pub fn use_window_geometry_feed() -> WindowGeometry {
                 | WindowEvent::ScaleFactorChanged { .. }
                 | WindowEvent::CursorEntered { .. } => sample.call(()),
                 WindowEvent::Focused(true) => {
-                    geometry.mark_focused();
+                    if capability.peek().available() {
+                        geometry.mark_focused();
+                    }
                     sample.call(());
                 }
                 WindowEvent::Focused(false) => sample.call(()),

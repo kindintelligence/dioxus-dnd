@@ -5,8 +5,9 @@
 //! cannot see. This module is the other half for dioxus-desktop: the two
 //! pieces every window of a multi-window app needs, promoted from the
 //! `desktop-multiwindow` example after the per-platform behavior was
-//! probed and hand-verified (Linux/X11 and Windows 11/WebView2; macOS is
-//! expected to work on the same APIs but not yet hand-verified).
+//! probed and hand-verified (Linux/X11, Linux/Wayland policy, and Windows
+//! 11/WebView2; macOS is expected to work on the same APIs but not yet
+//! hand-verified).
 //!
 //! ```rust,ignore
 //! use dioxus_dnd::desktop::{use_window_geometry_feed, DragBridge};
@@ -32,19 +33,22 @@
 //! - [`bridge`]: [`DragBridge`] gates which drags need host-side help
 //!   (mouse and pen do; touch must be left alone) and composes the
 //!   platform legs below.
-//! - `platform`: the legs themselves. `windows` carries the WebView2
-//!   raw-input path; `fallback` carries the portable tao path (cursor
-//!   polling plus foreign-window release detection) that X11 and macOS
-//!   ride today. Per-OS modules split out of `fallback` when their
-//!   behavior actually diverges (explicit Wayland capability detection,
-//!   a verified macOS strategy) - not before.
+//! - `platform`: sealed backend policy plus the legs themselves. `windows`
+//!   carries the WebView2 raw-input path; `fallback` keeps the portable Tao
+//!   mechanics (generation-bound cursor polling plus window-event release
+//!   detection) shared. `linux` owns the runtime X11/Wayland decision and
+//!   X11's held-button query for releases over desktop dead space; `macos`
+//!   explicitly owns the still-unverified decision to use only the portable
+//!   mechanics. This preserves one implementation of each shared leg without
+//!   hiding genuinely platform-specific mechanics or capability policy.
 //!
 //! # The per-platform truth table
 //!
 //! Webview pointer events stop at the viewport edge, and while a button
 //! is held every NON-origin window is fully event-blind (X11 implicit
-//! grab / AppKit event routing / engine mouse capture) - probed and
-//! confirmed on those stacks. The portable legs cover that shape. On
+//! grab; the equivalent AppKit/WKWebView strategy remains unverified) -
+//! probed and confirmed on X11. The portable legs cover that shape, while
+//! Linux's X11 button observer covers releases over no window at all. On
 //! Windows/WebView2 the shape is the OPPOSITE and both portable legs are
 //! dead; the raw-input leg exists for exactly that platform (mechanics
 //! documented in `platform::windows`). On Wayland neither global

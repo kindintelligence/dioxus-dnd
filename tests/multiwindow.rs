@@ -744,12 +744,17 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
         assert_eq!(d[0].3, Point::new(100.0, 100.0), "B-local drop coords");
     });
 
-    // Idempotence: a late echo (webview pointerup arriving after the
-    // host already delivered) is a harmless no-op.
-    let echo = tw
+    // Idempotence in the real ordering: a local webview pointerup arriving
+    // after the host already delivered is a harmless no-op.
+    assert_eq!(sim.release(&tw.dom_a), None);
+    DROPS.with_borrow(|d| assert_eq!(d.len(), 1));
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
+
+    // A repeated host echo is inert too.
+    let host_echo = tw
         .dom_a
         .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0)));
-    assert_eq!(echo, None);
+    assert_eq!(host_echo, None);
     DROPS.with_borrow(|d| assert_eq!(d.len(), 1));
     assert_eq!(sim.completions(&tw.dom_a), vec![true]);
 
@@ -759,6 +764,25 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
     assert!(sim.dragging(&tw.dom_a));
     tw.dom_a.in_runtime(|| tw.world.cancel_drag());
     assert_eq!(sim.completions(&tw.dom_a), vec![true, false]);
+}
+
+#[test]
+fn local_completion_is_idempotent_with_a_late_host_echo() {
+    let tw = two_windows(window_b);
+    let mut sim = tw.sim;
+
+    sim.pick_up(&tw.dom_a, "card".to_string());
+    sim.move_to(&tw.dom_a, Point::new(1200.0, 200.0));
+    assert_eq!(sim.release(&tw.dom_a), Some(ZONE_B1));
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
+    DROPS.with_borrow(|drops| assert_eq!(drops.len(), 1));
+
+    let host_echo = tw
+        .dom_a
+        .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0)));
+    assert_eq!(host_echo, None);
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
+    DROPS.with_borrow(|drops| assert_eq!(drops.len(), 1));
 }
 
 #[test]

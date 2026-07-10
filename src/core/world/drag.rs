@@ -1,6 +1,8 @@
 //! Drag-session anchoring: which window the in-flight drag started in,
 //! and the origin-window conversion behind the global pointer.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use dioxus::prelude::*;
 
 use crate::core::types::{DragSessionId, Point};
@@ -8,9 +10,15 @@ use crate::core::types::{DragSessionId, Point};
 use super::geometry::WindowKey;
 use super::state::{DndWorld, WindowRecord, ZoneLocation};
 
+static NEXT_WORLD_DRAG_GENERATION: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct ActiveDrag {
     pub(super) origin: WindowKey,
+    /// Fresh for every `begin_from`, including custom/untracked sources. Host
+    /// adapters bind observations to this rather than treating `session: None`
+    /// as an authority token that could attach to a successor drag.
+    pub(super) generation: u64,
     pub(super) session: Option<DragSessionId>,
     pub(super) origin_scale: f64,
     pub(super) source_location: Option<ZoneLocation>,
@@ -25,6 +33,7 @@ impl<T: Clone + 'static> DndWorld<T> {
         let origin = self.record(key);
         let active_drag = ActiveDrag {
             origin: key,
+            generation: NEXT_WORLD_DRAG_GENERATION.fetch_add(1, Ordering::Relaxed),
             // Receiver code may synchronously start an untracked drag while
             // the old source result is committed but not yet finalized. Do
             // not attach that old generation to the replacement.
@@ -91,6 +100,40 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// Current tracked pointer-drag generation, if this world owns one.
     pub fn drag_session(&self) -> Option<DragSessionId> {
         self.active.peek().as_ref()?.session
+    }
+
+    /// Private host-adapter token for the current world drag. The generation
+    /// is mandatory; the optional source session adds exactly-once completion
+    /// ownership for built-in tracked sources.
+    pub(crate) fn drag_generation(&self) -> Option<(u64, Option<DragSessionId>)> {
+        let active = self.active.read();
+        let active = active.as_ref()?;
+        Some((active.generation, active.session))
+    }
+
+    /// Non-subscribing generation read for imperative host event handlers.
+    /// Async resources use [`Self::drag_generation`] so `begin_from` wakes a
+    /// new run even when all other drag gates retain the same values.
+    pub(crate) fn drag_generation_peek(&self) -> Option<(u64, Option<DragSessionId>)> {
+        let active = self.active_drag()?;
+        Some((active.generation, active.session))
+    }
+
+    /// Whether both halves of a captured host token still name the active
+    /// drag. For untracked custom sources, `None` is valid only alongside the
+    /// matching mandatory world generation.
+    pub(crate) fn is_drag_generation(
+        &self,
+        generation: u64,
+        session: Option<DragSessionId>,
+    ) -> bool {
+        let Some(active) = self.active_drag() else {
+            return false;
+        };
+        if !self.ctx.dragging() || active.generation != generation || active.session != session {
+            return false;
+        }
+        session.is_none_or(|session| self.ctx.is_session(session))
     }
 
     pub(crate) fn is_drag_session(&self, session: DragSessionId) -> bool {

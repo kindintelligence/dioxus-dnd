@@ -3,8 +3,11 @@
 //! in `platform`; this file knows only the gates.
 
 use dioxus::prelude::*;
+use dioxus_desktop::tao::event::{Event, WindowEvent};
+use dioxus_desktop::tao::keyboard::ModifiersState as TaoModifiers;
+use dioxus_desktop::use_wry_event_handler;
 
-use crate::core::{use_joined_window, DndContext, JoinedWindow};
+use crate::core::{use_joined_window, DndContext, DragSessionId, JoinedWindow, PointerKind};
 
 use super::platform;
 
@@ -12,8 +15,68 @@ use super::platform;
 /// Mouse and pen do (they go blind at the viewport edge without native
 /// capture); touch must be left to the browser's implicit capture - see
 /// the module docs on double-driving.
+fn bridge_needed(dragging: bool, pointer_kind: PointerKind) -> bool {
+    dragging && !pointer_kind.implicitly_captured()
+}
+
 pub(super) fn bridged<T: Clone + 'static>(ctx: &DndContext<T>) -> bool {
-    ctx.dragging() && !ctx.pointer_kind().implicitly_captured()
+    bridge_needed(ctx.dragging(), ctx.pointer_kind())
+}
+
+/// A host observation's complete authority token. The world generation is
+/// mandatory for every `begin_from`; a tracked source session adds its
+/// exactly-once completion generation when one exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BridgeGeneration {
+    pub(super) world: u64,
+    pub(super) session: Option<DragSessionId>,
+}
+
+pub(super) fn current_generation<T: Clone + 'static>(
+    joined: JoinedWindow<T>,
+) -> Option<BridgeGeneration> {
+    let (world, session) = joined.world.drag_generation_peek()?;
+    joined
+        .world
+        .is_drag_generation(world, session)
+        .then_some(BridgeGeneration { world, session })
+}
+
+pub(super) fn subscribed_generation<T: Clone + 'static>(
+    joined: JoinedWindow<T>,
+) -> Option<BridgeGeneration> {
+    let (world, session) = joined.world.drag_generation()?;
+    joined
+        .world
+        .is_drag_generation(world, session)
+        .then_some(BridgeGeneration { world, session })
+}
+
+pub(super) fn current_bridged_generation<T: Clone + 'static>(
+    joined: JoinedWindow<T>,
+    ctx: &DndContext<T>,
+) -> Option<BridgeGeneration> {
+    if !bridged(ctx) {
+        return None;
+    }
+    current_generation(joined)
+}
+
+fn map_modifiers(native: TaoModifiers) -> Modifiers {
+    let mut mapped = Modifiers::empty();
+    if native.shift_key() {
+        mapped.insert(Modifiers::SHIFT);
+    }
+    if native.control_key() {
+        mapped.insert(Modifiers::CONTROL);
+    }
+    if native.alt_key() {
+        mapped.insert(Modifiers::ALT);
+    }
+    if native.super_key() {
+        mapped.insert(Modifiers::META);
+    }
+    mapped
 }
 
 /// The cross-window drag bridge: host-side eyes and ears for pointer
@@ -41,7 +104,66 @@ pub fn DragBridge<T: Clone + PartialEq + 'static>(
 /// acts on any of them.
 fn use_legs<T: Clone + PartialEq + 'static>(joined: JoinedWindow<T>) {
     let ctx = joined.world.context();
-    platform::windows::use_raw_input_leg(joined, ctx);
-    platform::fallback::use_cursor_poller_leg(joined, ctx);
-    platform::fallback::use_foreign_release_leg(joined, ctx);
+    let capability = platform::use_global_capability();
+    use_shared_window_events(joined, ctx);
+    platform::use_pointer_legs(joined, ctx, capability);
+}
+
+/// Route platform-neutral Tao observations that remain useful regardless of
+/// which pointer leg is active. The handler contains no OS dispatch.
+fn use_shared_window_events<T: Clone + PartialEq + 'static>(
+    joined: JoinedWindow<T>,
+    ctx: DndContext<T>,
+) {
+    use_wry_event_handler(move |event, _| {
+        let Event::WindowEvent { event, .. } = event else {
+            return;
+        };
+        match event {
+            WindowEvent::ModifiersChanged(modifiers) => {
+                // The live current, non-captured generation owns modifier
+                // state; a late idle/touch/replaced event is inert.
+                if current_bridged_generation(joined, &ctx).is_some()
+                    && joined.world.record(joined.key).is_some()
+                {
+                    joined.world.update_modifiers(map_modifiers(*modifiers));
+                }
+            }
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
+                if current_generation(joined).is_some()
+                    && joined.world.record(joined.key).is_some() =>
+            {
+                // Rect refresh belongs only to the active world generation and
+                // a still-joined window; teardown and superseded events no-op.
+                joined.world.refresh_all_rects();
+            }
+            _ => {}
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn implicitly_captured_touch_never_bridges() {
+        assert!(bridge_needed(true, PointerKind::Mouse));
+        assert!(bridge_needed(true, PointerKind::Pen));
+        assert!(!bridge_needed(true, PointerKind::Touch));
+        assert!(!bridge_needed(false, PointerKind::Mouse));
+    }
+
+    #[test]
+    fn tao_modifiers_map_to_drop_effect_modifiers() {
+        let native =
+            TaoModifiers::SHIFT | TaoModifiers::CONTROL | TaoModifiers::ALT | TaoModifiers::SUPER;
+        let mapped = map_modifiers(native);
+
+        assert!(mapped.contains(Modifiers::SHIFT));
+        assert!(mapped.contains(Modifiers::CONTROL));
+        assert!(mapped.contains(Modifiers::ALT));
+        assert!(mapped.contains(Modifiers::META));
+        assert_eq!(map_modifiers(TaoModifiers::empty()), Modifiers::empty());
+    }
 }
