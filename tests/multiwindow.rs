@@ -99,6 +99,57 @@ fn window_b_settling() -> Element {
     }
 }
 
+fn window_b_observes_committed_source() -> Element {
+    let world = use_context::<DndWorld<String>>();
+    rsx! {
+        DndProvider::<String> {
+            DropZone::<String> {
+                id: ZONE_B1,
+                on_drop: move |o: DropOutcome<String>| {
+                    assert!(world.drag_session().is_some(), "source finalized before receiver");
+                    // Simulate source cleanup during receiver user code. A
+                    // committed success must remain true, not become a
+                    // cancellation.
+                    world.cancel_drag();
+                    log_drop("B", &o);
+                },
+                "zone-b"
+            }
+        }
+    }
+}
+
+fn window_b_starts_replacement_drag() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            ReplacementDragZone {}
+        }
+    }
+}
+
+#[component]
+fn ReplacementDragZone() -> Element {
+    let mut dnd = use_dnd::<String>();
+    let joined = use_joined_window::<String>().expect("joined receiver");
+    rsx! {
+        DropZone::<String> {
+            id: ZONE_B1,
+            on_drop: move |_: DropOutcome<String>| {
+                dnd.start(
+                    "replacement".to_string(),
+                    None,
+                    Point::new(10.0, 10.0),
+                    Point::default(),
+                    DropEffect::Move,
+                    DragMode::Pointer,
+                );
+                joined.world.begin_from(joined.key);
+            },
+            "zone-b"
+        }
+    }
+}
+
 struct TwoWindows {
     dom_a: VirtualDom,
     dom_b: VirtualDom,
@@ -134,7 +185,12 @@ fn two_windows(b_app: fn() -> Element) -> TwoWindows {
 
     let sim = drag_sim::<String>();
     sim.place(&dom_a, ZONE_A1, Rect::new(0.0, 100.0, 200.0, 80.0));
-    sim.place_in(&dom_a, rec_b.key, ZONE_B1, Rect::new(50.0, 50.0, 100.0, 100.0));
+    sim.place_in(
+        &dom_a,
+        rec_b.key,
+        ZONE_B1,
+        Rect::new(50.0, 50.0, 100.0, 100.0),
+    );
 
     TwoWindows {
         dom_a,
@@ -176,6 +232,7 @@ fn drag_crosses_from_a_into_b_and_drops_in_b_local_coords() {
     // Release delivers in B, with client coords in B's OWN space.
     assert_eq!(sim.release(&tw.dom_a), Some(ZONE_B1));
     assert!(!sim.dragging(&tw.dom_a));
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
     DROPS.with_borrow(|d| {
         assert_eq!(d.len(), 1);
         let (tag, payload, to, client) = &d[0];
@@ -244,7 +301,12 @@ fn overlapping_windows_resolve_to_the_most_recently_focused() {
             .set(Point::new(100.0, 100.0), (800.0, 600.0), 1.0);
     });
     // Re-place B's zone so it contains B-local (300, 100) = global (400, 200).
-    sim.place_in(&tw.dom_a, tw.key_b, ZONE_B1, Rect::new(250.0, 50.0, 100.0, 100.0));
+    sim.place_in(
+        &tw.dom_a,
+        tw.key_b,
+        ZONE_B1,
+        Rect::new(250.0, 50.0, 100.0, 100.0),
+    );
     // A's zone also contains global/A-local (400, 200)... it doesn't (A1 is
     // at (0,100,200,80)) - re-place it so the point is genuinely contested.
     sim.place(&tw.dom_a, ZONE_A1, Rect::new(350.0, 150.0, 100.0, 100.0));
@@ -276,7 +338,11 @@ fn hovered_window_closing_clears_hover_and_the_drag_survives() {
     // provider, which leaves the world.
     drop(tw.dom_b);
     assert_eq!(tw.dom_a.in_runtime(|| tw.world.windows().len()), 1);
-    assert_eq!(sim.over(&tw.dom_a), None, "hover into the dead window cleared");
+    assert_eq!(
+        sim.over(&tw.dom_a),
+        None,
+        "hover into the dead window cleared"
+    );
     assert!(sim.dragging(&tw.dom_a), "the drag itself survives");
 
     // And the drag can still land at home.
@@ -360,6 +426,7 @@ fn cross_window_settle_presents_in_the_receiving_window() {
     assert!(!tw.dom_a.in_runtime(|| ctx.dragging()));
     assert!(tw.dom_a.in_runtime(|| ctx.settling().is_some()));
     assert!(tw.dom_a.in_runtime(|| ctx.payload().is_some()));
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
 
     // The RECEIVING window presents the glide.
     rerender_both(&mut tw);
@@ -424,7 +491,8 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
     // The glue's poller feeds global cursor positions: over window B's
     // zone (global (1200,200) = B-local (100,100)) the shared state
     // updates exactly as webview moves would have.
-    tw.dom_a.in_runtime(|| tw.world.track_global(Point::new(1200.0, 200.0)));
+    tw.dom_a
+        .in_runtime(|| tw.world.track_global(Point::new(1200.0, 200.0)));
     assert_eq!(sim.over(&tw.dom_a), Some(ZONE_B1));
     rerender_both(&mut tw);
     assert!(dioxus_ssr::render(&tw.dom_b).contains("data-over"));
@@ -435,7 +503,8 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
     );
 
     // Over dead space: hover clears, drag continues.
-    tw.dom_a.in_runtime(|| tw.world.track_global(Point::new(5000.0, 5000.0)));
+    tw.dom_a
+        .in_runtime(|| tw.world.track_global(Point::new(5000.0, 5000.0)));
     assert_eq!(sim.over(&tw.dom_a), None);
     assert!(sim.dragging(&tw.dom_a));
 
@@ -446,6 +515,7 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
         .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0)));
     assert_eq!(dropped, Some(ZONE_B1));
     assert!(!sim.dragging(&tw.dom_a));
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
     DROPS.with_borrow(|d| {
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].0, "B");
@@ -459,6 +529,48 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
         .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0)));
     assert_eq!(echo, None);
     DROPS.with_borrow(|d| assert_eq!(d.len(), 1));
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
+
+    // Host completion retired the source generation, so the same source can
+    // immediately begin another gesture.
+    sim.pick_up(&tw.dom_a, "card-again".to_string());
+    assert!(sim.dragging(&tw.dom_a));
+    tw.dom_a.in_runtime(|| tw.world.cancel_drag());
+    assert_eq!(sim.completions(&tw.dom_a), vec![true, false]);
+}
+
+#[test]
+fn source_success_is_committed_before_receiver_user_code() {
+    let tw = two_windows(window_b_observes_committed_source);
+    let mut sim = tw.sim;
+    sim.pick_up_from(&tw.dom_a, "card".to_string(), Some(ZONE_A1));
+
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0))),
+        Some(ZONE_B1)
+    );
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
+    assert_eq!(tw.world.drag_session(), None);
+}
+
+#[test]
+fn receiver_started_drag_does_not_inherit_finalized_source_session() {
+    let tw = two_windows(window_b_starts_replacement_drag);
+    let mut sim = tw.sim;
+    sim.pick_up(&tw.dom_a, "original".to_string());
+
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0))),
+        Some(ZONE_B1)
+    );
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
+    assert_eq!(tw.world.context().payload().as_deref(), Some("replacement"));
+    assert!(tw.world.context().dragging());
+    assert_eq!(tw.world.origin_window(), Some(tw.key_b));
+    assert_eq!(tw.world.drag_session(), None);
+    tw.dom_b.in_runtime(|| tw.world.cancel_drag());
 }
 
 #[test]
@@ -473,7 +585,17 @@ fn host_side_drop_outside_every_window_cancels() {
         .in_runtime(|| tw.world.drop_at_global(Point::new(5000.0, 5000.0)));
     assert_eq!(dropped, None);
     assert!(!sim.dragging(&tw.dom_a));
+    assert_eq!(sim.completions(&tw.dom_a), vec![false]);
+    tw.dom_a.in_runtime(|| tw.world.cancel_drag());
+    assert_eq!(sim.completions(&tw.dom_a), vec![false]);
     DROPS.with_borrow(|d| assert!(d.is_empty()));
+
+    // The cancelled source is immediately reusable, and the replacement
+    // owns a fresh completion generation.
+    sim.pick_up(&tw.dom_a, "card-again".to_string());
+    assert!(sim.dragging(&tw.dom_a));
+    tw.dom_a.in_runtime(|| tw.world.cancel_drag());
+    assert_eq!(sim.completions(&tw.dom_a), vec![false, false]);
 }
 
 #[test]

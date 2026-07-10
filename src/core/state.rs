@@ -6,13 +6,14 @@
 //! `DataTransfer` - so they can be any `Clone` type with zero serialization.
 //! (`DataTransfer` interop for external drags lives in [`crate::external`].)
 //!
-//! State is held in a [`struct@Store`], Dioxus 0.8's fine-grained reactivity
+//! State is held in a [`struct@Store`], Dioxus 0.7's fine-grained reactivity
 //! primitive: each field gets its own lazy subscription. A component that
 //! reads `dnd.over()` in its render only reruns when the hovered zone
 //! changes - not on every pointer move.
 
 use dioxus::prelude::*;
 
+use super::session::SourceCompletion;
 use super::types::{DragMode, DropEffect, Point, PointerKind, Rect, ZoneId};
 
 /// A snapshot of an in-flight drag.
@@ -83,6 +84,10 @@ pub struct DndContext<T: Clone + 'static> {
     /// Screen-reader announcement channel, rendered by
     /// [`crate::a11y::LiveRegion`].
     announcement: Signal<String>,
+    /// Origin-runtime callback for the current pointer gesture. Kept
+    /// outside `DragState` so consuming a payload cannot lose the source
+    /// lifecycle that still needs to be completed.
+    pub(super) completion: Signal<Option<SourceCompletion>>,
 }
 
 // Manual impls: `derive` would add unnecessary `T: Copy` / `T: PartialEq`
@@ -105,6 +110,7 @@ impl<T: Clone + 'static> DndContext<T> {
         Self {
             state,
             announcement,
+            completion: Signal::new(None),
         }
     }
 

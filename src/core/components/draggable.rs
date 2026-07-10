@@ -10,15 +10,15 @@ use std::rc::Rc;
 use crate::core::hooks::{use_dnd, use_zone_registry, SettleFlag};
 use crate::core::strings::use_dnd_strings;
 use crate::core::types::{
-    effective_effect, Direction, DragMode, DropEffect, DropOutcome, Point, PointerKind, Rect,
-    TouchSense, ZoneId,
+    effective_effect, Direction, DragMode, DragSessionId, DropEffect, DropOutcome, Point,
+    PointerKind, Rect, TouchSense, ZoneId,
 };
 use crate::core::world::{WorldHit, WorldMembership};
 use crate::core::{
     platform, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion,
 };
 
-use super::delivery::{deliver_drop, RELEASE_RECOVERY_MOVES};
+use super::delivery::{deliver_drop, DropCompletion, RELEASE_RECOVERY_MOVES};
 use super::merge_style;
 use super::pointer::{pointer_client, primary_press, touch_style, HoldTimer};
 
@@ -52,6 +52,19 @@ fn keyboard_drop_points(rect: Option<Rect>) -> (Point, Point) {
             (client, client - r.origin())
         }
         None => (Point::default(), Point::default()),
+    }
+}
+
+fn finish_pointer_source<T: Clone + 'static>(
+    membership: Option<crate::core::world::JoinedWindow<T>>,
+    dnd: &mut crate::core::state::DndContext<T>,
+    session: DragSessionId,
+    dropped: bool,
+) -> bool {
+    match membership {
+        Some(joined) => joined.world.finish_session(session, dropped),
+        None if dropped => dnd.finish_source(session, true),
+        None => dnd.cancel_session(session),
     }
 }
 
@@ -119,6 +132,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     // For claiming a keyboard drop's focus restoration on mount.
     let mount_payload = payload.clone();
     let mut phase = use_signal(|| GesturePhase::Idle);
+    // Generation of the pointer drag currently owned by this source. The
+    // shared completion slot carries its callback across VirtualDom/window
+    // boundaries; this local copy guards delayed measurement tasks.
+    let mut session = use_signal(|| None::<DragSessionId>);
     // Did native pointer capture engage for the current press? When it
     // did, events retarget to this element and no capture substitute is
     // needed (or wanted - see the layer below).
@@ -158,17 +175,50 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     let mut attributes = attributes;
     let style = merge_style(&mut attributes, touch_style(touch));
 
+    // Every pointer end path (DOM, host bridge, cancel, or source unmount)
+    // consumes the same shared callback. It runs in this source runtime and
+    // resets the gesture before notifying the application.
+    let source_completion = use_callback(move |dropped: bool| {
+        let pointer_id = match *phase.peek() {
+            GesturePhase::Dragging { pointer_id, .. } => Some(pointer_id),
+            _ => None,
+        };
+        phase.set(GesturePhase::Idle);
+        session.set(None);
+        if let Some(pointer_id) = pointer_id {
+            if let Some(n) = node.peek().clone() {
+                platform::release_pointer(&n, pointer_id);
+            }
+        }
+        captured.set(false);
+        empty_held_moves.set(0);
+        hold_pid.set(None);
+        press_rect.set(None);
+        press_kind.set(PointerKind::default());
+        mods.set(Modifiers::empty());
+        if let Some(h) = &on_drag_end {
+            h.call(dropped);
+        }
+    });
+    use_drop(move || {
+        let Some(id) = *session.peek() else {
+            return;
+        };
+        finish_pointer_source(membership, &mut dnd, id, false);
+    });
+
     // Begin is reachable from two places - a pointer-move promotion and the
     // hold timer's alarm - so the sequence lives in one callback.
     let begin_drag = use_callback(move |at: Point| {
-        dnd.start(
+        let id = dnd.start_tracked(
             pointer_payload.clone(),
             zone,
             at,
             *press_offset.peek(),
             effect,
-            DragMode::Pointer,
+            source_completion,
         );
+        session.set(Some(id));
         dnd.set_pointer_kind(*press_kind.peek());
         // Dress a size-matched ghost immediately from the press-time
         // measurement; fall back to measuring now only if the press's
@@ -179,12 +229,14 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             let mut dnd = dnd;
             spawn(async move {
                 if let Ok(r) = m.get_client_rect().await {
-                    dnd.set_source_rect(Some(Rect::new(
-                        r.origin.x,
-                        r.origin.y,
-                        r.size.width,
-                        r.size.height,
-                    )));
+                    if dnd.is_session(id) {
+                        dnd.set_source_rect(Some(Rect::new(
+                            r.origin.x,
+                            r.origin.y,
+                            r.size.width,
+                            r.size.height,
+                        )));
+                    }
                 }
             });
         }
@@ -203,10 +255,39 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     });
 
     let mut deliver_to = move |target: ZoneId, point: Point, effect: DropEffect| -> bool {
-        deliver_drop(registry, &mut dnd, settle_flag, target, point, effect)
+        match membership {
+            Some(joined) => deliver_drop(
+                registry,
+                &mut dnd,
+                settle_flag,
+                DropCompletion::World {
+                    world: &joined.world,
+                    session: *session.peek(),
+                },
+                target,
+                point,
+                effect,
+            ),
+            None => deliver_drop(
+                registry,
+                &mut dnd,
+                settle_flag,
+                match *session.peek() {
+                    Some(session) => DropCompletion::Local(session),
+                    None => DropCompletion::None,
+                },
+                target,
+                point,
+                effect,
+            ),
+        }
     };
 
     let mut finish_drop = move |point: Point| {
+        let Some(id) = *session.peek() else {
+            return;
+        };
+        dnd.update_pointer(point);
         let effect = effective_effect(effect, *mods.peek());
         // A release the world resolves into a FOREIGN window delivers
         // there: that window's registry and settle flag, coordinates in
@@ -227,9 +308,23 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                                 .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
                         }
                     };
+                    if !dnd.is_session(id) || !j.world.is_drag_session(id) {
+                        return;
+                    }
                     let dropped = target
                         .map(|t| {
-                            deliver_drop(rec.registry, &mut dnd, Some(rec.settle), t, local, effect)
+                            deliver_drop(
+                                rec.registry,
+                                &mut dnd,
+                                Some(rec.settle),
+                                DropCompletion::World {
+                                    world: &j.world,
+                                    session: Some(id),
+                                },
+                                t,
+                                local,
+                                effect,
+                            )
                         })
                         .unwrap_or(false);
                     if dropped {
@@ -237,10 +332,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                         // receiving window (a guarded no-op otherwise).
                         j.world.present_settle_in(rec.key);
                     } else {
-                        dnd.cancel();
-                    }
-                    if let Some(h) = &on_drag_end {
-                        h.call(dropped);
+                        finish_pointer_source(Some(j), &mut dnd, id, false);
                     }
                 });
                 return;
@@ -248,14 +340,16 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
         }
         if let Some(target) = registry.hit_test(point) {
             if deliver_to(target, point, effect) {
-                if let Some(h) = &on_drag_end {
-                    h.call(true);
-                }
                 return;
             }
         }
         spawn(async move {
             registry.measure_all().await;
+            if !dnd.is_session(id)
+                || membership.is_some_and(|joined| !joined.world.is_drag_session(id))
+            {
+                return;
+            }
             let target = dnd
                 .payload()
                 .and_then(|p| registry.hit_test_closest(point, &p, 48.0));
@@ -264,10 +358,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 None => false,
             };
             if !dropped {
-                dnd.cancel();
-            }
-            if let Some(h) = &on_drag_end {
-                h.call(dropped);
+                finish_pointer_source(membership, &mut dnd, id, false);
             }
         });
     };
@@ -292,6 +383,12 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             onpointerdown: move |evt: PointerEvent| {
                 if disabled || !primary_press(&evt) {
                     return;
+                }
+                // A prior release may still be awaiting its async snap
+                // measurement. Retire that generation before the state
+                // machine sees a new Down.
+                if let Some(id) = *session.peek() {
+                    finish_pointer_source(membership, &mut dnd, id, false);
                 }
                 empty_held_moves.set(0);
                 // Suppress the press's default actions - the same line the
@@ -326,16 +423,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                         }
                     });
                 }
-                // A machine still in Dragging while the shared context is
-                // idle is the corpse of an externally-completed drag: host
-                // glue ended it (`drop_at_global` / `cancel_drag`, e.g. a
-                // cross-window or dead-space mouse release) and the matching
-                // pointerup never reached this element - outside the
-                // viewport it targets `<html>`, which no handler hears.
-                // Reset before pressing, or the corpse eats this press
-                // ((Dragging, Down) is deliberately inert so a second
-                // pointer can't steal a live gesture). Silent: the drag's
-                // end was already delivered/announced by whoever ended it.
+                // Defense in depth: tracked completion resets the source
+                // immediately for host-ended drags. If custom integration
+                // bypassed that path, do not let a stale Dragging phase eat
+                // this press ((Dragging, Down) is deliberately inert).
                 if !dnd.dragging() && matches!(*phase.peek(), GesturePhase::Dragging { .. }) {
                     let _ = step(GestureEvent::Cancel, threshold);
                 }
@@ -421,17 +512,15 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     platform::release_pointer(&n, evt.pointer_id());
                 }
                 if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
-                    dnd.cancel();
-                    if let Some(h) = &on_drag_end {
-                        h.call(false);
+                    if let Some(id) = *session.peek() {
+                        finish_pointer_source(membership, &mut dnd, id, false);
                     }
                 }
             },
             onlostpointercapture: move |_| {
                 if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
-                    dnd.cancel();
-                    if let Some(h) = &on_drag_end {
-                        h.call(false);
+                    if let Some(id) = *session.peek() {
+                        finish_pointer_source(membership, &mut dnd, id, false);
                     }
                 }
             },

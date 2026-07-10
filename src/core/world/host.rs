@@ -4,6 +4,7 @@
 
 use dioxus::prelude::*;
 
+use crate::core::components::DropCompletion;
 use crate::core::types::{Point, ZoneId};
 
 use super::geometry::WindowKey;
@@ -59,8 +60,14 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
         if !ctx.dragging() {
             return None;
         }
+        let session = self.drag_session();
         let Some((rec, local)) = self.resolve_global(global) else {
-            ctx.cancel();
+            match session {
+                Some(session) => {
+                    self.finish_session(session, false);
+                }
+                None => self.finish_untracked(false),
+            }
             return None;
         };
         let target = rec.registry.hit_test(local).or_else(|| {
@@ -73,6 +80,10 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
                 rec.registry,
                 &mut ctx,
                 Some(rec.settle),
+                DropCompletion::World {
+                    world: self,
+                    session,
+                },
                 *t,
                 local,
                 effect,
@@ -84,7 +95,12 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
                 Some(zone)
             }
             None => {
-                ctx.cancel();
+                match session {
+                    Some(session) => {
+                        self.finish_session(session, false);
+                    }
+                    None => self.finish_untracked(false),
+                }
                 None
             }
         }
@@ -93,9 +109,10 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
     /// Abort an in-flight drag from the host side (a window manager
     /// signal, an escape hatch). No-op when nothing is dragging.
     pub fn cancel_drag(&self) {
-        let mut ctx = self.ctx;
-        if ctx.dragging() {
-            ctx.cancel();
+        if let Some(session) = self.drag_session() {
+            self.finish_session(session, false);
+        } else if self.ctx.dragging() {
+            self.finish_untracked(false);
         }
     }
 
@@ -103,6 +120,8 @@ impl<T: Clone + PartialEq + 'static> DndWorld<T> {
     /// uses it to tell "origin window, webview owns the events" from
     /// "foreign window, I am the drag's eyes".
     pub fn origin_window(&self) -> Option<WindowKey> {
-        *self.active.peek()
+        (self.ctx.dragging() || self.ctx.settling().is_some())
+            .then(|| self.active.peek().as_ref().map(|active| active.origin))
+            .flatten()
     }
 }

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const AUTO_ID_BASE: u64 = 1 << 32;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(AUTO_ID_BASE);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Identifies a drop zone (a list, a column, a canvas, a tree node…).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -48,6 +49,18 @@ impl DragId {
 impl From<u64> for DragId {
     fn from(v: u64) -> Self {
         Self(v)
+    }
+}
+
+/// Identifies one pointer-drag gesture from pickup through its exactly-once
+/// completion. Unlike [`DragId`], which applications may use as item
+/// identity, this id is generated afresh for every gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DragSessionId(pub u64);
+
+impl DragSessionId {
+    pub(crate) fn auto() -> Self {
+        Self(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -366,6 +379,15 @@ mod tests {
     use dioxus::prelude::Modifiers;
 
     #[test]
+    fn drag_session_ids_are_fresh_for_each_gesture() {
+        let first = DragSessionId::auto();
+        let second = DragSessionId::auto();
+
+        assert_ne!(first, second);
+        assert!(second.0 > first.0);
+    }
+
+    #[test]
     fn pointer_kind_maps_dom_pointer_types() {
         assert_eq!(PointerKind::from_pointer_type("mouse"), PointerKind::Mouse);
         assert_eq!(PointerKind::from_pointer_type("touch"), PointerKind::Touch);
@@ -373,7 +395,10 @@ mod tests {
         // Unrecognized (including the empty string some browsers report)
         // must fall back to Mouse: glue then bridges, the safe default.
         assert_eq!(PointerKind::from_pointer_type(""), PointerKind::Mouse);
-        assert_eq!(PointerKind::from_pointer_type("gamepad"), PointerKind::Mouse);
+        assert_eq!(
+            PointerKind::from_pointer_type("gamepad"),
+            PointerKind::Mouse
+        );
         // Only touch is implicitly captured; mouse AND pen need bridging.
         assert!(PointerKind::Touch.implicitly_captured());
         assert!(!PointerKind::Mouse.implicitly_captured());

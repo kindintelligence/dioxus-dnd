@@ -126,23 +126,20 @@
   so this is honest degradation rather than error masking. The full
   suite plus a live four-window close-mid-drag soak pass with the
   change.
-- **A press on a card whose previous drag was completed by host glue no
-  longer gets eaten.** When host-side glue ends a pointer drag through
-  `DndWorld::drop_at_global` or `cancel_drag` (a cross-window drop, a
-  release in the dead space between windows), the origin `Draggable`'s
-  own pointerup never arrives: outside the viewport the DOM retargets
-  it to `<html>`, which no delegated handler hears. Its gesture machine
-  therefore stayed in `Dragging`, and since `(Dragging, Down)` is
-  deliberately inert (a second pointer must not steal a live gesture),
-  the NEXT press on that same card was swallowed whole: no promotion,
-  no ghost, no drop. Reproduced deterministically on Windows by
-  releasing a drag in dead space and immediately pressing the same
-  card. `Draggable`'s pointerdown now detects the stale state (machine
-  in `Dragging` while the shared context is not dragging), feeds the
-  machine a silent `Cancel`, and proceeds with a fresh press.
-  `SortableList`/`SortableGrid` are not affected: they never hand their
-  gestures to the shared world, so nothing external can strand their
-  machines.
+- **Pointer sources now complete exactly once across local and host-side
+  endings.** Every pointer gesture carries a fresh `DragSessionId` and an
+  origin-runtime completion callback. Local delivery, cross-window host
+  delivery, host cancellation, pointer cancellation, lost capture, and
+  source unmount all converge on that callback, so `on_drag_end` receives
+  the committed result once even when the origin never sees pointerup.
+  Successful delivery commits before receiver user code, then finalizes
+  without touching a replacement drag the receiver started. This fixes
+  the eaten next press after a cross-window drop or dead-space release at
+  its source. The pointerdown mismatch reset remains as defense in depth
+  for custom integrations that bypass tracked completion; it is no longer
+  the mechanism that notices a host-ended drag. `SortableList` and
+  `SortableGrid` remain unaffected because they do not hand their gesture
+  machines to the shared world.
 - **`examples/regressions.rs` gained `required-features = ["serde"]`**
   in `Cargo.toml`, so a plain feature-less `cargo test` no longer fails
   compiling it. The fixture app uses the serde-gated typed transport

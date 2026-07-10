@@ -11,6 +11,7 @@ use crate::core::registry::ZoneRegistry;
 use crate::core::state::{DndContext, DragState};
 use crate::core::types::Point;
 
+use super::drag::ActiveDrag;
 use super::geometry::{WindowGeometry, WindowKey};
 
 thread_local! {
@@ -58,7 +59,7 @@ pub struct DndWorld<T: Clone + 'static> {
     windows: Signal<Vec<WindowRecord<T>>>,
     /// The window the in-flight drag started in - the coordinate anchor:
     /// `ctx.pointer()` is always in *this* window's client px.
-    pub(super) active: Signal<Option<WindowKey>>,
+    pub(super) active: Signal<Option<ActiveDrag>>,
     /// The window whose overlay presents the current settle glide (set on
     /// cross-window drops; `None` means the origin window presents).
     pub(super) settling_in: Signal<Option<WindowKey>>,
@@ -156,9 +157,21 @@ impl<T: Clone + 'static> DndWorld<T> {
                 ctx.leave(over);
             }
         }
-        if *self.active.peek() == Some(key) {
+        let active_drag = *self.active.peek();
+        if active_drag.is_some_and(|active| active.origin == key) {
             if ctx.dragging() {
-                ctx.cancel();
+                match active_drag.and_then(|active| active.session) {
+                    Some(session) if ctx.is_session(session) => {
+                        // A built-in source normally finishes from its own
+                        // cleanup before its provider leaves. Never call an
+                        // unknown custom source after child teardown.
+                        ctx.abandon_session(session);
+                    }
+                    // An untracked replacement can coexist briefly with the
+                    // old source's committed completion. Cancel the closing
+                    // window's drag without consuming that unrelated slot.
+                    _ => ctx.cancel(),
+                }
             }
             let mut active = self.active;
             active.set(None);
