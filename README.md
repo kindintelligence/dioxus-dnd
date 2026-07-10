@@ -6,16 +6,17 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 [![Dioxus 0.7](https://img.shields.io/badge/dioxus-0.7-0E6B63)](https://dioxuslabs.com)
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
-[![Tests](https://img.shields.io/badge/tests-156%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-207%20passing-brightgreen.svg)](CHANGELOG.md)
 
 ![Two desktop windows sharing one live drag world: a streaming telemetry chart dragged from Mission Control into a satellite window, still streaming inside the drag ghost mid-flight](https://raw.githubusercontent.com/kindintelligence/dioxus-dnd/development/assets/showcase.gif)
 
 **The chart never stops streaming - even inside the drag ghost, mid-flight
-between windows.** Multi-window desktop drags carry live Rust values: the
-payload above holds a live `Signal` handle, something no serialized OS drag
-protocol could move. Ctrl-drop clones a running widget; windows close in any
-order mid-drag. That's [`examples/desktop-showcase/`](examples/desktop-showcase/),
-built entirely on the public API.
+between windows.** [Multi-window desktop drags](#multi-window-desktop-drags)
+carry live Rust values: the payload above holds a live `Signal` handle,
+something no serialized OS drag protocol could move. Ctrl-drop clones a
+running widget; windows close in any order mid-drag. That's
+[`examples/desktop-showcase/`](examples/desktop-showcase/), built entirely
+on the public API.
 
 **Pick it up. Put it anywhere.** Modular, accessible drag and drop for
 [Dioxus](https://dioxuslabs.com): one small core, one module per drop
@@ -27,6 +28,36 @@ reaches browser pointer capture through `web-sys` bindings.
 **[See every pattern live](https://kindintelligence.github.io/dioxus-dnd/)**:
 the gallery pairs eighteen interactive demos with plain-language
 walkthroughs and API references, and it is built with this crate.
+
+## Contents
+
+**Start here:** [Why this crate](#why-this-crate) ·
+[Install](#install) · [Quick start](#quick-start) ·
+[Pick your pattern](#pick-your-pattern) · [How it works](#how-it-works)
+
+**Foundations** (cross-cutting, read once):
+[Styling](#styling-tailwind-ready) ·
+[Accessibility](#accessibility-built-in-not-opt-in) ·
+[Localization](#localization) · [Touch](#touch) ·
+[Auto-scroll](#auto-scroll) · [Modifier keys](#modifier-keys)
+
+**Patterns** (jump to what you need):
+[Sortable lists](#sortable-lists-with-live-preview) ·
+[Canvas](#canvas-drops) · [Boards](#boards-kanban) · [Trees](#trees) ·
+[Multi-select](#multi-select) · [File drops](#file-drops) ·
+[Dragging out](#dragging-out) ·
+[Multi-window desktop drags](#multi-window-desktop-drags)
+
+**Composing:** [Nesting](#nesting) ·
+[Mixing payload types](#mixing-payload-types) ·
+[Virtualized lists](#virtualized-lists)
+
+**Workshop:** [Testing](#testing) ·
+[Debug overlay](#debug-overlay-dev-only) ·
+[Examples and website](#examples-and-website)
+
+**Reference:** [Feature flags](#feature-flags) ·
+[Platform notes](#platform-notes) · [Prior art](#prior-art)
 
 ## Why this crate
 
@@ -100,20 +131,23 @@ to their wrapper `div`.
 
 | Module | Pattern | Payload transport |
 |---|---|---|
-| `core` | `Draggable` to `DropZone` with any `Clone` payload; closest-edge insertion indicators (`edge`) | Rust `Store` context |
-| `sortable` | reorder within one list, with live preview (`SortableList`) | self-contained (indices) |
-| `grid` | 2D tile reorder or swap (`SortableGrid`) | self-contained (indices) |
-| `board` | kanban and cross-container moves (`BoardColumn`, `BoardItem`, `BoardSlot`) | context (`BoardPayload<T>`) |
-| `tree` | nested drops with before/after/into intent (`TreeNodeTarget`) | context |
-| `canvas` | free-position drops with snap and bounds (`CanvasDropZone`) | context |
-| `multiselect` | drag N selected items as one (`SelectableDraggable`) | context (`Vec<K>`) |
-| `files` | OS file drops (`FileDropZone`, `FileFilter`) | native event (`evt.files()`) |
-| `external` | text, URLs and HTML dropped in from other apps | native `DataTransfer` |
-| `dragout` | drag text, links and HTML out to other apps (`ExternalDragSource`) | native `DataTransfer` |
-| `autoscroll` | edge-scrolling containers (`AutoScroll`) | n/a |
-| `a11y` | screen-reader announcements (`LiveRegion`), no-drag reordering (`ReorderButtons`) | n/a |
-| `animate` | FLIP reorder transitions (`FlipItem`) | n/a |
-| `debug` | dev-only zone inspector (`DndDebugOverlay`) | n/a |
+| [`core`](#quick-start) | `Draggable` to `DropZone` with any `Clone` payload; closest-edge insertion indicators (`edge`) | Rust `Store` context |
+| [`sortable`](#sortable-lists-with-live-preview) | reorder within one list, with live preview (`SortableList`) | self-contained (indices) |
+| [`grid`](#sortable-lists-with-live-preview) | 2D tile reorder or swap (`SortableGrid`) | self-contained (indices) |
+| [`board`](#boards-kanban) | kanban and cross-container moves (`BoardColumn`, `BoardItem`, `BoardSlot`) | context (`BoardPayload<T>`) |
+| [`tree`](#trees) | nested drops with before/after/into intent (`TreeNodeTarget`) | context |
+| [`canvas`](#canvas-drops) | free-position drops with snap and bounds (`CanvasDropZone`) | context |
+| [`multiselect`](#multi-select) | drag N selected items as one (`SelectableDraggable`) | context (`Vec<K>`) |
+| [`files`](#file-drops) | OS file drops (`FileDropZone`, `FileFilter`) | native event (`evt.files()`) |
+| [`external`](#dragging-out) | text, URLs and HTML dropped in from other apps | native `DataTransfer` |
+| [`dragout`](#dragging-out) | drag text, links and HTML out to other apps (`ExternalDragSource`) | native `DataTransfer` |
+| [`autoscroll`](#auto-scroll) | edge-scrolling containers (`AutoScroll`) | n/a |
+| [`a11y`](#accessibility-built-in-not-opt-in) | screen-reader announcements (`LiveRegion`), no-drag reordering (`ReorderButtons`) | n/a |
+| [`animate`](#platform-notes) | FLIP reorder transitions (`FlipItem`) | n/a |
+| [`debug`](#debug-overlay-dev-only) | dev-only zone inspector (`DndDebugOverlay`) | n/a |
+
+Cross-window drags on desktop are not a module: any provider joins a
+[shared world](#multi-window-desktop-drags) via the `desktop` feature.
 
 ## How it works
 
@@ -174,6 +208,8 @@ DndProvider::<Card> {
 }
 ```
 
+### Lists and grids
+
 `SortableList` and `SortableGrid` render their own item wrappers; those
 wrappers are where `data-dragging` / `data-drop-target` live. For lists,
 style those wrappers from the list's forwarded root `class` with direct
@@ -189,6 +225,8 @@ SortableList {
 }
 ```
 
+### Insertion indicators
+
 Value selectors work too, e.g. tree insertion indicators:
 `data-[intent=before]:border-t-2 data-[intent=into]:bg-blue-50
 data-[intent=after]:border-b-2`.
@@ -200,7 +238,10 @@ signal: `DropZone { edge: EdgeSet::Vertical, ... }` carries
 `DropOutcome::edge` records the edge held at release - so the handler maps
 `Top` to "insert before" without re-deriving geometry. The pure function
 behind it, `edge_of(point, rect, edges)`, is public for custom zones. The
-gallery's *Itinerary* page builds a drop-above/drop-below list with it.
+gallery's [*Itinerary*](https://kindintelligence.github.io/dioxus-dnd/itinerary)
+page builds a drop-above/drop-below list with it.
+
+### The drag ghost
 
 The drag ghost styles the same way; `DragOverlay` forwards `class` to its
 wrapper while positioning stays functional:
@@ -214,12 +255,16 @@ ghost glides from the release point into the receiving zone instead of
 vanishing (tune with `duration`/`easing`; honors `prefers-reduced-motion`;
 cancelled drags and keyboard drops never settle).
 
+### Styling children
+
 To style *children* of a state-carrying wrapper, either mark the wrapper a
 group (`SortableGrid`'s `item_class: "group"`, or a list root selector such
 as `class: "[&>*]:group"`) and use `group-data-dragging:opacity-40` on
 inner elements, or, with Tailwind v4, use the `in-*` variant from inside
 with no wrapper class at all: `in-data-dragging:italic` inside your
 `render` content reacts to the row's drag state with zero wiring.
+
+### How styles merge
 
 One mechanic worth knowing: a forwarded `style` is *merged after* any
 functional inline style (`touch-action` on `Draggable`, positioning on
@@ -286,7 +331,9 @@ selected."), and custom flows push their own messages with
 `dnd.announce(...)`. Every phrase is localizable - see
 [Localization](#localization). In virtualized lists, forward
 `aria-setsize`/`aria-posinset` so position is announced against the full
-list, not the rendered window (the gallery's *Archive* page shows this).
+list, not the rendered window (the gallery's
+[*Archive*](https://kindintelligence.github.io/dioxus-dnd/archive) page
+shows this).
 
 ### Reordering without any drag at all
 
@@ -375,8 +422,9 @@ Two things to pair with it: pass your item and zone `label`s through the
 same translation layer (the crate voices the names you give it), and set
 `dir: Direction::Rtl` for right-to-left locales so the keyboard's spatial
 navigation matches the mirrored layout. Custom components can voice
-themselves consistently via `use_dnd_strings()`. The gallery's *Packing
-list* page shows the full dioxus-i18n wiring - inline Fluent catalogs, a
+themselves consistently via `use_dnd_strings()`. The gallery's
+[*Packing list*](https://kindintelligence.github.io/dioxus-dnd/packing-list)
+page shows the full dioxus-i18n wiring - inline Fluent catalogs, a
 live English/Spanish toggle, and a visible mirror of the announcement
 channel. (`DndDebugOverlay` is intentionally not localized; it's a
 dev-only tool.)
@@ -424,66 +472,6 @@ SortableList { len, render, on_sort, touch_handle: true,
     class: "[&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:cursor-grab",
 }
 ```
-
-## Sortable lists with live preview
-
-```rust,ignore
-let mut items = use_signal(|| vec!["alpha".to_string(), "beta".into(), "gamma".into()]);
-rsx! {
-    SortableList {
-        len: items.read().len(),
-        render: move |ix: usize| rsx! { "{items.read()[ix]}" },
-        on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-    }
-}
-```
-
-While you drag, the row slides toward its landing slot and its neighbors
-translate out of the way: a live preview of the final order (disable with
-`live_preview: false`). An optional `overlay` prop renders a floating ghost
-pinned to the pointer while the in-flow row becomes the gap.
-
-## Canvas drops
-
-`CanvasDropZone` is the free-position primitive for node editors,
-whiteboards and floor planners. Start in-app moves with `Draggable`; the
-completed `CanvasDrop` gives you both the raw canvas-relative pointer and
-the corrected top-left position:
-
-- `pointer`: where the pointer landed inside the canvas.
-- `position`: `pointer - grab`, then optional snap and bounds.
-- `Bounds` clamps the returned top-left point. It does not know the dropped
-  element's own width or height; use `Bounds::clamp_item` or
-  `Bounds::clamp_rect` when you want the whole item inside.
-
-Keyboard drops use the selected target's measured center by default. Set
-`keyboard: CanvasKeyboardPlacement::Origin` or
-`CanvasKeyboardPlacement::Fixed(point)` when keyboard placement should be
-explicit.
-
-```rust,ignore
-CanvasDropZone::<Node> {
-    snap: SnapGrid(16.0),
-    bounds: Bounds { width: 640.0, height: 360.0 },
-    on_drop: move |drop: CanvasDrop<Node>| {
-        place_node(drop.payload.id, drop.position);
-    },
-    for node in nodes.read().clone() {
-        Draggable::<Node> {
-            payload: node,
-            style: "position: absolute;",
-            NodeView {}
-        }
-    }
-}
-```
-
-For richer constraints such as "keep the whole node inside the canvas", use
-`Bounds::clamp_item` for simple bounds or the composable modifier chain
-(`apply_modifiers`, `DragModifier::KeepInside`, `ModifierCtx`) with the
-element size you know in your app. The pure helpers `client_to_canvas`,
-`canvas_to_client` and `canvas_position` are available when wiring custom
-interactions.
 
 ## Auto-scroll
 
@@ -545,6 +533,126 @@ DropZone::<Card> {
 
 For two plain lists, use `apply_list_clone_or_move` and pass the source
 list directly.
+
+## Sortable lists with live preview
+
+```rust,ignore
+let mut items = use_signal(|| vec!["alpha".to_string(), "beta".into(), "gamma".into()]);
+rsx! {
+    SortableList {
+        len: items.read().len(),
+        render: move |ix: usize| rsx! { "{items.read()[ix]}" },
+        on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
+    }
+}
+```
+
+While you drag, the row slides toward its landing slot and its neighbors
+translate out of the way: a live preview of the final order (disable with
+`live_preview: false`). An optional `overlay` prop renders a floating ghost
+pinned to the pointer while the in-flow row becomes the gap.
+
+## Canvas drops
+
+`CanvasDropZone` is the free-position primitive for node editors,
+whiteboards and floor planners. Start in-app moves with `Draggable`; the
+completed `CanvasDrop` gives you both the raw canvas-relative pointer and
+the corrected top-left position:
+
+- `pointer`: where the pointer landed inside the canvas.
+- `position`: `pointer - grab`, then optional snap and bounds.
+- `Bounds` clamps the returned top-left point. It does not know the dropped
+  element's own width or height; use `Bounds::clamp_item` or
+  `Bounds::clamp_rect` when you want the whole item inside.
+
+Keyboard drops use the selected target's measured center by default. Set
+`keyboard: CanvasKeyboardPlacement::Origin` or
+`CanvasKeyboardPlacement::Fixed(point)` when keyboard placement should be
+explicit.
+
+```rust,ignore
+CanvasDropZone::<Node> {
+    snap: SnapGrid(16.0),
+    bounds: Bounds { width: 640.0, height: 360.0 },
+    on_drop: move |drop: CanvasDrop<Node>| {
+        place_node(drop.payload.id, drop.position);
+    },
+    for node in nodes.read().clone() {
+        Draggable::<Node> {
+            payload: node,
+            style: "position: absolute;",
+            NodeView {}
+        }
+    }
+}
+```
+
+For richer constraints such as "keep the whole node inside the canvas", use
+`Bounds::clamp_item` for simple bounds or the composable modifier chain
+(`apply_modifiers`, `DragModifier::KeepInside`, `ModifierCtx`) with the
+element size you know in your app. The pure helpers `client_to_canvas`,
+`canvas_to_client` and `canvas_position` are available when wiring custom
+interactions.
+
+## Boards (kanban)
+
+`BoardItem` wraps `Draggable` with a `BoardPayload<T>`: your item plus the
+column and index it was picked up from. Drop on a `BoardColumn` to append,
+or on a `BoardSlot` for an exact position. Either way one `MoveEvent`
+arrives with the whole move, and `apply_move` applies it to a
+`HashMap<ContainerId, Vec<T>>`, index shifts included when a card moves
+within its own column.
+
+```rust,ignore
+BoardColumn::<Task> {
+    id: DOING,
+    accepts: move |p: BoardPayload<Task>| p.from == DOING || count(DOING) < WIP,
+    on_move: move |mv: MoveEvent<Task>| apply_move(&mut board.write(), mv),
+
+    BoardSlot::<Task> { column: DOING, index: 0, on_move }
+    for (ix, task) in tasks.iter().enumerate() {
+        BoardItem::<Task> { item: task.clone(), column: DOING, index: ix, TaskCard {} }
+        BoardSlot::<Task> { column: DOING, index: ix + 1, on_move }
+    }
+}
+```
+
+A column's `accepts` inherits to every slot inside it through context, so
+a WIP limit is one closure: the full column refuses on pointer, touch and
+keyboard alike. Give columns explicit ids well above the auto-id range
+(`ZoneId(9101)` style), because slots draw auto ids from the same
+process-wide sequence. The gallery's
+[*Sprint board*](https://kindintelligence.github.io/dioxus-dnd/sprint-board)
+page runs the pattern with a live WIP limit.
+
+## Trees
+
+`TreeNodeTarget` turns a row into a three-band target: the pointer's
+vertical position resolves to `Before`, `After` or `Into`, exposed live as
+`data-intent` for styling and delivered in the `TreeDropEvent`. Each row is
+both a target and a source; the payload is just the node id, so the tree
+structure lives in one place, your model.
+
+```rust,ignore
+TreeNodeTarget::<u64> {
+    node: NodeId(n.id),
+    row_height: 38.0,
+    accepts: move |(dragged, intent): (u64, DropIntent)| {
+        if intent == DropIntent::Into && !n.folder { return false; }
+        !would_create_cycle(parent_of, NodeId(dragged), NodeId(target))
+    },
+    on_drop: move |ev: TreeDropEvent<u64>| reparent(ev.payload, target, ev.intent),
+    Draggable::<u64> { payload: n.id, RowFace {} }
+}
+```
+
+`accepts` sees the payload and the intent together, so "files refuse Into"
+is one comparison, and `would_create_cycle` walks the target's ancestors
+through your own parent lookup to stop a folder landing inside itself. The
+band math (`intent_from_offset`) is public for custom tree interactions.
+The gallery's
+[*Project files*](https://kindintelligence.github.io/dioxus-dnd/project-files)
+page shows reparenting with the cycle guard live.
 
 ## Multi-select
 
@@ -637,9 +745,17 @@ fn tray_window() -> Element {
 }
 ```
 
+Two examples ship with the repo:
+[`examples/desktop-showcase/`](examples/desktop-showcase/) is the
+live-widget demo from the GIF at the top, and
+[`examples/desktop-multiwindow/`](examples/desktop-multiwindow/) is the
+board-and-N-trays app the platform verification drives (probe binary
+included).
+
+### The desktop glue
+
 Two pieces of glue make it spatial, shipped as the **`desktop` cargo
-feature** (`dioxus_dnd::desktop`; see `examples/desktop-multiwindow/`
-for a working board-and-N-trays app, probe binary included):
+feature** (`dioxus_dnd::desktop`):
 
 - **`use_window_geometry_feed()`** (call ABOVE the provider): feeds
   each window's position/size/scale into a `WindowGeometry` from tao's
@@ -664,6 +780,8 @@ for a working board-and-N-trays app, probe binary included):
 
 The feature pulls dioxus-desktop (wry/tao), so it is off by default and
 the core stays dependency-free.
+
+### The invariants
 
 A few invariants hold the world together:
 
@@ -751,7 +869,9 @@ BridgeDropZone::<Task, Person> {
 }
 ```
 
-The gallery's *Standup* page shows it live. For *three or more* worlds,
+The gallery's
+[*Standup*](https://kindintelligence.github.io/dioxus-dnd/standup) page
+shows it live. For *three or more* worlds,
 generate a component for your exact type list with the
 `bridge_drop_zone!` macro - each row is one world, with its own optional
 acceptance filter and required typed drop callback:
@@ -786,8 +906,8 @@ rendered rows (each crossing of the container's clip reports an
 IntersectionObserver rect that, with the row's canvas position, recovers
 the scroll offset - Dioxus's documented virtual-list tool) plus
 `AutoScroll`'s `on_scroll` for its own edge-scrolling during drags. The
-gallery's *Archive* page runs the full pattern at 10,000 rows, keyboard
-navigation included.
+gallery's [*Archive*](https://kindintelligence.github.io/dioxus-dnd/archive)
+page runs the full pattern at 10,000 rows, keyboard navigation included.
 
 ## Debug overlay (dev-only)
 
@@ -938,40 +1058,42 @@ npm install && npm run test:web
   - **Windows (WebView2)**: verified end to end at `f681b9c` (Win 11
     Home ARM64 build 26200, single 1920x1200 monitor at 1.5x scale,
     2026-07-10, real `SendInput` mouse/keyboard and `InjectTouchInput`
-    touch): board+3-tray drag chain in both directions, exactly one
-    window highlighting at a time, ghost handoff glued to the native
-    pointer, dead-space cancel with immediate same-source restart, drop
-    then immediate re-drag, Ctrl=Copy/Alt=Link resolved from modifiers
-    changed outside the origin viewport, mid-drag target resize
-    refreshing world rects, hovered-window close surviving the drag,
-    origin close cancelling exactly once, minimized windows rejecting
-    hover and delivery, tray close/reopen churn, touch interleaved with
-    mouse (zero ghost-trajectory reversals), and the board-first
-    close-order regression with the surviving tray staying interactive.
-    Logs stayed free of ownership warnings, panics and fatal callback
-    exceptions; both sessions exited cleanly. Multi-DPI monitors remain
-    unexercised (single-monitor rig); the earlier `60e642c` baseline
-    evidence (same machine, 2026-07) still stands. The bridge needs a
-    third leg there: WebView2 keeps streaming mouse
-    events to the origin webview outside its viewport, yet they target
-    `<html>` (nothing retargets without pointer capture) so no component
-    hears them, and tao never sees `CursorMoved`/`MouseInput` because
-    the WebView2 child HWND consumes them. The sealed library bridge uses
-    raw input: `DeviceEvent::Button`/`MouseMotion`/`Key` (the keyboard
-    leg feeds live modifiers - tao's `ModifiersChanged` never fires
-    because the WebView2 child HWND owns keyboard focus) through
-    `use_wry_event_handler` plus
-    `set_device_event_filter(DeviceEventFilter::Never)` (the default
-    `Unfocused` filter never delivers - the foreground input owner is
-    the WebView2 process's HWND). Touch needs none of this - implicit
-    capture streams the whole gesture to the origin webview - and MUST
-    NOT be bridged: Windows synthesizes mouse input from touch (a
-    cursor trailing the finger, spurious button transitions), so
-    bridging a touch drag double-drives it. The bridge gates every
-    bridge leg on the drag's `PointerKind` (recorded by `Draggable` at
-    pickup, `ctx.pointer_kind()`): bridge mouse and pen, never touch.
-    Known trap unchanged: windows created hidden then shown have broken
-    DnD in WebView2 (wry#1639), so create drop-target windows visible.
+    touch).
+    - *Verified*: board+3-tray drag chain in both directions, exactly one
+      window highlighting at a time, ghost handoff glued to the native
+      pointer, dead-space cancel with immediate same-source restart, drop
+      then immediate re-drag, Ctrl=Copy/Alt=Link resolved from modifiers
+      changed outside the origin viewport, mid-drag target resize
+      refreshing world rects, hovered-window close surviving the drag,
+      origin close cancelling exactly once, minimized windows rejecting
+      hover and delivery, tray close/reopen churn, touch interleaved with
+      mouse (zero ghost-trajectory reversals), and the board-first
+      close-order regression with the surviving tray staying interactive.
+      Logs stayed free of ownership warnings, panics and fatal callback
+      exceptions; both sessions exited cleanly. Multi-DPI monitors remain
+      unexercised (single-monitor rig); the earlier `60e642c` baseline
+      evidence (same machine, 2026-07) still stands.
+    - *How the bridge works there*: WebView2 keeps streaming mouse
+      events to the origin webview outside its viewport, yet they target
+      `<html>` (nothing retargets without pointer capture) so no component
+      hears them, and tao never sees `CursorMoved`/`MouseInput` because
+      the WebView2 child HWND consumes them. The sealed library bridge uses
+      raw input: `DeviceEvent::Button`/`MouseMotion`/`Key` (the keyboard
+      leg feeds live modifiers - tao's `ModifiersChanged` never fires
+      because the WebView2 child HWND owns keyboard focus) through
+      `use_wry_event_handler` plus
+      `set_device_event_filter(DeviceEventFilter::Never)` (the default
+      `Unfocused` filter never delivers - the foreground input owner is
+      the WebView2 process's HWND).
+    - *Touch is never bridged*: implicit capture streams the whole
+      gesture to the origin webview, so touch needs none of this - and
+      MUST NOT be bridged: Windows synthesizes mouse input from touch (a
+      cursor trailing the finger, spurious button transitions), so
+      bridging a touch drag double-drives it. The bridge gates every
+      bridge leg on the drag's `PointerKind` (recorded by `Draggable` at
+      pickup, `ctx.pointer_kind()`): bridge mouse and pen, never touch.
+    - *Known trap*: windows created hidden then shown have broken
+      DnD in WebView2 (wry#1639), so create drop-target windows visible.
   - **macOS (WKWebView)**: expected to work on the same reasoning
     (AppKit routes the whole drag sequence to the mousedown view;
     `cursor_position` supported); not yet hand-verified.
