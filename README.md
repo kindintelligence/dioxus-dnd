@@ -926,18 +926,31 @@ npm install && npm run test:web
     fully active and geometry remains inert without cursor-query error
     spam. Verified under WSLg with Tao reporting Wayland; forced X11 was
     smoke-tested separately rather than assumed from the environment.
-  - **Windows (WebView2)**: baseline `60e642c` was verified end to end
-    (Win 11 ARM64, 1.5x scale, 2026-07) - cross-window hovers, ghost
-    handoff, drops both directions, dead-space cancel, tray close/reopen
-    mid-drag. Slice F's surgical session-generation validation and
-    process-once filter hardening compile and have pure policy coverage,
-    but await the next Windows/WebView2 runtime pass. The bridge needs a
+  - **Windows (WebView2)**: verified end to end at `f681b9c` (Win 11
+    Home ARM64 build 26200, single 1920x1200 monitor at 1.5x scale,
+    2026-07-10, real `SendInput` mouse/keyboard and `InjectTouchInput`
+    touch): board+3-tray drag chain in both directions, exactly one
+    window highlighting at a time, ghost handoff glued to the native
+    pointer, dead-space cancel with immediate same-source restart, drop
+    then immediate re-drag, Ctrl=Copy/Alt=Link resolved from modifiers
+    changed outside the origin viewport, mid-drag target resize
+    refreshing world rects, hovered-window close surviving the drag,
+    origin close cancelling exactly once, minimized windows rejecting
+    hover and delivery, tray close/reopen churn, touch interleaved with
+    mouse (zero ghost-trajectory reversals), and the board-first
+    close-order regression with the surviving tray staying interactive.
+    Logs stayed free of ownership warnings, panics and fatal callback
+    exceptions; both sessions exited cleanly. Multi-DPI monitors remain
+    unexercised (single-monitor rig); the earlier `60e642c` baseline
+    evidence (same machine, 2026-07) still stands. The bridge needs a
     third leg there: WebView2 keeps streaming mouse
     events to the origin webview outside its viewport, yet they target
     `<html>` (nothing retargets without pointer capture) so no component
     hears them, and tao never sees `CursorMoved`/`MouseInput` because
     the WebView2 child HWND consumes them. The sealed library bridge uses
-    raw input: `DeviceEvent::Button`/`MouseMotion` through
+    raw input: `DeviceEvent::Button`/`MouseMotion`/`Key` (the keyboard
+    leg feeds live modifiers - tao's `ModifiersChanged` never fires
+    because the WebView2 child HWND owns keyboard focus) through
     `use_wry_event_handler` plus
     `set_device_event_filter(DeviceEventFilter::Never)` (the default
     `Unfocused` filter never delivers - the foreground input owner is

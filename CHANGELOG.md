@@ -102,8 +102,40 @@
   suppression, raw-release/filter decisions and completion idempotence.
   Verified under WSLg with Tao reporting actual Wayland (global legs off,
   local drags intact) and forced X11 (cross-window drop, dead-space cancel
-  and immediate re-drag); the surgical Windows changes still require the
-  next authoritative Windows/WebView2 runtime pass.
+  and immediate re-drag). The authoritative Windows/WebView2 runtime pass
+  then confirmed the surgical Windows changes end to end (Win 11 Home
+  ARM64 build 26200, 1920x1200 at 1.5x, 2026-07-10, real `SendInput` and
+  `InjectTouchInput`): the full four-window matrix - generation-bound raw
+  tracking, dead-space cancel with immediate same-source restart,
+  mid-drag target resize rect refresh, hovered-window and origin-window
+  closes mid-drag, minimized-window exclusion, close/reopen churn,
+  touch/mouse interleave with zero ghost-trajectory reversals, and the
+  board-first close-order regression - with clean logs (no ownership
+  warnings, panics or fatal callbacks) and clean exits. Multi-DPI remains
+  unexercised there (single-monitor rig).
+- **Windows drops now honor modifiers changed outside the origin
+  viewport** (Ctrl=Copy, Alt=Link). Nothing fed the shared world once
+  the pointer left the origin: tao never fires `ModifiersChanged` there
+  because the WebView2 child HWND owns keyboard focus, the origin's
+  streamed held-button events carry the correct `ctrlKey` but target
+  `<html>` where no component handler hears them, and the foreign window
+  is blind while the origin holds OS mouse capture - so a raw-leg drop
+  resolved with the world's modifier snapshot still empty (probed live
+  with DOM event recorders). The Windows raw-input leg now also consumes
+  the raw keyboard stream its `DeviceEventFilter::Never` registration
+  already delivers (`DeviceEvent::Key`), tracking each physical modifier
+  side in a hook-local mask (releasing one Ctrl while the other is held
+  cannot clear the state) and feeding the world only from the origin
+  window during a live bridged generation. Found and verified by the
+  Windows runtime matrix; pure policy tests pin the mask transitions.
+- **Strict clippy passes on Windows targets again.** The reconciled tree
+  left the shared portable legs, their bridge/world generation helpers
+  and `GlobalCapability::Unavailable` reachable only from the cfg-gated
+  Linux/macOS policy modules, so `cargo clippy -D warnings` failed with
+  dead_code on every other desktop target. The shared module stays
+  compiled everywhere per the sealed-platform layout policy (implement
+  once, type-check on all toolchains), with `allow(dead_code)` scoped
+  precisely to the targets whose policy never installs those legs.
 - **Touch drags no longer glitch in multi-window use.** After the
   Windows raw-input bridge landed, touch drags jittered and could end
   early: Windows synthesizes MOUSE input from touch (the cursor trails

@@ -21,9 +21,10 @@
 //! Requires `DeviceEventFilter::Never`: the default `Unfocused`
 //! registers without `RIDEV_INPUTSINK`, and the foreground input owner
 //! is the WebView2 process's HWND, so raw input never arrives otherwise.
-//! **The leg sets that filter process-globally on first use** -
-//! documented no-op outside Windows, but apps with their own raw-input
-//! needs should know the bridge flips it.
+//! **The leg sets that filter process-globally on first use**, and only
+//! on Windows - the handler returns before claiming it anywhere else -
+//! but apps with their own raw-input needs should know the bridge flips
+//! it there.
 
 use dioxus::prelude::{use_hook, Modifiers};
 use dioxus_desktop::tao::event::{DeviceEvent, ElementState, Event};
