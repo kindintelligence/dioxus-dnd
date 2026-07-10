@@ -191,8 +191,7 @@ pub fn SortableGrid(
         }
         GestureEffect::None => {}
     };
-    let primary_pointer =
-        move |evt: &PointerEvent| crate::core::components::primary_press(evt);
+    let primary_pointer = move |evt: &PointerEvent| crate::core::components::primary_press(evt);
     // Consecutive empty-held moves seen mid-drag (lost-release debounce).
     let mut empty_held_moves = use_signal(|| 0u8);
     // Did native pointer capture engage for the current press? Decides
