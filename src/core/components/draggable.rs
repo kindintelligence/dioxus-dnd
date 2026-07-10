@@ -385,10 +385,17 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     return;
                 }
                 // A prior release may still be awaiting its async snap
-                // measurement. Retire that generation before the state
-                // machine sees a new Down.
-                if let Some(id) = *session.peek() {
-                    finish_pointer_source(membership, &mut dnd, id, false);
+                // measurement; its Up already moved the machine out of
+                // Dragging, so retire that stale generation before the
+                // machine sees a new Down. Gated on the phase: a session
+                // with the machine still in Dragging is a LIVE drag, and a
+                // second primary press (a mouse click during a touch drag,
+                // a pen tap during a mouse drag) must not steal it -
+                // (Dragging, Down) is deliberately inert.
+                if !matches!(*phase.peek(), GesturePhase::Dragging { .. }) {
+                    if let Some(id) = *session.peek() {
+                        finish_pointer_source(membership, &mut dnd, id, false);
+                    }
                 }
                 empty_held_moves.set(0);
                 // Suppress the press's default actions - the same line the
