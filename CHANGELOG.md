@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`PLATFORMS.md`: the platform verification log moved out of the
+  README.** The README's Platform notes had grown a full verification
+  report (rigs, commits, per-session evidence, bridge mechanics); that
+  detail now lives in `PLATFORMS.md` at the repo root, where regression
+  reports can be compared against a concrete baseline, and the README
+  keeps a per-platform status table, the wry#1639 hidden-window trap, and
+  the macOS call for testers
+  ([#20](https://github.com/kindintelligence/dioxus-dnd/issues/20)).
+  Every fact moved; none were dropped.
 - **Scheduled upstream canary CI**
   (`.github/workflows/upstream-canary.yml`): the multi-window design rides
   two cross-VirtualDom contracts that Dioxus does not document as public
