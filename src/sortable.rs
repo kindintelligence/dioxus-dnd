@@ -49,10 +49,21 @@ fn pointer_client(evt: &PointerEvent) -> Point {
 }
 
 /// "Move the item at `from` so it ends up at index `to`."
+///
+/// Non-exhaustive so reorder context can be added without a major release;
+/// synthesize your own (reorder buttons, tests) via [`SortEvent::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SortEvent {
     pub from: usize,
     pub to: usize,
+}
+
+impl SortEvent {
+    /// "Move the item at `from` so it ends up at index `to`."
+    pub fn new(from: usize, to: usize) -> Self {
+        Self { from, to }
+    }
 }
 
 /// What a completed reorder gesture means.

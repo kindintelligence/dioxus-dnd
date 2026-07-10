@@ -227,7 +227,12 @@ pub enum Direction {
 }
 
 /// How the current drag is being driven.
+///
+/// Non-exhaustive: input paths accrete (gamepad and switch-access drags
+/// are plausible futures), so compare against the variants you handle
+/// rather than matching exhaustively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum DragMode {
     /// Pointer-event driven drag.
     #[default]
@@ -247,7 +252,12 @@ pub enum DragMode {
 /// double-drives it: on Windows the touch-synthesized mouse cursor
 /// trails the finger, and its synthesized button transitions can end
 /// the drag early.
+///
+/// Non-exhaustive: pointer taxonomies grow with input hardware. Glue
+/// deciding whether to bridge must use [`PointerKind::implicitly_captured`],
+/// which encodes the safe default for kinds it has never heard of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum PointerKind {
     /// A mouse - or anything unrecognized, because the safe default for
     /// glue is to bridge (an unbridged blind pointer loses drops; a

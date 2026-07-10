@@ -38,11 +38,26 @@ pub enum DropIntent {
 }
 
 /// A completed tree drop.
+///
+/// Non-exhaustive so drop context can be added without a major release;
+/// synthesize your own (tests, programmatic moves) via [`TreeDropEvent::new`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TreeDropEvent<T> {
     pub payload: T,
     pub target: NodeId,
     pub intent: DropIntent,
+}
+
+impl<T> TreeDropEvent<T> {
+    /// A drop of `payload` landing relative to `target` per `intent`.
+    pub fn new(payload: T, target: NodeId, intent: DropIntent) -> Self {
+        Self {
+            payload,
+            target,
+            intent,
+        }
+    }
 }
 
 /// Derive a [`DropIntent`] from the pointer's Y offset within a row of the

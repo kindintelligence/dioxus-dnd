@@ -36,7 +36,11 @@ pub struct FileDrop {
 }
 
 /// Why a file was rejected by a [`FileFilter`].
+///
+/// Non-exhaustive: new acceptance rules mean new rejection reasons, so
+/// keep a wildcard arm with a generic "not accepted" message.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FileRejection {
     /// Extension not in the allow-list.
     Extension,

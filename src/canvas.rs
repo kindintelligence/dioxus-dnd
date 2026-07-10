@@ -12,7 +12,11 @@ use crate::core::{
 };
 
 /// A payload dropped at a position on the canvas.
+///
+/// Non-exhaustive: emitted by the zone, only ever consumed by callers, and
+/// likely to grow context fields (modifiers, effect) - destructure with `..`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CanvasDrop<T> {
     pub payload: T,
     /// Top-left position for the dropped element, relative to the canvas -

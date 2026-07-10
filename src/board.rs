@@ -62,13 +62,25 @@ impl<T: Clone + 'static> Clone for ColumnAccepts<T> {
 impl<T: Clone + 'static> Copy for ColumnAccepts<T> {}
 
 /// A completed cross-container move.
+///
+/// Non-exhaustive so move context can be added without a major release;
+/// synthesize your own (tests, undo stacks) via [`MoveEvent::new`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MoveEvent<T> {
     pub item: T,
     /// `(column, index)` the item came from.
     pub from: (ContainerId, usize),
     /// Target column, and target index - `None` means "append to the end".
     pub to: (ContainerId, Option<usize>),
+}
+
+impl<T> MoveEvent<T> {
+    /// A move of `item` from `(column, index)` to `(column, index)`, where
+    /// a `None` target index means "append to the end".
+    pub fn new(item: T, from: (ContainerId, usize), to: (ContainerId, Option<usize>)) -> Self {
+        Self { item, from, to }
+    }
 }
 
 /// Apply a [`MoveEvent`] to a `HashMap<ContainerId, Vec<T>>` board model.

@@ -47,7 +47,12 @@ pub enum GesturePhase {
 }
 
 /// An input to the machine.
+///
+/// Non-exhaustive because the gesture vocabulary provably grows (`Hold`
+/// arrived in 2.5); feed events in freely, but never match this
+/// exhaustively - treat unknown inputs as inert, like the machine does.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum GestureEvent {
     /// Pointer pressed.
     Down { at: Point, pointer_id: i32 },

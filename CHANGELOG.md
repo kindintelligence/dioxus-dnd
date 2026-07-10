@@ -4,6 +4,21 @@
 
 ### Added
 
+- **`#[non_exhaustive]` on the event types that provably grow**
+  (technically breaking if you exhaustively matched or literally
+  constructed them - batched deliberately into the same release whose
+  `GestureEvent::Hold` already broke exhaustive matchers):
+  `GestureEvent`, `FileRejection`, `DragMode`, `PointerKind`,
+  `CanvasDrop`, and - with new `::new()` constructors replacing literal
+  construction - `SortEvent`, `MoveEvent`, `TreeDropEvent`. Deliberately
+  NOT marked: `DropEffect` and `DropIntent` (closed vocabularies -
+  HTML5's `dropEffect` set and Before/After/Into geometry - that
+  consumers rightly match exhaustively), and `DropOutcome` (custom
+  sources and downstream tests legitimately construct it; its field set
+  IS the drop contract, and a nine-field builder would cost more API
+  than the marker saves). CI grew a non-blocking `cargo-semver-checks`
+  job against the latest published release, plus a tripwire asserting no
+  tao/wry type ever leaks into the public `desktop` API surface.
 - **Windows platform-model tripwire**: the raw-input bridge exists
   because tao never delivers `CursorMoved`/`MouseInput` on
   Windows/WebView2 (the child HWND consumes them). If a WebView2 or tao

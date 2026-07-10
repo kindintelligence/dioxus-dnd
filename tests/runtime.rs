@@ -911,16 +911,8 @@ fn board_slot_registers_for_pointer_and_keyboard_paths() {
     assert_eq!(
         *moves.lock().unwrap(),
         vec![
-            MoveEvent {
-                item: "pointer-card",
-                from: (ZoneId(10), 0),
-                to: (ZoneId(90), Some(1)),
-            },
-            MoveEvent {
-                item: "keyboard-card",
-                from: (ZoneId(11), 2),
-                to: (ZoneId(90), Some(1)),
-            },
+            MoveEvent::new("pointer-card", (ZoneId(10), 0), (ZoneId(90), Some(1))),
+            MoveEvent::new("keyboard-card", (ZoneId(11), 2), (ZoneId(90), Some(1))),
         ]
     );
 }
@@ -1009,11 +1001,7 @@ fn board_slot_inherits_column_accepts() {
     // Only the allowed payload produced a move; the blocked one was dropped.
     assert_eq!(
         *moves.lock().unwrap(),
-        vec![MoveEvent {
-            item: "ok",
-            from: (ZoneId(10), 0),
-            to: (ZoneId(90), Some(0)),
-        }]
+        vec![MoveEvent::new("ok", (ZoneId(10), 0), (ZoneId(90), Some(0)))]
     );
 }
 
@@ -1295,11 +1283,7 @@ fn tree_target_registry_filter_is_permissive_but_drop_rechecks_exact_intent() {
 
     assert_eq!(
         *drops.lock().unwrap(),
-        vec![TreeDropEvent {
-            payload: "into",
-            target: NodeId(12),
-            intent: DropIntent::Into,
-        }]
+        vec![TreeDropEvent::new("into", NodeId(12), DropIntent::Into)]
     );
 }
 
@@ -1440,14 +1424,7 @@ fn tree_target_registered_callback_reads_latest_props() {
     dom.rebuild_in_place();
     assert_eq!(
         *drops.lock().unwrap(),
-        vec![(
-            0,
-            TreeDropEvent {
-                payload: "first",
-                target: NodeId(7),
-                intent: DropIntent::After,
-            },
-        )]
+        vec![(0, TreeDropEvent::new("first", NodeId(7), DropIntent::After))]
     );
 
     *phase.lock().unwrap() = 1;
@@ -1457,21 +1434,10 @@ fn tree_target_registered_callback_reads_latest_props() {
     assert_eq!(
         *drops.lock().unwrap(),
         vec![
-            (
-                0,
-                TreeDropEvent {
-                    payload: "first",
-                    target: NodeId(7),
-                    intent: DropIntent::After,
-                },
-            ),
+            (0, TreeDropEvent::new("first", NodeId(7), DropIntent::After)),
             (
                 1,
-                TreeDropEvent {
-                    payload: "allowed",
-                    target: NodeId(8),
-                    intent: DropIntent::Into,
-                },
+                TreeDropEvent::new("allowed", NodeId(8), DropIntent::Into)
             ),
         ]
     );
