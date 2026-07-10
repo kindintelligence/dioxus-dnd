@@ -19,6 +19,16 @@
   than the marker saves). CI grew a non-blocking `cargo-semver-checks`
   job against the latest published release, plus a tripwire asserting no
   tao/wry type ever leaks into the public `desktop` API surface.
+- **`docs/RENDERER-CONTRACT.md`: the renderer contract, written down.**
+  With Blitz/dioxus-native shipping as a webview-less sibling render
+  target, the crate's browser/DOM dependencies are now enumerated
+  explicitly - thirteen behaviors, each with the modules that need it,
+  what breaks without it (only one, `transitionend`, can wedge state
+  rather than degrade), file:line citations, and an honest
+  unknown-means-unknown Blitz status. A draft tracking-issue body
+  (`docs/BLITZ-TRACKING-ISSUE.md`, not filed) maps every module to
+  works-as-is / needs-native-impl / N-A-under-Blitz and names the
+  three blocking questions a first probe should answer.
 - **Windows platform-model tripwire**: the raw-input bridge exists
   because tao never delivers `CursorMoved`/`MouseInput` on
   Windows/WebView2 (the child HWND consumes them). If a WebView2 or tao
