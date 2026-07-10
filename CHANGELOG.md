@@ -82,6 +82,28 @@
 
 ### Fixed
 
+- **Desktop bridge policy and ownership are now explicit per platform.**
+  Linux asks Tao's live event-loop target whether it selected Wayland or
+  X11 instead of treating a cursor/geometry API error as backend
+  detection. Wayland deliberately leaves global geometry, cursor polling
+  and foreign-release bridging inert while local drags continue normally;
+  X11 keeps those legs and additionally observes the root pointer-button
+  mask so a release over desktop dead space cancels on the next sample.
+  Pollers are bound to the originating world/session generation;
+  superseded runs cannot mutate a replacement drag, and a transient X11
+  cursor-query miss
+  skips one tick instead of permanently killing the run. Tao modifier
+  changes now update the shared world outside the origin viewport, and a
+  joined window refreshes active rects after resize or scale changes. The
+  Windows raw-input leg now revalidates the same composite generation
+  immediately before tracking or dropping, while its
+  `DeviceEventFilter::Never` setup is Windows-only and claimed once for
+  the process. Pure policy tests cover every ownership gate, touch
+  suppression, raw-release/filter decisions and completion idempotence.
+  Verified under WSLg with Tao reporting actual Wayland (global legs off,
+  local drags intact) and forced X11 (cross-window drop, dead-space cancel
+  and immediate re-drag); the surgical Windows changes still require the
+  next authoritative Windows/WebView2 runtime pass.
 - **Touch drags no longer glitch in multi-window use.** After the
   Windows raw-input bridge landed, touch drags jittered and could end
   early: Windows synthesizes MOUSE input from touch (the cursor trails
@@ -187,14 +209,22 @@
   of the first (same cards in both), hovering any tray highlighted all
   of them, and drops routed into the one shared list. Each "Open tray
   window" now mints a `Tray` record with its own `ZoneId::auto()` and
-  its own card list created in ROOT scope (it must outlive the
-  opener's re-renders and belongs to the app, not to any window);
+  its own card list owned by an application-lifetime `Rc<ModelOwner>`,
+  independent of every window's `VirtualDom`; each open tray has a
+  separately reclaimable signal owner, and every window holds the shared
+  owner while it can touch the model. The board may therefore close
+  before either tray without dropping the signals its survivors use;
   `move_card` routes by zone across the board and every open tray,
   falling back to the board for a zone that closed in the race between
   hit-test and delivery so a card can never vanish. Closing a tray
-  returns its cards to the board (in-flight drags included) via a
-  `use_drop` that uses `try_write` throughout, since at app shutdown
-  the board's signals may already be gone. Verified live with four
+  atomically returns its cards to the board (in-flight drags included),
+  retires it from the model, then reclaims that tray's storage; a borrow
+  guard for every signal is acquired before mutation under the serialized
+  VDOM-teardown owner condition, so cleanup cannot be partially applied,
+  and repeated teardown is inert.
+  A focused cross-`VirtualDom` regression reproduces board close, tray 1
+  close, then a tray 2 mutation/rerender, and that exact sequence was
+  also verified live. The wider N-way behavior was verified with four
   windows: a board->tray1->tray2->tray3->board drag chain, exactly one
   window highlighting at each hop, drags across an intervening tray,
   close-with-cards, and closing the drag's ORIGIN window mid-drag

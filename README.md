@@ -643,11 +643,15 @@ for a working board-and-N-trays app, probe binary included):
   so the origin's bridge polls the global cursor to keep tracking, a
   blind window's first pointer event mid-drag completes the drop, and
   on Windows a third raw-input leg covers WebView2's swallowed mouse
-  stream (details in the module docs). Legs engage per the drag's
-  `PointerKind`: mouse and pen are bridged, touch is left to the
-  browser's implicit capture. Note: the bridge sets tao's
-  `DeviceEventFilter::Never` process-globally on first use (Windows
-  raw-input delivery; documented no-op elsewhere).
+  stream (details in the module docs). Linux selects policy from Tao's
+  actual runtime backend: X11 uses generation-bound polling plus the
+  root pointer-button mask for dead-space releases, while Wayland keeps
+  every unavailable global leg off by policy. A transient X11 sample
+  miss is retried; it is never mistaken for Wayland. Legs engage per the
+  drag's `PointerKind`: mouse and pen are bridged, touch is left to the
+  browser's implicit capture. On Windows only, the bridge claims tao's
+  process-global `DeviceEventFilter::Never` installation exactly once
+  for raw-input delivery.
 
 The feature pulls dioxus-desktop (wry/tao), so it is off by default and
 the core stays dependency-free.
@@ -679,6 +683,12 @@ clears the hover if it was only being hovered), and where geometry is
 unavailable - Wayland forbids it by design - everything gracefully
 degrades to normal per-window drags. Headless tests drive all of it: the
 world-aware `DragSim` simulates whole cross-window arcs in CI.
+
+The example's card model has the same close-order guarantee for a
+different reason: every window retains an `Rc<ModelOwner>` whose signal
+storage belongs to the app rather than the board `VirtualDom`. Closing
+the board and one tray therefore leaves another tray fully live, while
+each closed tray's separately owned card signal is reclaimed promptly.
 
 ## Nesting
 
@@ -902,23 +912,32 @@ npm install && npm run test:web
   tracking anywhere in the window. Verified on Linux (WebKitGTK).
 - **Multi-window drags**, verified per platform (2026-07):
   - **Linux/X11**: works end to end - cross-window hovers, ghost handoff,
-    drops - with the `desktop` feature's geometry feed and bridge.
+    drops and release over desktop dead space - with the `desktop`
+    feature's geometry feed, global-cursor poller and X11 root
+    pointer-button observer. Polling is bound to the drag's composite
+    generation, so a sleeper from drag N cannot attach to drag N+1.
     (Under WSLg specifically, session state can corrupt move-event button
     masks; the library debounces, but treat WSLg as a smoke-test rig,
     not a verdict machine.)
   - **Linux/Wayland**: cross-window is impossible by OS design (a client
     can learn neither its windows' positions nor the global cursor);
-    the world detects missing geometry and degrades to per-window drags.
-    Verified: drags park at the window edge and recover cleanly.
-  - **Windows (WebView2)**: verified end to end (Win 11 ARM64, 1.5x
-    scale, 2026-07) - cross-window hovers, ghost handoff, drops both
-    directions, dead-space cancel, tray close/reopen mid-drag - but the
-    bridge needs a third leg there. WebView2 keeps streaming mouse
+    Tao's live backend selection disables those global legs explicitly,
+    rather than inferring Wayland from a failed API call. Local drags stay
+    fully active and geometry remains inert without cursor-query error
+    spam. Verified under WSLg with Tao reporting Wayland; forced X11 was
+    smoke-tested separately rather than assumed from the environment.
+  - **Windows (WebView2)**: baseline `60e642c` was verified end to end
+    (Win 11 ARM64, 1.5x scale, 2026-07) - cross-window hovers, ghost
+    handoff, drops both directions, dead-space cancel, tray close/reopen
+    mid-drag. Slice F's surgical session-generation validation and
+    process-once filter hardening compile and have pure policy coverage,
+    but await the next Windows/WebView2 runtime pass. The bridge needs a
+    third leg there: WebView2 keeps streaming mouse
     events to the origin webview outside its viewport, yet they target
     `<html>` (nothing retargets without pointer capture) so no component
     hears them, and tao never sees `CursorMoved`/`MouseInput` because
-    the WebView2 child HWND consumes them. The example bridges via raw
-    input: `DeviceEvent::Button`/`MouseMotion` through
+    the WebView2 child HWND consumes them. The sealed library bridge uses
+    raw input: `DeviceEvent::Button`/`MouseMotion` through
     `use_wry_event_handler` plus
     `set_device_event_filter(DeviceEventFilter::Never)` (the default
     `Unfocused` filter never delivers - the foreground input owner is
@@ -926,7 +945,7 @@ npm install && npm run test:web
     capture streams the whole gesture to the origin webview - and MUST
     NOT be bridged: Windows synthesizes mouse input from touch (a
     cursor trailing the finger, spurious button transitions), so
-    bridging a touch drag double-drives it. The example gates every
+    bridging a touch drag double-drives it. The bridge gates every
     bridge leg on the drag's `PointerKind` (recorded by `Draggable` at
     pickup, `ctx.pointer_kind()`): bridge mouse and pen, never touch.
     Known trap unchanged: windows created hidden then shown have broken
