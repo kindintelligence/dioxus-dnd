@@ -4,15 +4,6 @@
 
 ### Added
 
-- **`PLATFORMS.md`: the platform verification log moved out of the
-  README.** The README's Platform notes had grown a full verification
-  report (rigs, commits, per-session evidence, bridge mechanics); that
-  detail now lives in `PLATFORMS.md` at the repo root, where regression
-  reports can be compared against a concrete baseline, and the README
-  keeps a per-platform status table, the wry#1639 hidden-window trap, and
-  the macOS call for testers
-  ([#20](https://github.com/kindintelligence/dioxus-dnd/issues/20)).
-  Every fact moved; none were dropped.
 - **Scheduled upstream canary CI**
   (`.github/workflows/upstream-canary.yml`): the multi-window design rides
   two cross-VirtualDom contracts that Dioxus does not document as public
@@ -447,6 +438,21 @@
 
 ### Changed
 
+- **`PLATFORMS.md`: the platform verification log moved out of the
+  README.** The README's Platform notes had grown a full verification
+  report (rigs, commits, per-session evidence, bridge mechanics); that
+  detail now lives in `PLATFORMS.md` at the repo root, where regression
+  reports can be compared against a concrete baseline, and the README
+  keeps a per-platform status table, the wry#1639 hidden-window trap, and
+  the macOS call for testers
+  ([#20](https://github.com/kindintelligence/dioxus-dnd/issues/20)).
+  Every fact moved; none were dropped.
+- **Leaner published tarball**: internal working documents (the desktop
+  reconciliation review, `docs/`) and the Playwright browser suite
+  (`package.json`, `package-lock.json`, `playwright.config.js`,
+  `tests/browser/`) no longer ship in the crate - a `cargo test` consumer
+  can never run JS specs. `PLATFORMS.md` deliberately stays in: the
+  README's platform table links to it.
 - **`FlipItem` is no longer paint-timing dependent on web.** With the
   `web` feature, the reorder glide is armed synchronously on the real DOM
   element - inverted transform, forced style flush, release with the

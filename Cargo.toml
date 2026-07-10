@@ -9,8 +9,22 @@ repository = "https://github.com/kindintelligence/dioxus-dnd"
 readme = "README.md"
 keywords = ["dioxus", "drag-and-drop", "dnd", "sortable", "ui"]
 categories = ["gui", "wasm", "web-programming"]
-# assets/ carries the README hero GIF; keep it out of the published crate.
-exclude = [".github/", "assets/"]
+# Keep repo plumbing out of the published tarball: assets/ carries the README
+# hero GIF, docs/ and the reconciliation review are internal working
+# documents, and the package.json/playwright trio plus tests/browser/ are the
+# Playwright browser suite - JS specs a `cargo test` consumer can never run.
+# PLATFORMS.md stays IN: it is small and the README's platform table links to
+# it, so excluding it would strand that link in the packaged README.
+exclude = [
+    ".github/",
+    "assets/",
+    "docs/",
+    "DESKTOP-ARCHITECTURE-RECONCILIATION-REVIEW.md",
+    "package.json",
+    "package-lock.json",
+    "playwright.config.js",
+    "tests/browser/",
+]
 
 [package.metadata.docs.rs]
 all-features = true
