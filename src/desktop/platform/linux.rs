@@ -5,15 +5,21 @@
 //! target is authoritative: X11 exposes global window geometry and a global
 //! cursor, while Wayland deliberately exposes neither. WSLg follows whichever
 //! backend Tao actually selected and has no special runtime branch.
+//!
+//! The pointer query rides a first-party x11rb connection rather than tao's
+//! re-exported xlib FFI: that re-export is not part of tao's semver contract,
+//! so a tao minor could strand this leg mid-2.x. A second client connection
+//! to the X server is ordinary (xdotool works this way) and observation-only;
+//! it never changes server state, so it cannot fight tao's own connection.
 
-use std::sync::Arc;
+use std::sync::OnceLock;
 
 use dioxus::prelude::*;
-use dioxus_desktop::tao::platform::unix::{
-    x11::{ffi, XConnection},
-    EventLoopWindowTargetExtUnix,
-};
+use dioxus_desktop::tao::platform::unix::EventLoopWindowTargetExtUnix;
 use dioxus_desktop::use_wry_event_handler;
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{ConnectionExt, KeyButMask, Window};
+use x11rb::rust_connection::RustConnection;
 
 use crate::core::{DndContext, JoinedWindow};
 
@@ -47,36 +53,42 @@ fn x11_release_action(
     }
 }
 
-fn query_x11_pointer(connection: &XConnection) -> Option<X11PointerSample> {
-    let mut root_return = 0;
-    let mut child_return = 0;
-    let mut root_x = 0;
-    let mut root_y = 0;
-    let mut window_x = 0;
-    let mut window_y = 0;
-    let mut mask = 0;
+/// The sampling connection plus the root window it queries. One per process:
+/// every window's dead-space leg samples the same global pointer, and an X
+/// connection per window would multiply file descriptors for no information.
+struct X11Pointer {
+    connection: RustConnection,
+    root: Window,
+}
 
-    // SAFETY: `XConnection` owns this live display for the duration of the
-    // call, and `XDefaultRootWindow` returns its root window id.
-    let root = unsafe { (connection.xlib.XDefaultRootWindow)(connection.display) };
-    // SAFETY: every out-pointer refers to a live stack slot of the exact type
-    // required by Xlib. A false result is treated as a transient sample miss.
-    let queried = unsafe {
-        (connection.xlib.XQueryPointer)(
-            connection.display,
-            root,
-            &mut root_return,
-            &mut child_return,
-            &mut root_x,
-            &mut root_y,
-            &mut window_x,
-            &mut window_y,
-            &mut mask,
-        )
-    };
-    (queried != ffi::False).then_some(X11PointerSample {
-        global: crate::core::Point::new(f64::from(root_x), f64::from(root_y)),
-        primary_pressed: mask & ffi::Button1Mask != 0,
+/// Connect once, verdict cached for the process lifetime. `None` means the
+/// display could not be opened at all (no X server, refused auth) - the leg
+/// then simply never engages, exactly as when tao had no X connection to
+/// lend. It is NOT a backend verdict: capability selection stays with tao's
+/// `is_wayland()`, and callers only reach here after that gate said X11.
+fn x11_pointer() -> Option<&'static X11Pointer> {
+    static POINTER: OnceLock<Option<X11Pointer>> = OnceLock::new();
+    POINTER
+        .get_or_init(|| {
+            let (connection, screen) = x11rb::connect(None).ok()?;
+            let root = connection.setup().roots.get(screen)?.root;
+            Some(X11Pointer { connection, root })
+        })
+        .as_ref()
+}
+
+fn query_x11_pointer(pointer: &X11Pointer) -> Option<X11PointerSample> {
+    // A failed request or reply is a transient sample miss, retried by the
+    // caller's loop - never a reason to reclassify the backend.
+    let reply = pointer
+        .connection
+        .query_pointer(pointer.root)
+        .ok()?
+        .reply()
+        .ok()?;
+    Some(X11PointerSample {
+        global: crate::core::Point::new(f64::from(reply.root_x), f64::from(reply.root_y)),
+        primary_pressed: u16::from(reply.mask) & u16::from(KeyButMask::BUTTON1) != 0,
     })
 }
 
@@ -115,18 +127,20 @@ fn use_x11_dead_space_release<T: Clone + PartialEq + 'static>(
     ctx: DndContext<T>,
     capability: Signal<GlobalCapability>,
 ) {
-    let mut connection = use_signal(|| None::<Arc<XConnection>>);
+    let mut x11_confirmed = use_signal(|| false);
     let mut pressed_generation = use_signal(|| None::<BridgeGeneration>);
     use_wry_event_handler(move |_, target| {
-        if connection.peek().is_none() && !target.is_wayland() {
-            // This window's first X11 target owns its immutable connection;
-            // Wayland never opens or stores an X display.
-            connection.set(target.xlib_xconnection());
+        if !*x11_confirmed.peek() && !target.is_wayland() {
+            // Tao's live event-loop target owns the backend verdict; only a
+            // confirmed X11 session may ever open the sampling connection.
+            // Under XWayland an X connect would succeed anyway, so gating on
+            // the connect instead of on tao would misclassify Wayland.
+            x11_confirmed.set(true);
         }
     });
 
     let _release_observer = use_resource(move || {
-        let connection = connection();
+        let connection = x11_confirmed().then(x11_pointer).flatten();
         let generation = subscribed_generation(joined);
         let should_watch = generation.is_some_and(|generation| {
             fallback::poller_owns_generation(joined, &ctx, capability, generation)
@@ -136,7 +150,7 @@ fn use_x11_dead_space_release<T: Clone + PartialEq + 'static>(
         // the initiating press without a first 30 ms blind interval; a
         // transient miss is retried by the async loop.
         let first_sample = if should_watch {
-            connection.as_deref().and_then(query_x11_pointer)
+            connection.and_then(query_x11_pointer)
         } else {
             None
         };
@@ -158,7 +172,7 @@ fn use_x11_dead_space_release<T: Clone + PartialEq + 'static>(
                         if !fallback::poller_owns_generation(joined, &ctx, capability, generation) {
                             break;
                         }
-                        let Some(sample) = query_x11_pointer(&connection) else {
+                        let Some(sample) = query_x11_pointer(connection) else {
                             continue;
                         };
                         sample

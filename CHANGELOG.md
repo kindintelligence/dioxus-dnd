@@ -438,6 +438,15 @@
 
 ### Changed
 
+- **The X11 dead-space release leg no longer rides tao's xlib FFI
+  re-export** (`desktop` feature, Linux only): the root pointer + button
+  mask query now goes through a first-party `x11rb` connection (pure
+  Rust, no extensions, no `unsafe`). tao's `platform::unix::x11::ffi`
+  re-export is not part of its semver contract, so a tao minor could have
+  stranded the leg mid-2.x. Behavior is unchanged: a failed sample is a
+  transient miss, and the backend verdict stays with tao's
+  `is_wayland()` - an XWayland session that would accept an X connection
+  still never engages the leg.
 - **`PLATFORMS.md`: the platform verification log moved out of the
   README.** The README's Platform notes had grown a full verification
   report (rigs, commits, per-session evidence, bridge mechanics); that

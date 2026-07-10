@@ -1069,6 +1069,7 @@ dependencies = [
  "tokio",
  "unic-langid",
  "web-sys",
+ "x11rb",
 ]
 
 [[package]]
