@@ -410,7 +410,15 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 // a pen tap during a mouse drag) must not steal it -
                 // (Dragging, Down) is deliberately inert.
                 if !matches!(*phase.peek(), GesturePhase::Dragging { .. }) {
-                    if let Some(id) = *session.peek() {
+                    // Copy out of the peek BEFORE finishing: an `if let` on
+                    // `*session.peek()` keeps the read guard alive through
+                    // the body (edition 2021 scrutinee temporaries), and
+                    // `finish_pointer_source` synchronously runs the
+                    // completion callback, whose `session.set(None)` then
+                    // aborts the process from an unwind-proof Win32 callback
+                    // (AlreadyBorrowed; observed live on Windows 11).
+                    let stale = *session.peek();
+                    if let Some(id) = stale {
                         finish_pointer_source(membership, &mut dnd, id, false);
                     }
                 }
@@ -548,14 +556,20 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     platform::release_pointer(&n, evt.pointer_id());
                 }
                 if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
-                    if let Some(id) = *session.peek() {
+                    // Copied out of the peek before finishing - same borrow
+                    // discipline as the pointerdown retire above.
+                    let cancelled = *session.peek();
+                    if let Some(id) = cancelled {
                         finish_pointer_source(membership, &mut dnd, id, false);
                     }
                 }
             },
             onlostpointercapture: move |_| {
                 if step(GestureEvent::Cancel, threshold) == GestureEffect::Abort {
-                    if let Some(id) = *session.peek() {
+                    // Copied out of the peek before finishing - same borrow
+                    // discipline as the pointerdown retire above.
+                    let lost = *session.peek();
+                    if let Some(id) = lost {
                         finish_pointer_source(membership, &mut dnd, id, false);
                     }
                 }

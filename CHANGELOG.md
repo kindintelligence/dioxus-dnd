@@ -113,6 +113,21 @@
   board-first close-order regression - with clean logs (no ownership
   warnings, panics or fatal callbacks) and clean exits. Multi-DPI remains
   unexercised there (single-monitor rig).
+- **A press, cancel, or lost capture racing a source's completion no
+  longer aborts the process.** `Draggable`'s stale-session retire (on
+  pointerdown), pointer-cancel, and lost-capture paths all guarded on
+  `if let Some(id) = *session.peek()` and called
+  `finish_pointer_source` inside the body. Edition-2021 scrutinee
+  temporaries keep that read guard alive through the body, and the
+  finish synchronously runs the source-completion callback, whose
+  `session.set(None)` then hits `AlreadyBorrowed` - a panic that lands
+  in an unwind-proof Win32 callback and kills the process
+  (`0xc0000409`). Observed live on Windows 11 under scripted rapid
+  input while filming the showcase; all three sites now copy the
+  session id out of the peek before finishing. Verified by a
+  drop-chased-by-rapid-press hammer across windows (six rounds, clean
+  log); the equivalent `SortableList`/`SortableGrid` handlers already
+  kept their state changes outside the guarded body and are unaffected.
 - **Windows drops now honor modifiers changed outside the origin
   viewport** (Ctrl=Copy, Alt=Link). Nothing fed the shared world once
   the pointer left the origin: tao never fires `ModifiersChanged` there
