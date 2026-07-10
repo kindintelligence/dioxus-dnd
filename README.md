@@ -694,11 +694,12 @@ DropZone::<Node> {
 genuinely coexist - tasks and teammates, say - and one region should accept
 drops from both. That's `BridgeDropZone<A, B>`: one element holding the
 *same* `ZoneId` in both worlds' registries (ids are process-global,
-registries per-type), sharing its `mounted`/`rect` signals. Each world's
-machinery (hit-testing, keyboard navigation) finds the zone on its own,
-acceptance is per-world (`accepts_a`/`accepts_b`), and each drop arrives
-through its own typed callback (`on_drop_a`/`on_drop_b`) - no downcasts, no
-shared erased channel:
+registries per-type). Each provider owns a plain geometry copy; the element
+fans one mount and measurement into both registries. Each world's machinery
+(hit-testing, keyboard navigation) finds the zone on its own, acceptance is
+per-world (`accepts_a`/`accepts_b`), and each drop arrives through its own
+typed callback (`on_drop_a`/`on_drop_b`) - no downcasts, no shared erased
+channel:
 
 ```rust,ignore
 BridgeDropZone::<Task, Person> {
@@ -724,8 +725,10 @@ dioxus_dnd::bridge_drop_zone!(pub StandupZone {
 
 (Rust has no variadic generics, so the component is generated per concrete
 type list - which is also why `BridgeDropZone<A, B>` stops at two.) Under
-both sits `use_bridge_world`, public too: call it once per world with a
-shared id and `mounted`/`rect` signals to build something custom.
+both sits `use_bridge_world`, public too: create one `BridgeGeometry`, call
+the hook once per world with that geometry and a shared id, then fan the
+element's mount and measurement through the geometry to build something
+custom.
 
 ## Virtualized lists
 

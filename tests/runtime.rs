@@ -98,18 +98,34 @@ fn registry_register_replace_unregister_and_labels() {
             label: Some(label.to_string()),
             on_drop: Callback::new(|_| {}),
             accepts: None,
-            mounted: Signal::new(None),
-            rect: Signal::new(None),
+            mounted: None,
+            rect: None,
         };
 
-        reg.register(record(1, "one"));
+        let first_registration = reg.register(record(1, "one"));
         reg.register(record(2, "two"));
         assert_eq!(reg.get(ZoneId(1)).unwrap().label.as_deref(), Some("one"));
 
+        reg.set_rect_if_present(first_registration, Rect::new(0.0, 0.0, 100.0, 40.0));
+        assert_eq!(
+            reg.cached_rect(ZoneId(1)),
+            Some(Rect::new(0.0, 0.0, 100.0, 40.0))
+        );
+
         // re-registering the same id replaces, not duplicates
-        reg.register(record(1, "uno"));
+        let replacement = reg.register(record(1, "uno"));
         assert_eq!(reg.acceptable(&0).len(), 2);
         assert_eq!(reg.get(ZoneId(1)).unwrap().label.as_deref(), Some("uno"));
+
+        // A measurement captured by the first registration cannot land in
+        // its same-id replacement. The current generation still can.
+        reg.set_rect_if_present(first_registration, Rect::new(0.0, 0.0, 999.0, 999.0));
+        assert_eq!(reg.cached_rect(ZoneId(1)), None);
+        reg.set_rect_if_present(replacement, Rect::new(5.0, 6.0, 70.0, 30.0));
+        assert_eq!(
+            reg.cached_rect(ZoneId(1)),
+            Some(Rect::new(5.0, 6.0, 70.0, 30.0))
+        );
 
         // sync_label updates in place, and is a no-op for unknown ids
         reg.sync_label(ZoneId(2), Some("zwei".into()));
@@ -120,6 +136,11 @@ fn registry_register_replace_unregister_and_labels() {
         reg.unregister(ZoneId(1));
         assert!(reg.get(ZoneId(1)).is_none());
         assert_eq!(reg.acceptable(&0).len(), 1);
+        reg.set_rect_if_present(replacement, Rect::new(1.0, 2.0, 3.0, 4.0));
+        assert!(
+            reg.get(ZoneId(1)).is_none(),
+            "a stale write must not resurrect"
+        );
 
         rsx! { div {} }
     }
@@ -139,8 +160,8 @@ fn registry_spatial_step_accepts_and_hit_test() {
                 label: None,
                 on_drop: Callback::new(|_| {}),
                 accepts,
-                mounted: Signal::new(None),
-                rect: Signal::new(rect),
+                mounted: None,
+                rect,
             };
 
         // Registered in one order, laid out in another:
@@ -383,8 +404,8 @@ fn nested_zone_traversal() {
             label: None,
             on_drop: Callback::new(|_| {}),
             accepts: None,
-            mounted: Signal::new(None),
-            rect: Signal::new(Some(Rect::new(0.0, y, 100.0, 40.0))),
+            mounted: None,
+            rect: Some(Rect::new(0.0, y, 100.0, 40.0)),
         };
 
         // Two root boards; the first contains two columns.
@@ -1865,8 +1886,8 @@ fn rtl_spatial_order_follows_reading_direction() {
             label: None,
             on_drop: Callback::new(|_| {}),
             accepts: None,
-            mounted: Signal::new(None),
-            rect: Signal::new(Some(Rect::new(x, y, 40.0, 40.0))),
+            mounted: None,
+            rect: Some(Rect::new(x, y, 40.0, 40.0)),
         };
         // One row of three zones, then one zone on a second row.
         reg.register(record(1, 0.0, 0.0));
@@ -1952,9 +1973,9 @@ fn autoscroll_anchors_the_refresh_channel_for_sortables() {
 //
 // The documented cross-type pattern (README "Mixing payload types", the
 // gallery's Standup page): zone ids are process-global while registries are
-// per-type, so one element registers the *same* ZoneId in two registries,
-// sharing its mounted/rect signals. These tests pin the crate invariants
-// that pattern depends on.
+// per-type, so one element registers the *same* ZoneId in two registries
+// and fans one DOM measurement into both provider-owned geometry records.
+// These tests pin the crate invariants that pattern depends on.
 
 #[derive(Clone, Props)]
 struct BridgeProps {
@@ -1976,8 +1997,6 @@ fn bridge_app(props: BridgeProps) -> Element {
     let mut reg_b = use_zone_registry::<u32>();
 
     let id = ZoneId(500);
-    let mounted = use_signal(|| None::<std::rc::Rc<dioxus::html::MountedData>>);
-    let rect = use_signal(|| None::<Rect>);
     let ticket_drops = props.ticket_drops.clone();
     let person_drops = props.person_drops.clone();
     use_hook(move || {
@@ -1989,8 +2008,8 @@ fn bridge_app(props: BridgeProps) -> Element {
                 ticket_drops.lock().unwrap().push(o.payload)
             }),
             accepts: None,
-            mounted,
-            rect,
+            mounted: None,
+            rect: None,
         });
         reg_b.register(ZoneRecord {
             id,
@@ -2000,8 +2019,8 @@ fn bridge_app(props: BridgeProps) -> Element {
                 person_drops.lock().unwrap().push(o.payload)
             }),
             accepts: None,
-            mounted,
-            rect,
+            mounted: None,
+            rect: None,
         });
     });
 
@@ -2013,19 +2032,19 @@ fn bridge_app(props: BridgeProps) -> Element {
 #[component]
 fn BridgeProbe() -> Element {
     let mut reg_a = use_zone_registry::<&'static str>();
-    let reg_b = use_zone_registry::<u32>();
+    let mut reg_b = use_zone_registry::<u32>();
     let id = ZoneId(500);
 
     // The same id resolves in both worlds.
     assert!(reg_a.contains(id) && reg_b.contains(id));
 
-    // The rect signal is one shared handle: measuring through one world's
-    // record is immediately visible through the other's, and both worlds'
-    // hit-testing find the same box.
-    let mut rect = reg_a.get(id).expect("registered in world A").rect;
-    rect.set(Some(Rect::new(0.0, 0.0, 100.0, 50.0)));
+    // The element's mount callback fans one measurement into both worlds;
+    // each registry owns its copy and both hit-test the same box.
+    let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
+    reg_a.set_rect(id, rect);
+    reg_b.set_rect(id, rect);
     assert_eq!(
-        *reg_b.get(id).expect("registered in world B").rect.peek(),
+        reg_b.cached_rect(id),
         Some(Rect::new(0.0, 0.0, 100.0, 50.0)),
     );
     let p = Point::new(10.0, 10.0);
@@ -2241,9 +2260,9 @@ fn tri_bridge_app() -> Element {
 
 #[component]
 fn TriBridgeProbe() -> Element {
-    let reg_a = use_zone_registry::<&'static str>();
-    let reg_b = use_zone_registry::<u32>();
-    let reg_c = use_zone_registry::<i8>();
+    let mut reg_a = use_zone_registry::<&'static str>();
+    let mut reg_b = use_zone_registry::<u32>();
+    let mut reg_c = use_zone_registry::<i8>();
     let id = ZoneId(700);
 
     // One component, registered in all three worlds, label synced to each.
@@ -2262,10 +2281,12 @@ fn TriBridgeProbe() -> Element {
     assert!(!rec_a.accepts_payload(&"done"));
     assert!(reg_c.get(id).unwrap().accepts_payload(&-3i8));
 
-    // The rect signal is one shared handle across all three registries:
-    // measuring through one world is visible to every world's hit-testing.
-    let mut rect = reg_b.get(id).unwrap().rect;
-    rect.set(Some(Rect::new(0.0, 0.0, 80.0, 40.0)));
+    // The element's mount callback fans one measurement into all three
+    // provider-owned records.
+    let rect = Rect::new(0.0, 0.0, 80.0, 40.0);
+    reg_a.set_rect(id, rect);
+    reg_b.set_rect(id, rect);
+    reg_c.set_rect(id, rect);
     let p = Point::new(5.0, 5.0);
     assert_eq!(reg_a.hit_test(p), Some(id));
     assert_eq!(reg_b.hit_test(p), Some(id));
@@ -2535,14 +2556,12 @@ fn debug_overlay_draws_measured_zones_with_live_state() {
 
     #[component]
     fn DebugProbe() -> Element {
-        let reg = use_zone_registry::<u32>();
+        let mut reg = use_zone_registry::<u32>();
         let mut dnd = use_dnd::<u32>();
         use_hook(move || {
             // Measure two zones; leave 63 rect-less.
-            let mut rect = reg.get(ZoneId(61)).expect("registered").rect;
-            rect.set(Some(Rect::new(0.0, 0.0, 100.0, 40.0)));
-            let mut rect = reg.get(ZoneId(62)).expect("registered").rect;
-            rect.set(Some(Rect::new(0.0, 60.0, 100.0, 40.0)));
+            reg.set_rect(ZoneId(61), Rect::new(0.0, 0.0, 100.0, 40.0));
+            reg.set_rect(ZoneId(62), Rect::new(0.0, 60.0, 100.0, 40.0));
             // A drag in flight, hovering Inbox.
             dnd.start(
                 5,
@@ -2728,7 +2747,7 @@ fn drop_zone_edge_prop_enriches_pointer_outcomes() {
 
     #[component]
     fn EdgeProbe() -> Element {
-        let reg = use_zone_registry::<u32>();
+        let mut reg = use_zone_registry::<u32>();
         let outcome = |to: ZoneId, client: Point, mode: DragMode| DropOutcome {
             payload: 1u32,
             from: None,
@@ -2742,8 +2761,7 @@ fn drop_zone_edge_prop_enriches_pointer_outcomes() {
         };
 
         let tracked = reg.get(ZoneId(41)).expect("tracked zone registered");
-        let mut rect = tracked.rect;
-        rect.set(Some(Rect::new(0.0, 0.0, 300.0, 40.0)));
+        reg.set_rect(ZoneId(41), Rect::new(0.0, 0.0, 300.0, 40.0));
         // Pointer drop low in the row: nearest allowed edge is Bottom.
         tracked.on_drop.call(outcome(
             ZoneId(41),
@@ -2759,8 +2777,7 @@ fn drop_zone_edge_prop_enriches_pointer_outcomes() {
 
         // A zone without the prop never fills it in.
         let plain = reg.get(ZoneId(42)).expect("plain zone registered");
-        let mut rect = plain.rect;
-        rect.set(Some(Rect::new(0.0, 100.0, 300.0, 40.0)));
+        reg.set_rect(ZoneId(42), Rect::new(0.0, 100.0, 300.0, 40.0));
         plain.on_drop.call(outcome(
             ZoneId(42),
             Point::new(150.0, 131.0),

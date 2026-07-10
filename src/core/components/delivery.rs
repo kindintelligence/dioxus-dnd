@@ -38,7 +38,8 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     if !record.accepts_payload(&p) {
         return false;
     }
-    let origin = record.cached_rect().map(|r| r.origin()).unwrap_or_default();
+    let target_rect = registry.cached_rect(target);
+    let origin = target_rect.map(|r| r.origin()).unwrap_or_default();
     let mode = dnd.mode();
     let grab = dnd.grab();
     // A settle-enabled overlay glides the ghost into the target zone:
@@ -46,7 +47,7 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     // readable while it animates. Pointer drops only - a keyboard drag
     // renders no positioned ghost to glide.
     let settle_to = match settle_flag {
-        Some(f) if mode == DragMode::Pointer && *f.armed.peek() => record.cached_rect(),
+        Some(f) if mode == DragMode::Pointer && *f.armed.peek() => target_rect,
         _ => None,
     };
     let taken = match settle_to {

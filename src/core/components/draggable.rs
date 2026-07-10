@@ -550,7 +550,8 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                     };
                     if let Some(record) = registry.get(target) {
                         if let Some((p, from)) = dnd.take() {
-                            let (client, element) = keyboard_drop_points(record.cached_rect());
+                            let (client, element) =
+                                keyboard_drop_points(registry.cached_rect(target));
                             // The drop will re-mount the moved item and the
                             // browser will dump focus on <body> when this
                             // element unmounts; the landing Draggable claims

@@ -1,11 +1,12 @@
 //! Hooks for providing and consuming the drag context.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
-use super::registry::{RectRefresh, ZoneRecord, ZoneRegistry};
+use super::registry::{RectRefresh, ZoneRecord, ZoneRegistration, ZoneRegistry};
 use super::state::{DndContext, DragState};
 use super::types::{DragId, DropOutcome, Point, Rect, ZoneId};
 use super::world::{DndWorld, JoinedWindow, WindowGeometry, WorldMembership};
@@ -163,6 +164,71 @@ pub fn use_zone_id() -> ZoneId {
     use_hook(ZoneId::auto)
 }
 
+/// A plain, component-owned fan-out for one bridge element's geometry.
+///
+/// Create one with [`Default`] and pass a clone to every [`use_bridge_world`]
+/// call for the element. Its mount and rect methods copy one DOM observation
+/// into every joined provider-owned registry without creating Dioxus signals
+/// or callbacks in the child scope.
+#[derive(Clone, Default)]
+pub struct BridgeGeometry {
+    writers: Rc<RefCell<Vec<BridgeGeometryWriter>>>,
+}
+
+#[derive(Clone)]
+struct BridgeGeometryWriter {
+    mounted: Rc<dyn Fn(Rc<MountedData>)>,
+    rect: Rc<dyn Fn(Rect)>,
+}
+
+impl std::fmt::Debug for BridgeGeometry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BridgeGeometry")
+            .field("worlds", &self.writers.borrow().len())
+            .finish()
+    }
+}
+
+impl PartialEq for BridgeGeometry {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.writers, &other.writers)
+    }
+}
+
+impl BridgeGeometry {
+    /// Copy the bridge element's mounted handle into every joined registry.
+    pub fn set_mounted(&self, mounted: &Rc<MountedData>) {
+        for writer in self.writers.borrow().iter() {
+            (writer.mounted)(mounted.clone());
+        }
+    }
+
+    /// Copy a completed bridge measurement into every registration that is
+    /// still current.
+    pub fn set_rect_if_present(&self, rect: Rect) {
+        for writer in self.writers.borrow().iter() {
+            (writer.rect)(rect);
+        }
+    }
+
+    fn register<T: Clone + 'static>(
+        &self,
+        registry: ZoneRegistry<T>,
+        registration: ZoneRegistration,
+    ) {
+        self.writers.borrow_mut().push(BridgeGeometryWriter {
+            mounted: Rc::new(move |mounted| {
+                let mut registry = registry;
+                registry.set_mounted(registration, mounted);
+            }),
+            rect: Rc::new(move |rect| {
+                let mut registry = registry;
+                registry.set_rect_if_present(registration, rect);
+            }),
+        });
+    }
+}
+
 /// Live, type-erased view of one payload world at a bridge zone, as returned
 /// by [`use_bridge_world`] - so callers can OR any number of worlds together
 /// without naming their `T`s again.
@@ -174,17 +240,14 @@ pub struct BridgeWorld {
     pub over: bool,
 }
 
-/// Register `zone_id` as a drop target in `T`'s payload world - sharing the
-/// caller's `mounted`/`rect` signals - and report that world's live state
-/// this render.
+/// Register `zone_id` as a drop target in `T`'s payload world and report
+/// that world's live state this render.
 ///
 /// This is the building block behind `BridgeDropZone` and the
 /// [`crate::bridge_drop_zone!`] macro: call it once per coexisting provider
-/// type with the same id and signals, and one element becomes a target in
-/// every world at once. Signals are Copy handles, so all records genuinely
-/// share one mounted/rect pair (any world's `refresh_rects()` re-measures
-/// the one rectangle every registry sees), while each drop still arrives
-/// through its own typed callback - no downcasts, no shared erased channel.
+/// type with the same id and [`BridgeGeometry`]. Every registry owns its own
+/// plain geometry copy, while each drop still arrives through its own typed
+/// callback - no downcasts, no shared erased channel.
 ///
 /// # Panics
 /// Panics if no ancestor provided a `DndProvider<T>`.
@@ -194,24 +257,26 @@ pub fn use_bridge_world<T: Clone + PartialEq + 'static>(
     label: Option<String>,
     accepts: Option<Callback<T, bool>>,
     on_drop: EventHandler<DropOutcome<T>>,
-    mounted: Signal<Option<Rc<MountedData>>>,
-    rect: Signal<Option<Rect>>,
+    geometry: BridgeGeometry,
 ) -> BridgeWorld {
     let dnd = use_dnd::<T>();
     let mut reg = use_zone_registry::<T>();
-    use_hook(|| {
+    let registration = use_hook(|| {
         reg.register(ZoneRecord {
             id: zone_id,
             parent,
             label: label.clone(),
             on_drop: Callback::new(move |o| on_drop.call(o)),
             accepts,
-            mounted,
-            rect,
-        });
+            mounted: None,
+            rect: None,
+        })
     });
     use_drop(move || reg.unregister(zone_id));
     reg.sync_label(zone_id, label);
+    use_hook(move || {
+        geometry.register(reg, registration);
+    });
 
     let acceptable = match dnd.payload() {
         Some(p) => accepts.map(|cb| cb.call(p)).unwrap_or(true),

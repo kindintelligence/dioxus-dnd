@@ -25,7 +25,6 @@
 //! ```
 
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
@@ -184,8 +183,6 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     let mut registry = use_zone_registry::<BoardPayload<T>>();
     let zone_id = use_zone_id();
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None);
     // The enclosing column's acceptance filter (WIP limits), inherited via
     // context so a precise-insert honors the same limit as an append. The
     // `Callback` is a stable handle whose closure reads live state at call
@@ -226,16 +223,16 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
         });
     });
     let registered_label = slot_label.clone();
-    use_hook(move || {
+    let registration = use_hook(move || {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
             label: registered_label.clone(),
             on_drop: registered_drop,
             accepts: Some(registered_accepts),
-            mounted,
-            rect,
-        });
+            mounted: None,
+            rect: None,
+        })
     });
     use_drop(move || {
         registry.unregister(zone_id);
@@ -250,8 +247,8 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
             "data-active": if acceptable() { "true" },
             "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
             onmounted: move |evt: Event<MountedData>| {
-                let mut mounted = mounted;
-                mounted.set(Some(evt.data()));
+                let mut registry = registry;
+                registry.set_mounted(registration, evt.data());
             },
             ..attributes,
             {children}

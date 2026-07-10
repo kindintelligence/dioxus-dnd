@@ -127,12 +127,13 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
     /// Panics when no zone with this id is registered.
     pub fn place(&self, dom: &VirtualDom, zone: ZoneId, rect: Rect) {
         dom.in_runtime(|| {
-            let record = self
-                .registry
-                .get(zone)
-                .unwrap_or_else(|| panic!("place: no zone {} registered", zone.0));
-            let mut slot = record.rect;
-            slot.set(Some(rect));
+            assert!(
+                self.registry.contains(zone),
+                "place: no zone {} registered",
+                zone.0
+            );
+            let mut registry = self.registry;
+            registry.set_rect(zone, rect);
         });
     }
 
@@ -156,12 +157,14 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
             let rec = world
                 .record(window)
                 .unwrap_or_else(|| panic!("place_in: no window {} joined", window.0));
-            let record = rec
-                .registry
-                .get(zone)
-                .unwrap_or_else(|| panic!("place_in: no zone {} in window {}", zone.0, window.0));
-            let mut slot = record.rect;
-            slot.set(Some(rect));
+            assert!(
+                rec.registry.contains(zone),
+                "place_in: no zone {} in window {}",
+                zone.0,
+                window.0
+            );
+            let mut registry = rec.registry;
+            registry.set_rect(zone, rect);
         });
     }
 
@@ -248,7 +251,14 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                     });
                     let delivered = target
                         .filter(|t| {
-                            deliver_drop(rec.registry, &mut dnd, Some(rec.settle), *t, local, effect)
+                            deliver_drop(
+                                rec.registry,
+                                &mut dnd,
+                                Some(rec.settle),
+                                *t,
+                                local,
+                                effect,
+                            )
                         })
                         .is_some();
                     if !delivered {

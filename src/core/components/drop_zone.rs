@@ -7,7 +7,9 @@ use dioxus::prelude::*;
 
 use std::rc::Rc;
 
-use crate::core::hooks::{use_bridge_world, use_dnd, use_zone_id, use_zone_registry};
+use crate::core::hooks::{
+    use_bridge_world, use_dnd, use_zone_id, use_zone_registry, BridgeGeometry,
+};
 use crate::core::registry::ZoneRecord;
 use crate::core::types::{edge_of, DragMode, DropOutcome, EdgeSet, Rect, ZoneId};
 
@@ -68,13 +70,10 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     // via context, and provides itself to zones deeper down.
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
     use_context_provider(|| ParentZone(zone_id));
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None::<crate::core::types::Rect>);
-
     // Register with the zone registry so keyboard navigation and pointer
     // hit-testing can find this zone. Callbacks are stable handles, so
     // registering once per mount is enough.
-    use_hook(|| {
+    let registration = use_hook(|| {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
@@ -85,7 +84,7 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
             on_drop: Callback::new(move |mut o: DropOutcome<T>| {
                 if let Some(set) = edge {
                     if o.mode == DragMode::Pointer {
-                        if let Some(r) = *rect.peek() {
+                        if let Some(r) = registry.cached_rect(zone_id) {
                             o.edge = Some(edge_of(o.client, r, set));
                         }
                     }
@@ -93,9 +92,9 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                 on_drop.call(o)
             }),
             accepts,
-            mounted,
-            rect,
-        });
+            mounted: None,
+            rect: None,
+        })
     });
     use_drop(move || {
         registry.unregister(zone_id);
@@ -119,7 +118,7 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
         if dnd.over() != Some(zone_id) || dnd.mode() != DragMode::Pointer || !acceptable() {
             return None;
         }
-        let r = (*rect.peek())?;
+        let r = registry.cached_rect(zone_id)?;
         Some(edge_of(dnd.pointer(), r, set).as_str())
     };
 
@@ -130,9 +129,8 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
             "data-edge": live_edge(),
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();
-                let mut mounted = mounted;
-                let mut rect = rect;
-                mounted.set(Some(m.clone()));
+                let mut registry = registry;
+                registry.set_mounted(registration, m.clone());
                 // Measure immediately, not just at drag start: a zone that
                 // mounts mid-drag (a virtualized list recycling rows under
                 // the pointer) missed the pickup measurement, and the last
@@ -140,12 +138,12 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                 // must see the zone as soon as it exists.
                 spawn(async move {
                     if let Ok(r) = m.get_client_rect().await {
-                        rect.set(Some(Rect::new(
+                        registry.set_rect_if_present(registration, Rect::new(
                             r.origin.x,
                             r.origin.y,
                             r.size.width,
                             r.size.height,
-                        )));
+                        ));
                     }
                 });
             },
@@ -159,12 +157,13 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
 /// between two coexisting providers (`DndProvider<A>` and `DndProvider<B>`).
 ///
 /// Zone ids are process-global while registries are per-type, so one element
-/// can hold the *same* `ZoneId` in both registries, sharing its
-/// `mounted`/`rect` signals. Each world's machinery - hit-testing, `accepts`
-/// filtering, keyboard navigation - then finds the zone independently, and
-/// every drop arrives through its own typed callback: an `A` drag can only
-/// reach `on_drop_a`, a `B` drag only `on_drop_b`. No downcasts, no shared
-/// erased channel.
+/// can hold the *same* `ZoneId` in both registries. The element fans its
+/// mounted handle and each measurement into both provider-owned geometry
+/// records. Each world's machinery - hit-testing, `accepts` filtering,
+/// keyboard navigation - then finds the zone independently, and every drop
+/// arrives through its own typed callback: an `A` drag can only reach
+/// `on_drop_a`, a `B` drag only `on_drop_b`. No downcasts, no shared erased
+/// channel.
 ///
 /// Reach for this only when two providers genuinely coexist (say, tickets
 /// and teammates as separate features). If one drag world merely carries
@@ -204,21 +203,25 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
     // One unambiguous parent id that resolves in both registries, so nested
     // zones of either type ascend correctly.
     use_context_provider(|| ParentZone(zone_id));
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None::<crate::core::types::Rect>);
-
-    // One `use_bridge_world` per world: same id, same shared mounted/rect
-    // signals, each drop through its own typed callback.
+    let geometry = use_hook(BridgeGeometry::default);
+    // One `use_bridge_world` per world: same id and element, independent
+    // provider-owned geometry, each drop through its own typed callback.
     let a = use_bridge_world::<A>(
         zone_id,
         parent,
         label.clone(),
         accepts_a,
         on_drop_a,
-        mounted,
-        rect,
+        geometry.clone(),
     );
-    let b = use_bridge_world::<B>(zone_id, parent, label, accepts_b, on_drop_b, mounted, rect);
+    let b = use_bridge_world::<B>(
+        zone_id,
+        parent,
+        label,
+        accepts_b,
+        on_drop_b,
+        geometry.clone(),
+    );
 
     rsx! {
         div {
@@ -226,20 +229,20 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
             "data-over": if a.over || b.over { "true" },
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();
-                let mut mounted = mounted;
-                let mut rect = rect;
-                mounted.set(Some(m.clone()));
+                geometry.set_mounted(&m);
                 // Same as DropZone: measure at mount so a bridge appearing
-                // mid-drag is immediately hit-testable in both worlds (the
-                // rect signal is shared, so one measurement serves both).
+                // mid-drag is immediately hit-testable in both worlds. One
+                // DOM read fans out into both provider-owned registries.
+                let geometry = geometry.clone();
                 spawn(async move {
                     if let Ok(r) = m.get_client_rect().await {
-                        rect.set(Some(Rect::new(
+                        let rect = Rect::new(
                             r.origin.x,
                             r.origin.y,
                             r.size.width,
                             r.size.height,
-                        )));
+                        );
+                        geometry.set_rect_if_present(rect);
                     }
                 });
             },
@@ -323,11 +326,7 @@ macro_rules! bridge_drop_zone {
             // One unambiguous parent id that resolves in every registry, so
             // nested zones of any listed type ascend correctly.
             use_context_provider(|| $crate::core::ParentZone(zone_id));
-            let mounted = use_signal(|| ::std::option::Option::<
-                ::std::rc::Rc<::dioxus::html::MountedData>,
-            >::None);
-            let rect = use_signal(|| ::std::option::Option::<$crate::core::Rect>::None);
-
+            let geometry = use_hook($crate::core::BridgeGeometry::default);
             let mut active = false;
             let mut over = false;
             $(
@@ -337,8 +336,7 @@ macro_rules! bridge_drop_zone {
                     label.clone(),
                     $accepts,
                     $on_drop,
-                    mounted,
-                    rect,
+                    geometry.clone(),
                 );
                 active |= world.active;
                 over |= world.over;
@@ -350,21 +348,21 @@ macro_rules! bridge_drop_zone {
                     "data-over": if over { "true" },
                     onmounted: move |evt: Event<::dioxus::html::MountedData>| {
                         let m = evt.data();
-                        let mut mounted = mounted;
-                        let mut rect = rect;
-                        mounted.set(Some(m.clone()));
+                        geometry.set_mounted(&m);
                         // Same as DropZone: measure at mount so a bridge
                         // appearing mid-drag is immediately hit-testable in
-                        // every world (the rect signal is shared, so one
-                        // measurement serves all).
+                        // every world. One DOM read fans out into every
+                        // provider-owned registry.
+                        let geometry = geometry.clone();
                         spawn(async move {
                             if let Ok(r) = m.get_client_rect().await {
-                                rect.set(Some($crate::core::Rect::new(
+                                let rect = $crate::core::Rect::new(
                                     r.origin.x,
                                     r.origin.y,
                                     r.size.width,
                                     r.size.height,
-                                )));
+                                );
+                                geometry.set_rect_if_present(rect);
                             }
                         });
                     },

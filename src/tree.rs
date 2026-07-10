@@ -146,8 +146,6 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     // --- zone registration: makes this row a touch and keyboard target ----
     let zone_id = use_zone_id();
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None::<Rect>);
     // Registry-level filter: would *any* intent be accepted? (Hover can't
     // know the final band yet; the exact intent is re-checked at drop.)
     let registered_accepts = Callback::new(move |p: T| match *accepts_now.peek() {
@@ -172,15 +170,15 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             });
         }
     });
-    use_hook(move || {
+    let registration = use_hook(move || {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
             label: label_now.peek().clone(),
             on_drop: registered_drop,
             accepts: Some(registered_accepts),
-            mounted,
-            rect,
+            mounted: None,
+            rect: None,
         })
     });
     use_drop(move || {
@@ -194,7 +192,7 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     // fingers see the same before/into/after feedback as mice.
     let display_intent = move || -> Option<DropIntent> {
         if dnd.dragging() && dnd.mode() == DragMode::Pointer && dnd.over() == Some(zone_id) {
-            let r = (*rect.peek())?;
+            let r = registry.cached_rect(zone_id)?;
             return Some(intent_from_offset(dnd.pointer().y - r.y, row_height));
         }
         None
@@ -212,17 +210,16 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             "data-intent": intent_str(),
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();
-                let mut mounted = mounted;
-                let mut rect = rect;
-                mounted.set(Some(m.clone()));
+                let mut registry = registry;
+                registry.set_mounted(registration, m.clone());
                 spawn(async move {
                     if let Ok(r) = m.get_client_rect().await {
-                        rect.set(Some(Rect::new(
+                        registry.set_rect_if_present(registration, Rect::new(
                             r.origin.x,
                             r.origin.y,
                             r.size.width,
                             r.size.height,
-                        )));
+                        ));
                     }
                 });
             },

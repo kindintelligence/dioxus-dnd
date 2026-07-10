@@ -46,19 +46,17 @@ pub fn DndDebugOverlay<T: Clone + PartialEq + 'static>(
 
     // The core only measures rects at drag start; an inspector wants
     // outlines while idle. Re-measure whenever the zone set changes or a
-    // zone's DOM handle arrives (both read here, subscribing this effect);
-    // the rect writes this triggers are *not* read here, so no loop.
+    // zone's DOM handle arrives. The registry exposes a separate revision
+    // for those events so the rect writes this triggers cannot loop.
     use_effect(move || {
-        for zone in registry.records() {
-            let _ = zone.mounted.read();
-        }
+        registry.track_mounts();
         registry.refresh_rects();
     });
 
     let payload = dnd.payload();
     let over = dnd.over();
     let records = registry.records();
-    let unmeasured = records.iter().filter(|z| z.rect.read().is_none()).count();
+    let unmeasured = records.iter().filter(|z| z.rect.is_none()).count();
     let status = match (dnd.dragging(), over) {
         (false, _) => format!("{} zones ({unmeasured} unmeasured) - idle", records.len()),
         (true, Some(z)) => format!("dragging - over zone {}", z.0),
@@ -73,7 +71,7 @@ pub fn DndDebugOverlay<T: Clone + PartialEq + 'static>(
             for record in records {
                 {
                     let id = record.id;
-                    let rect = (record.rect)();
+                    let rect = record.cached_rect();
                     // Stable per-id tint; the multiplier scatters neighbors
                     // around the wheel.
                     let hue = (id.0.wrapping_mul(47)) % 360;

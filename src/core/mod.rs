@@ -19,14 +19,14 @@ pub use components::{
 };
 pub use hooks::{
     client_point, element_point, use_bridge_world, use_dnd, use_dnd_provider, use_rect_refresh,
-    use_zone_id, use_zone_registry, BridgeWorld,
+    use_zone_id, use_zone_registry, BridgeGeometry, BridgeWorld,
 };
 pub use machine::{
     transition, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion,
 };
 pub use model::{apply_clone_or_move, apply_list_clone_or_move};
 pub use modifiers::{apply_modifiers, DragModifier, ModifierCtx};
-pub use registry::{RectRefresh, ZoneRecord, ZoneRegistry};
+pub use registry::{RectRefresh, ZoneRecord, ZoneRegistration, ZoneRegistry};
 pub use state::{DndContext, DragState};
 pub use strings::{use_dnd_strings, DndStrings};
 pub use types::{

@@ -215,7 +215,7 @@ fn MoodNotes(notes: Signal<Vec<Note>>) -> Element {
             && dnd.mode() == DragMode::Pointer
             && dnd.payload().map(|p| p.id) == Some(note.id);
         if in_flight {
-            if let Some(rect) = registry.get(BOARD).and_then(|r| *r.rect.peek()) {
+            if let Some(rect) = registry.cached_rect(BOARD) {
                 let pointer = client_to_canvas(dnd.pointer(), rect);
                 return canvas_position(pointer, dnd.grab(), None, Some(BOUNDS));
             }
