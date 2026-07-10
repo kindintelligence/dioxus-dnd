@@ -122,6 +122,8 @@ pub const STYLE: &str = r#"
     /* ---- widget cards ------------------------------------------------ */
     .slot { cursor: grab; }
     .slot:active { cursor: grabbing; }
+    /* The ghost is the live one; its source dims until the drop resolves. */
+    .slot[data-dragging] .widget { opacity: 0.3; filter: saturate(0.4); }
     .widget {
         --accent: var(--teal);
         position: relative;

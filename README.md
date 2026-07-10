@@ -8,6 +8,15 @@
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
 [![Tests](https://img.shields.io/badge/tests-156%20passing-brightgreen.svg)](CHANGELOG.md)
 
+![Two desktop windows sharing one live drag world: a streaming telemetry chart dragged from Mission Control into a satellite window, still streaming inside the drag ghost mid-flight](https://raw.githubusercontent.com/kindintelligence/dioxus-dnd/development/assets/showcase.gif)
+
+**The chart never stops streaming - even inside the drag ghost, mid-flight
+between windows.** Multi-window desktop drags carry live Rust values: the
+payload above holds a live `Signal` handle, something no serialized OS drag
+protocol could move. Ctrl-drop clones a running widget; windows close in any
+order mid-drag. That's [`examples/desktop-showcase/`](examples/desktop-showcase/),
+built entirely on the public API.
+
 **Pick it up. Put it anywhere.** Modular, accessible drag and drop for
 [Dioxus](https://dioxuslabs.com): one small core, one module per drop
 pattern, use only what you need. Keyboard accessible by default, touch-ready

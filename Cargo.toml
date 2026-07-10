@@ -9,7 +9,8 @@ repository = "https://github.com/kindintelligence/dioxus-dnd"
 readme = "README.md"
 keywords = ["dioxus", "drag-and-drop", "dnd", "sortable", "ui"]
 categories = ["gui", "wasm", "web-programming"]
-exclude = [".github/"]
+# assets/ carries the README hero GIF; keep it out of the published crate.
+exclude = [".github/", "assets/"]
 
 [package.metadata.docs.rs]
 all-features = true
