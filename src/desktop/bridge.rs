@@ -120,14 +120,13 @@ fn use_shared_window_events<T: Clone + PartialEq + 'static>(
             return;
         };
         match event {
-            WindowEvent::ModifiersChanged(modifiers) => {
+            WindowEvent::ModifiersChanged(modifiers)
                 // The live current, non-captured generation owns modifier
                 // state; a late idle/touch/replaced event is inert.
                 if current_bridged_generation(joined, &ctx).is_some()
-                    && joined.world.record(joined.key).is_some()
-                {
-                    joined.world.update_modifiers(map_modifiers(*modifiers));
-                }
+                    && joined.world.record(joined.key).is_some() =>
+            {
+                joined.world.update_modifiers(map_modifiers(*modifiers));
             }
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
                 if current_generation(joined).is_some()

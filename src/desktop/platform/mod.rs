@@ -15,6 +15,10 @@ use dioxus::prelude::*;
 
 use crate::core::{DndContext, JoinedWindow};
 
+// Like `windows` below, `fallback` stays compiled on every desktop target
+// so each toolchain type-checks the shared legs; only the Linux and macOS
+// policies install them, so elsewhere the module is intentionally uncalled.
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 mod fallback;
 mod windows;
 
@@ -33,6 +37,9 @@ pub(super) enum GlobalCapability {
     #[default]
     Unknown,
     Available,
+    // Only the Linux (Wayland) and unsupported-target policies report
+    // Unavailable; Windows and macOS never construct it.
+    #[cfg_attr(any(target_os = "windows", target_os = "macos"), allow(dead_code))]
     Unavailable,
 }
 
