@@ -7,6 +7,9 @@ use dioxus::prelude::*;
 
 use crate::core::types::Point;
 
+// Identity/order freshness only: Relaxed is sufficient because these counters
+// carry no synchronization. Correctness assumes these process-lifetime u64
+// counters never wrap; do not narrow them.
 static NEXT_WINDOW_KEY: AtomicU64 = AtomicU64::new(1);
 /// Focus stamps start at 1 so a never-focused window's 0 always loses.
 static NEXT_FOCUS_STAMP: AtomicU64 = AtomicU64::new(1);

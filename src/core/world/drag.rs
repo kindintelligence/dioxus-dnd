@@ -10,6 +10,9 @@ use crate::core::types::{DragSessionId, Point};
 use super::geometry::WindowKey;
 use super::state::{DndWorld, WindowRecord, ZoneLocation};
 
+// Identity freshness only: Relaxed is sufficient because the counter carries
+// no synchronization. Correctness assumes this process-lifetime u64 never
+// wraps; do not narrow it.
 static NEXT_WORLD_DRAG_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -241,5 +244,77 @@ impl<T: Clone + 'static> DndWorld<T> {
         if over_location.peek().is_some() {
             over_location.set(None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+    use crate::core::types::{DragMode, DropEffect};
+
+    thread_local! {
+        static WORLD: RefCell<Option<DndWorld<String>>> = const { RefCell::new(None) };
+        static COMPLETION: RefCell<Option<Callback<bool>>> = const { RefCell::new(None) };
+        static REPLACEMENT_ORIGIN: RefCell<Option<WindowKey>> = const { RefCell::new(None) };
+    }
+
+    fn test_app() -> Element {
+        let world = use_hook(DndWorld::<String>::new);
+        let completion = use_callback(move |dropped: bool| {
+            assert!(dropped);
+            let replacement =
+                REPLACEMENT_ORIGIN.with_borrow(|key| key.expect("replacement origin"));
+            let mut ctx = world.context();
+            ctx.start(
+                "replacement".to_string(),
+                None,
+                Point::new(20.0, 30.0),
+                Point::default(),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            world.begin_from(replacement);
+        });
+        WORLD.with_borrow_mut(|slot| *slot = Some(world));
+        COMPLETION.with_borrow_mut(|slot| *slot = Some(completion));
+        rsx! {}
+    }
+
+    #[test]
+    fn source_completion_started_drag_owns_replacement_metadata() {
+        let mut dom = VirtualDom::new(test_app);
+        dom.rebuild_in_place();
+        let world = WORLD.with_borrow(|slot| slot.expect("test world"));
+        let completion = COMPLETION.with_borrow(|slot| slot.expect("completion callback"));
+        dom.in_runtime(|| {
+            let original = WindowKey::auto();
+            let replacement = WindowKey::auto();
+            REPLACEMENT_ORIGIN.with_borrow_mut(|key| *key = Some(replacement));
+            let mut ctx = world.context();
+            let session = ctx.start_tracked(
+                "original".to_string(),
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                completion,
+            );
+            world.begin_from(original);
+            assert_eq!(world.drag_session(), Some(session));
+
+            assert!(ctx.take().is_some());
+            assert!(world.finish_session(session, true));
+
+            assert!(ctx.dragging());
+            assert_eq!(ctx.payload().as_deref(), Some("replacement"));
+            assert_eq!(
+                world.active_drag().map(|drag| drag.origin),
+                Some(replacement)
+            );
+            assert_eq!(world.drag_session(), None);
+            world.finish_untracked(false);
+        });
     }
 }

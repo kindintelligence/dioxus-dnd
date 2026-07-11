@@ -177,8 +177,11 @@ The provider also carries a zone registry. Every mounted `DropZone` records
 its id, label, drop callback, acceptance filter and DOM handle there; that
 registry powers keyboard navigation and pointer hit-testing, and it is
 public (`use_zone_registry`) if you want to build your own interaction on
-top. The pointer gesture lifecycle itself is a formal, exhaustively tested
-state machine (`core::machine`), also public.
+top. On overlaps, hover geometry names the last record in registry order;
+release selection chooses the last acceptable record. Neither path inspects
+CSS `z-index`, stacking contexts or portal paint order; replacing a same-id
+record retains its slot. The pointer gesture lifecycle itself is a formal,
+exhaustively tested state machine (`core::machine`), also public.
 
 ## Styling (Tailwind-ready)
 
@@ -835,6 +838,12 @@ A few invariants hold the world together:
   the window that took the drop, survives the origin window closing
   mid-animation, and only that window can finish it. (Custom delivery
   code claims this with `DndWorld::claim_settle`.)
+- **Callbacks revalidate ownership.** Receiver and source callbacks may
+  synchronously begin a replacement drag. The old result commits before
+  receiver code; completion then re-reads source-session ownership and live
+  drag state before clearing metadata. Host legs separately revalidate their
+  composite generation immediately before acting. The protocol is documented in
+  [Architecture](docs/concepts/architecture.md#callback-boundaries-are-generation-boundaries).
 
 Windows may close in **any order**: the world's state is process-lived, a
 window closing mid-drag aborts a drag that started there (and merely

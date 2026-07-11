@@ -8,6 +8,9 @@ use dioxus::prelude::*;
 use super::geometry::WindowKey;
 use super::state::DndWorld;
 
+// Identity freshness only: Relaxed is sufficient because the counter carries
+// no synchronization. Correctness assumes this process-lifetime u64 never
+// wraps; do not narrow it.
 static NEXT_SETTLE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

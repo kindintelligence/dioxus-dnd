@@ -108,10 +108,11 @@ Observing state:
 
 Drops go through the *production* delivery path - acceptance filters,
 `DropOutcome` construction, closest-edge enrichment, settle routing -
-shared with `Draggable` itself, not a reimplementation. Releases mirror
-the pointer gesture: an exact hit wins; otherwise the drop snaps to the
-closest acceptable zone whose edge is within 48px (the touch forgiveness),
-else the drag cancels and `release` returns `None`.
+shared with `Draggable` itself, not a reimplementation. Releases mirror the
+pointer gesture: the last acceptable exact hit in registry order wins and
+rejecting overlaps are skipped; otherwise the drop snaps to the closest
+acceptable zone whose edge is within 48px (the touch forgiveness), else the
+drag cancels and `release` returns `None`.
 
 Not simulated: pointer capture, auto-scroll, and the re-measure that
 precedes the real snap (headless rects are wherever you placed them). The

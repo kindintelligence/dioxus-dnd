@@ -14,7 +14,9 @@ pub use drop_zone::{BridgeDropZone, DropZone, ParentZone};
 pub use overlay::{DragOverlay, SettleSlot};
 pub use provider::DndProvider;
 
-pub(crate) use delivery::{deliver_drop, DropCompletion, SettleRoute, RELEASE_RECOVERY_MOVES};
+pub(crate) use delivery::{
+    deliver_drop, resolve_release_target, DropCompletion, SettleRoute, RELEASE_RECOVERY_MOVES,
+};
 pub(crate) use overlay::overlay_style;
 pub(crate) use pointer::{primary_press, touch_style, HoldTimer};
 

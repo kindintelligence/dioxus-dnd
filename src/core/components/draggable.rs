@@ -18,7 +18,9 @@ use crate::core::{
     platform, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion,
 };
 
-use super::delivery::{deliver_drop, DropCompletion, SettleRoute, RELEASE_RECOVERY_MOVES};
+use super::delivery::{
+    deliver_drop, resolve_release_target, DropCompletion, SettleRoute, RELEASE_RECOVERY_MOVES,
+};
 use super::merge_style;
 use super::pointer::{pointer_client, primary_press, touch_style, HoldTimer};
 
@@ -318,14 +320,24 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             if let Some((rec, local)) = j.foreign_window_under(point) {
                 let mut dnd = dnd;
                 spawn(async move {
-                    let target = match rec.registry.hit_test(local) {
-                        Some(t) => Some(t),
-                        None => {
-                            rec.registry.measure_all().await;
-                            dnd.payload()
-                                .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
+                    if !dnd.is_session(id) || !j.world.is_drag_session(id) {
+                        return;
+                    }
+                    // Resolve exact cached hits through the acceptance-aware
+                    // path so a rejecting later registry record falls through.
+                    // Only a miss pays for a fresh measurement + 48px snap.
+                    let mut target = dnd
+                        .payload()
+                        .and_then(|p| resolve_release_target(rec.registry, &p, local, 0.0));
+                    if target.is_none() {
+                        rec.registry.measure_all().await;
+                        if !dnd.is_session(id) || !j.world.is_drag_session(id) {
+                            return;
                         }
-                    };
+                        target = dnd
+                            .payload()
+                            .and_then(|p| resolve_release_target(rec.registry, &p, local, 48.0));
+                    }
                     if !dnd.is_session(id) || !j.world.is_drag_session(id) {
                         return;
                     }
@@ -355,7 +367,10 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
                 return;
             }
         }
-        if let Some(target) = registry.hit_test(point) {
+        let cached_target = dnd
+            .payload()
+            .and_then(|p| resolve_release_target(registry, &p, point, 0.0));
+        if let Some(target) = cached_target {
             if deliver_to(target, point, effect) {
                 return;
             }
@@ -369,7 +384,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
             }
             let target = dnd
                 .payload()
-                .and_then(|p| registry.hit_test_closest(point, &p, 48.0));
+                .and_then(|p| resolve_release_target(registry, &p, point, 48.0));
             let dropped = match target {
                 Some(t) => deliver_to(t, point, effect),
                 None => false,

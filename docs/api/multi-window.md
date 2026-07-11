@@ -229,7 +229,7 @@ disabled they are inert.
 |---|---|
 | `begin_from(key: WindowKey)` | Mark a drag as begun from `key` and reset stale presentation state. `Draggable` calls this at pickup; call it from custom drag sources so the world knows which window's client px `ctx.pointer()` is in. |
 | `track_global(global: Point)` | Track an in-flight pointer drag from a host-reported cursor position (global physical px): updates the shared pointer (converted into the origin window's client px, the coordinate anchor everything else expects) and enters/leaves zones across every joined window. No-op when nothing is dragging or the origin window is unknown. |
-| `drop_at_global(global: Point) -> Option<ZoneId>` | Complete an in-flight pointer drag at a host-reported position: exact zone hit in whichever window contains the point, else that window's 48px near-miss snap (in its own CSS px), else cancel. Returns the receiving zone. A no-op returning `None` when nothing is dragging, so double delivery (webview pointerup plus host echo) is harmless. Requires `T: PartialEq`. |
+| `drop_at_global(global: Point) -> Option<ZoneId>` | Complete an in-flight pointer drag at a host-reported position: last acceptable exact hit in registry order within whichever window contains the point (rejecting overlaps are skipped), else that window's 48px near-miss snap in its own CSS px, else cancel. Returns the receiving zone. A no-op returning `None` when nothing is dragging, so double delivery (webview pointerup plus host echo) is harmless. Requires `T: PartialEq`. |
 | `cancel_drag()` | Abort an in-flight drag from the host side (a window manager signal, an escape hatch). No-op when nothing is dragging. Deliberately stays live under the kill switch. |
 | `modifiers() -> Modifiers` | Modifiers currently associated with host delivery; empty outside an active world drag. |
 | `update_modifiers(modifiers: Modifiers)` | Update the live modifiers for the active world drag. Late host events after completion are ignored. |
@@ -241,7 +241,10 @@ Every host leg converges on `track_global`, so overlapping legs are safe by
 construction: same-tick reports are idempotent (every write is
 equality-guarded, re-entering the current zone is a no-op), legs serialize
 on the one event-loop thread, and a tick landing after a drop cannot
-resurrect the drag.
+resurrect the drag. Drop and source callbacks may synchronously begin a
+replacement; completion re-reads source-session ownership and live drag state
+afterwards before clearing world metadata. Host legs separately revalidate
+their captured composite generation immediately before calling into the world.
 
 ### Drag metadata
 
