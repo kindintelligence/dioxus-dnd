@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const AUTO_ID_BASE: u64 = 1 << 32;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(AUTO_ID_BASE);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Identifies a drop zone (a list, a column, a canvas, a tree node…).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -48,6 +49,18 @@ impl DragId {
 impl From<u64> for DragId {
     fn from(v: u64) -> Self {
         Self(v)
+    }
+}
+
+/// Identifies one pointer-drag gesture from pickup through its exactly-once
+/// completion. Unlike [`DragId`], which applications may use as item
+/// identity, this id is generated afresh for every gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DragSessionId(pub u64);
+
+impl DragSessionId {
+    pub(crate) fn auto() -> Self {
+        Self(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -214,13 +227,89 @@ pub enum Direction {
 }
 
 /// How the current drag is being driven.
+///
+/// Non-exhaustive: input paths accrete (gamepad and switch-access drags
+/// are plausible futures), so compare against the variants you handle
+/// rather than matching exhaustively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum DragMode {
     /// Pointer-event driven drag.
     #[default]
     Pointer,
     /// Keyboard-driven drag (Space/Enter to pick up, arrows to navigate).
     Keyboard,
+}
+
+/// Which kind of pointer device is driving a pointer drag. Recorded at
+/// pickup (see [`crate::core::DndContext::set_pointer_kind`]) so
+/// host-side glue can decide which input layers need bridging: a touch
+/// contact is implicitly captured by the browser - the source element
+/// keeps receiving the whole gesture, out-of-viewport moves and the
+/// release included - while mouse and pen go blind at the viewport edge
+/// whenever native capture is unavailable. Feeding a captured pointer's
+/// drag from a second host-side source (cursor pollers, raw input)
+/// double-drives it: on Windows the touch-synthesized mouse cursor
+/// trails the finger, and its synthesized button transitions can end
+/// the drag early.
+///
+/// Non-exhaustive: pointer taxonomies grow with input hardware. Glue
+/// deciding whether to bridge must use [`PointerKind::implicitly_captured`],
+/// which encodes the safe default for kinds it has never heard of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum PointerKind {
+    /// A mouse - or anything unrecognized, because the safe default for
+    /// glue is to bridge (an unbridged blind pointer loses drops; a
+    /// double-driven captured one merely jitters).
+    #[default]
+    Mouse,
+    /// A touch contact; implicitly captured by the browser.
+    Touch,
+    /// A pen/stylus. The engines this crate targets route pen like
+    /// mouse for capture purposes, so glue should bridge it too.
+    Pen,
+}
+
+impl PointerKind {
+    /// Map a DOM `pointerType` string (`"mouse"` / `"touch"` / `"pen"`,
+    /// or empty when the browser cannot tell) to a kind.
+    pub fn from_pointer_type(pointer_type: &str) -> Self {
+        match pointer_type {
+            "touch" => Self::Touch,
+            "pen" => Self::Pen,
+            _ => Self::Mouse,
+        }
+    }
+
+    /// Does the browser implicitly capture this pointer to the source
+    /// element - i.e. does the webview itself keep streaming the whole
+    /// gesture, making host-side bridging unnecessary (and harmful)?
+    pub fn implicitly_captured(&self) -> bool {
+        matches!(self, Self::Touch)
+    }
+}
+
+/// How a `Draggable` (or a whole-row sortable) shares touch input with the
+/// page's native gestures.
+///
+/// A mouse is unaffected: it always promotes on plain travel past the
+/// threshold. Fingers and pens follow the chosen policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TouchSense {
+    /// The safe default for anything that can sit in a scrollable view:
+    /// the element carries `touch-action: pan-y`, so a vertical swipe keeps
+    /// scrolling the page, while a short hold (250ms with the finger still)
+    /// or a sideways-dominant pull picks the item up. Once a drag begins,
+    /// further touch moves are consumed so the page stays put.
+    #[default]
+    Auto,
+    /// The element owns every touch from the first pixel
+    /// (`touch-action: none`): any travel past the threshold drags, and
+    /// finger-scrolling across the element is disabled - the behavior of
+    /// releases before 2.5. Reach for it on surfaces that never scroll
+    /// (a full-screen canvas, a game board).
+    Immediate,
 }
 
 /// The visual/semantic effect of a drop, mirroring the HTML5
@@ -273,7 +362,8 @@ pub struct DropOutcome<T> {
     pub from: Option<ZoneId>,
     /// The zone that received the drop.
     pub to: ZoneId,
-    /// The effect the drag was started with.
+    /// The resolved effect: the drag's base effect with any modifier keys
+    /// applied at release. Keyboard drops carry the base effect unchanged.
     pub effect: DropEffect,
     /// Which input path produced this completed drop.
     pub mode: DragMode,
@@ -298,6 +388,34 @@ pub struct DropOutcome<T> {
 mod tests {
     use super::*;
     use dioxus::prelude::Modifiers;
+
+    #[test]
+    fn drag_session_ids_are_fresh_for_each_gesture() {
+        let first = DragSessionId::auto();
+        let second = DragSessionId::auto();
+
+        assert_ne!(first, second);
+        assert!(second.0 > first.0);
+    }
+
+    #[test]
+    fn pointer_kind_maps_dom_pointer_types() {
+        assert_eq!(PointerKind::from_pointer_type("mouse"), PointerKind::Mouse);
+        assert_eq!(PointerKind::from_pointer_type("touch"), PointerKind::Touch);
+        assert_eq!(PointerKind::from_pointer_type("pen"), PointerKind::Pen);
+        // Unrecognized (including the empty string some browsers report)
+        // must fall back to Mouse: glue then bridges, the safe default.
+        assert_eq!(PointerKind::from_pointer_type(""), PointerKind::Mouse);
+        assert_eq!(
+            PointerKind::from_pointer_type("gamepad"),
+            PointerKind::Mouse
+        );
+        // Only touch is implicitly captured; mouse AND pen need bridging.
+        assert!(PointerKind::Touch.implicitly_captured());
+        assert!(!PointerKind::Mouse.implicitly_captured());
+        assert!(!PointerKind::Pen.implicitly_captured());
+        assert_eq!(PointerKind::default(), PointerKind::Mouse);
+    }
 
     #[test]
     fn modifier_effects_follow_convention() {

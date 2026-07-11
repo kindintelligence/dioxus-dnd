@@ -24,16 +24,45 @@ use dioxus::prelude::*;
 /// web renderer delegates events at the document root (so `currentTarget` is
 /// the root, not your element), and a target child can re-render mid-drag
 /// (live-preview transforms), which would drop the capture.
-pub(crate) fn capture_pointer(node: &MountedData, pointer_id: i32) {
+/// Returns whether capture was actually taken - callers use it to decide
+/// whether a capture *substitute* (the full-viewport layer) is needed.
+pub(crate) fn capture_pointer(node: &MountedData, pointer_id: i32) -> bool {
     #[cfg(feature = "web")]
     if let Some(el) = node.downcast::<web_sys::Element>() {
         // Fails only for an already-released/invalid pointer id - harmless.
-        let _ = el.set_pointer_capture(pointer_id);
+        return el.set_pointer_capture(pointer_id).is_ok();
     }
     #[cfg(not(feature = "web"))]
     {
         let _ = (node, pointer_id);
     }
+    false
+}
+
+/// Run one FLIP handoff on the real DOM element, synchronously: write the
+/// inverted transform, force a style-and-layout flush (reading a layout
+/// metric does this per spec), then write the rest style with its transition
+/// armed - the browser is now guaranteed to start the glide from the old
+/// position. This is the classic no-library FLIP sequence; it removes the
+/// paint-timing dependency of the render-twice fallback, where the release
+/// races the browser painting the inverted frame.
+///
+/// `rest_style` must equal the style the caller renders for its at-rest
+/// state, so the virtual DOM's view of the attribute stays truthful.
+///
+/// Returns `false` without the `web` feature (or on non-web renderers,
+/// where the downcast yields `None`); the caller then falls back to
+/// animating through renders.
+pub(crate) fn flip_transform(node: &MountedData, invert_style: &str, rest_style: &str) -> bool {
+    #[cfg(feature = "web")]
+    if let Some(el) = node.downcast::<web_sys::Element>() {
+        let _ = el.set_attribute("style", invert_style);
+        let _ = el.client_width();
+        let _ = el.set_attribute("style", rest_style);
+        return true;
+    }
+    let _ = (node, invert_style, rest_style);
+    false
 }
 
 /// Release pointer capture for `pointer_id` from `node`.

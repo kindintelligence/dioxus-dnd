@@ -67,8 +67,8 @@ pub fn WeeklyFocusPage() -> Element {
             ApiNotes {
                 notes: vec![
                     (
-                        "Keyboard drag still works too.",
-                        "Buttons are the fallback, not the ceiling: focusing the row itself and pressing Space starts a full keyboard drag.",
+                        "The buttons are the keyboard path.",
+                        "Sortable rows ship no keyboard drag of their own, so these buttons are what keeps reordering accessible without a pointer.",
                     ),
                     (
                         "Headless by design:",

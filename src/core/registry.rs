@@ -5,11 +5,25 @@
 //! with unmeasured zones last in registration order).
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use super::types::{Direction, DropOutcome, Point, Rect, ZoneId};
+
+static NEXT_ZONE_REGISTRATION: AtomicU64 = AtomicU64::new(1);
+
+/// Identifies one particular registration of a [`ZoneId`].
+///
+/// A zone id can be replaced in place. Async measurements carry this token
+/// so a result started for the old registration cannot land in its
+/// same-id replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ZoneRegistration {
+    id: ZoneId,
+    generation: u64,
+}
 
 /// One registered drop zone.
 pub struct ZoneRecord<T: Clone + 'static> {
@@ -23,10 +37,14 @@ pub struct ZoneRecord<T: Clone + 'static> {
     pub on_drop: Callback<DropOutcome<T>>,
     /// The zone's acceptance filter, if any.
     pub accepts: Option<Callback<T, bool>>,
-    /// The zone's mounted element, once available.
-    pub mounted: Signal<Option<Rc<MountedData>>>,
+    /// The zone's mounted element, once available. This plain value lives in
+    /// the provider-owned registry storage; zones update it through
+    /// [`ZoneRegistry::set_mounted`].
+    pub mounted: Option<Rc<MountedData>>,
     /// Cached client rect (refreshed via [`ZoneRegistry::refresh_rects`]).
-    pub rect: Signal<Option<Rect>>,
+    /// This plain value lives in the provider-owned registry storage; zones
+    /// update it through [`ZoneRegistry::set_rect_if_present`].
+    pub rect: Option<Rect>,
 }
 
 impl<T: Clone + 'static> Clone for ZoneRecord<T> {
@@ -37,7 +55,7 @@ impl<T: Clone + 'static> Clone for ZoneRecord<T> {
             label: self.label.clone(),
             on_drop: self.on_drop,
             accepts: self.accepts,
-            mounted: self.mounted,
+            mounted: self.mounted.clone(),
             rect: self.rect,
         }
     }
@@ -51,11 +69,27 @@ impl<T: Clone + 'static> ZoneRecord<T> {
             None => true,
         }
     }
+
+    /// The cached client rect in this registry snapshot.
+    pub fn cached_rect(&self) -> Option<Rect> {
+        self.rect
+    }
+
+    /// The mounted element in this registry snapshot.
+    pub fn mounted_handle(&self) -> Option<Rc<MountedData>> {
+        self.mounted.clone()
+    }
 }
 
 /// Registry of the currently mounted drop zones, in mount order.
 pub struct ZoneRegistry<T: Clone + 'static> {
     zones: Signal<Vec<ZoneRecord<T>>>,
+    /// Current generation for each id in `zones`. Kept separately so
+    /// `ZoneRecord` remains constructible with a public struct literal.
+    registrations: Signal<Vec<(ZoneId, u64)>>,
+    /// Changes only when the zone set or a mounted handle changes. The debug
+    /// overlay subscribes here so rect writes cannot retrigger measurement.
+    mount_revision: Signal<u64>,
     /// Layout direction for spatial ordering (keyboard navigation).
     dir: Signal<Direction>,
 }
@@ -77,55 +111,157 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     pub fn from_signal(zones: Signal<Vec<ZoneRecord<T>>>) -> Self {
         Self {
             zones,
+            registrations: Signal::new(Vec::new()),
+            mount_revision: Signal::new(0),
             dir: Signal::new(Direction::default()),
         }
     }
 
     /// Layout direction spatial ordering follows.
     pub fn direction(&self) -> Direction {
-        *self.dir.peek()
+        self.dir.try_peek().map(|dir| *dir).unwrap_or_default()
     }
 
     /// Set the layout direction (no-op if unchanged; safe to call every
     /// render). `DndProvider`'s `dir` prop calls this for you.
     pub fn set_direction(&mut self, dir: Direction) {
-        if *self.dir.peek() != dir {
-            self.dir.set(dir);
+        let changed = self.dir.try_peek().map(|current| *current != dir);
+        if changed == Ok(true) {
+            if let Ok(mut current) = self.dir.try_write() {
+                *current = dir;
+            }
         }
     }
 
     /// Add (or replace, by id) a zone.
-    pub fn register(&mut self, record: ZoneRecord<T>) {
-        let mut zones = self.zones.write();
-        if let Some(existing) = zones.iter_mut().find(|z| z.id == record.id) {
-            *existing = record;
-        } else {
-            zones.push(record);
+    pub fn register(&mut self, record: ZoneRecord<T>) -> ZoneRegistration {
+        let registration = ZoneRegistration {
+            id: record.id,
+            generation: NEXT_ZONE_REGISTRATION.fetch_add(1, Ordering::Relaxed),
+        };
+        if let Ok(mut zones) = self.zones.try_write() {
+            if let Some(existing) = zones.iter_mut().find(|z| z.id == record.id) {
+                *existing = record;
+            } else {
+                zones.push(record);
+            }
         }
+        if let Ok(mut registrations) = self.registrations.try_write() {
+            if let Some(existing) = registrations
+                .iter_mut()
+                .find(|(id, _)| *id == registration.id)
+            {
+                existing.1 = registration.generation;
+            } else {
+                registrations.push((registration.id, registration.generation));
+            }
+        }
+        self.bump_mount_revision();
+        registration
     }
 
     /// Update a zone's label in place (no-op if unchanged or unknown).
     pub fn sync_label(&mut self, id: ZoneId, label: Option<String>) {
         let needs = self
             .zones
-            .peek()
-            .iter()
-            .any(|z| z.id == id && z.label != label);
+            .try_peek()
+            .map(|zones| zones.iter().any(|z| z.id == id && z.label != label))
+            .unwrap_or(false);
         if needs {
-            if let Some(z) = self.zones.write().iter_mut().find(|z| z.id == id) {
-                z.label = label;
+            if let Ok(mut zones) = self.zones.try_write() {
+                if let Some(z) = zones.iter_mut().find(|z| z.id == id) {
+                    z.label = label;
+                }
             }
         }
     }
 
     /// Remove a zone (call when its component unmounts).
     pub fn unregister(&mut self, id: ZoneId) {
-        self.zones.write().retain(|z| z.id != id);
+        let removed = self.zones.try_write().is_ok_and(|mut zones| {
+            let old_len = zones.len();
+            zones.retain(|z| z.id != id);
+            zones.len() != old_len
+        });
+        if let Ok(mut registrations) = self.registrations.try_write() {
+            registrations.retain(|(registered_id, _)| *registered_id != id);
+        }
+        if removed {
+            self.bump_mount_revision();
+        }
+    }
+
+    /// Attach the mounted element to this exact registration. A stale
+    /// registration token is ignored.
+    pub fn set_mounted(&mut self, registration: ZoneRegistration, mounted: Rc<MountedData>) {
+        if !self.is_current(registration) {
+            return;
+        }
+        let mut changed = false;
+        if let Ok(mut zones) = self.zones.try_write() {
+            if let Some(zone) = zones.iter_mut().find(|z| z.id == registration.id) {
+                zone.mounted = Some(mounted);
+                changed = true;
+            }
+        }
+        if changed {
+            self.bump_mount_revision();
+        }
+    }
+
+    /// Store a rect only while the registration that requested it is still
+    /// current. This never inserts a missing zone and therefore cannot
+    /// resurrect one that unmounted during an async measurement.
+    pub fn set_rect_if_present(&mut self, registration: ZoneRegistration, rect: Rect) {
+        if !self.is_current(registration) {
+            return;
+        }
+        if let Ok(mut zones) = self.zones.try_write() {
+            if let Some(zone) = zones.iter_mut().find(|z| z.id == registration.id) {
+                zone.rect = Some(rect);
+            }
+        }
+    }
+
+    /// Set geometry for the current registration of `id`. This is the
+    /// synchronous/manual counterpart to [`Self::set_rect_if_present`], used
+    /// by custom layout adapters and the headless test driver.
+    pub fn set_rect(&mut self, id: ZoneId, rect: Rect) {
+        if let Some(registration) = self.current_registration(id) {
+            self.set_rect_if_present(registration, rect);
+        }
     }
 
     /// Look up a zone by id.
     pub fn get(&self, id: ZoneId) -> Option<ZoneRecord<T>> {
-        self.zones.peek().iter().find(|z| z.id == id).cloned()
+        self.zones
+            .try_peek()
+            .ok()?
+            .iter()
+            .find(|z| z.id == id)
+            .cloned()
+    }
+
+    /// The zone's cached client rect, read without subscribing. Returns
+    /// `None` when unmeasured, unknown, or the provider is already gone.
+    pub fn cached_rect(&self, id: ZoneId) -> Option<Rect> {
+        self.zones
+            .try_peek()
+            .ok()?
+            .iter()
+            .find(|z| z.id == id)
+            .and_then(ZoneRecord::cached_rect)
+    }
+
+    /// The zone's mounted element, read without subscribing. Returns `None`
+    /// before mount, for an unknown zone, or after provider teardown.
+    pub fn mounted_handle(&self, id: ZoneId) -> Option<Rc<MountedData>> {
+        self.zones
+            .try_peek()
+            .ok()?
+            .iter()
+            .find(|z| z.id == id)
+            .and_then(ZoneRecord::mounted_handle)
     }
 
     /// Every registered zone, in registration order. Unlike the peeking
@@ -133,14 +269,19 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// rendering from it re-renders when zones mount or unmount - because
     /// its consumers (the debug overlay, your own devtools) are renderers.
     pub fn records(&self) -> Vec<ZoneRecord<T>> {
-        self.zones.read().to_vec()
+        self.zones
+            .try_read()
+            .map(|zones| zones.to_vec())
+            .unwrap_or_default()
     }
 
     /// Is a zone with this id registered *here*? The parent-zone context is
     /// shared across payload types, so a record's `parent` can name a zone
     /// living in another type's registry - check before navigating to one.
     pub fn contains(&self, id: ZoneId) -> bool {
-        self.zones.peek().iter().any(|z| z.id == id)
+        self.zones
+            .try_peek()
+            .is_ok_and(|zones| zones.iter().any(|z| z.id == id))
     }
 
     /// The zone keyboard navigation should enter when ascending from
@@ -155,11 +296,15 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// All zones accepting `payload`, in registration order.
     pub fn acceptable(&self, payload: &T) -> Vec<ZoneRecord<T>> {
         self.zones
-            .peek()
-            .iter()
-            .filter(|z| z.accepts_payload(payload))
-            .cloned()
-            .collect()
+            .try_peek()
+            .map(|zones| {
+                zones
+                    .iter()
+                    .filter(|z| z.accepts_payload(payload))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The next/previous zone (cyclic) relative to `current` among zones that
@@ -178,7 +323,12 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
 
     /// The parent of a zone, if it's nested.
     pub fn parent_of(&self, id: ZoneId) -> Option<ZoneId> {
-        self.zones.peek().iter().find(|z| z.id == id)?.parent
+        self.zones
+            .try_peek()
+            .ok()?
+            .iter()
+            .find(|z| z.id == id)?
+            .parent
     }
 
     /// Zones directly inside `parent` (`None` = root level) that accept
@@ -187,11 +337,15 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     pub fn children_of(&self, parent: Option<ZoneId>, payload: &T) -> Vec<ZoneRecord<T>> {
         let mut zones: Vec<_> = self
             .zones
-            .peek()
-            .iter()
-            .filter(|z| z.parent == parent && z.accepts_payload(payload))
-            .cloned()
-            .collect();
+            .try_peek()
+            .map(|zones| {
+                zones
+                    .iter()
+                    .filter(|z| z.parent == parent && z.accepts_payload(payload))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         spatial_sort(&mut zones, self.direction());
         zones
     }
@@ -220,10 +374,11 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// zones win, approximating DOM paint order.
     pub fn hit_test(&self, point: Point) -> Option<ZoneId> {
         self.zones
-            .peek()
+            .try_peek()
+            .ok()?
             .iter()
             .rev()
-            .find(|z| (*z.rect.peek()).map(|r| r.contains(point)).unwrap_or(false))
+            .find(|z| z.cached_rect().map(|r| r.contains(point)).unwrap_or(false))
             .map(|z| z.id)
     }
 
@@ -239,12 +394,13 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
         if let Some(hit) = self
             .zones
-            .peek()
+            .try_peek()
+            .ok()?
             .iter()
             .rev()
             .find(|z| {
                 z.accepts_payload(payload)
-                    && (*z.rect.peek()).map(|r| r.contains(point)).unwrap_or(false)
+                    && z.cached_rect().map(|r| r.contains(point)).unwrap_or(false)
             })
             .map(|z| z.id)
         {
@@ -252,7 +408,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         }
         let mut best: Option<(ZoneId, f64)> = None;
         for z in self.acceptable(payload) {
-            let Some(r) = *z.rect.peek() else { continue };
+            let Some(r) = z.cached_rect() else { continue };
             // Distance to the rect's nearest point (zero on either axis the
             // point already overlaps), not to its center.
             let dx = (r.x - point.x).max(point.x - (r.x + r.width)).max(0.0);
@@ -270,43 +426,97 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// and forgets. Use before a hit-test that must see fresh geometry
     /// (e.g. retrying a missed touch drop after a layout change).
     pub async fn measure_all(&self) {
-        let zones: Vec<_> = self
-            .zones
-            .peek()
-            .iter()
-            .map(|z| (z.mounted.peek().clone(), z.rect))
-            .collect();
-        for (mounted, mut rect) in zones {
-            if let Some(m) = mounted {
-                if let Ok(r) = m.get_client_rect().await {
-                    rect.set(Some(Rect::new(
-                        r.origin.x,
-                        r.origin.y,
-                        r.size.width,
-                        r.size.height,
-                    )));
-                }
+        let zones = self.measurement_targets();
+        for (registration, mounted) in zones {
+            if let Ok(r) = mounted.get_client_rect().await {
+                // The zone can unmount or be replaced during the await (a
+                // closing window mid-drag is the common case). The
+                // generation check quietly drops that stale measurement.
+                let mut registry = *self;
+                registry.set_rect_if_present(
+                    registration,
+                    Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
+                );
             }
         }
     }
 
     /// Re-measure every mounted zone's client rect (async, spawned).
     pub fn refresh_rects(&self) {
-        for zone in self.zones.peek().iter() {
-            let mounted = zone.mounted.peek().clone();
-            let mut rect = zone.rect;
-            if let Some(m) = mounted {
-                spawn(async move {
-                    if let Ok(r) = m.get_client_rect().await {
-                        rect.set(Some(Rect::new(
-                            r.origin.x,
-                            r.origin.y,
-                            r.size.width,
-                            r.size.height,
-                        )));
-                    }
-                });
-            }
+        for (registration, mounted) in self.measurement_targets() {
+            let mut registry = *self;
+            spawn(async move {
+                if let Ok(r) = mounted.get_client_rect().await {
+                    // See measure_all: the zone can die or be replaced
+                    // while this measurement is in flight.
+                    registry.set_rect_if_present(
+                        registration,
+                        Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
+                    );
+                }
+            });
+        }
+    }
+
+    /// Subscribe an effect to registration/mount changes without also
+    /// subscribing it to rect writes in the main registry vector.
+    pub(crate) fn track_mounts(&self) {
+        let _ = self.mount_revision.try_read();
+    }
+
+    fn measurement_targets(&self) -> Vec<(ZoneRegistration, Rc<MountedData>)> {
+        let registrations = self
+            .registrations
+            .try_peek()
+            .map(|registrations| registrations.clone())
+            .unwrap_or_default();
+        self.zones
+            .try_peek()
+            .map(|zones| {
+                zones
+                    .iter()
+                    .filter_map(|zone| {
+                        let mounted = zone.mounted_handle()?;
+                        let generation = registrations
+                            .iter()
+                            .find(|(id, _)| *id == zone.id)
+                            .map(|(_, generation)| *generation)?;
+                        Some((
+                            ZoneRegistration {
+                                id: zone.id,
+                                generation,
+                            },
+                            mounted,
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn is_current(&self, registration: ZoneRegistration) -> bool {
+        self.registrations.try_peek().is_ok_and(|registrations| {
+            registrations.iter().any(|(id, generation)| {
+                *id == registration.id && *generation == registration.generation
+            })
+        })
+    }
+
+    fn current_registration(&self, id: ZoneId) -> Option<ZoneRegistration> {
+        self.registrations
+            .try_peek()
+            .ok()?
+            .iter()
+            .find(|(registered_id, _)| *registered_id == id)
+            .map(|(_, generation)| ZoneRegistration {
+                id,
+                generation: *generation,
+            })
+    }
+
+    fn bump_mount_revision(&mut self) {
+        if let Ok(mut revision) = self.mount_revision.try_write() {
+            *revision = revision.wrapping_add(1);
         }
     }
 }
@@ -395,7 +605,7 @@ fn spatial_sort<T: Clone + 'static>(zones: &mut [ZoneRecord<T>], dir: Direction)
         Direction::Ltr => x,
         Direction::Rtl => -x,
     };
-    zones.sort_by(|a, b| match (*a.rect.peek(), *b.rect.peek()) {
+    zones.sort_by(|a, b| match (a.cached_rect(), b.cached_rect()) {
         (Some(ra), Some(rb)) => (ra.y, reading_x(ra.x))
             .partial_cmp(&(rb.y, reading_x(rb.x)))
             .unwrap_or(std::cmp::Ordering::Equal),

@@ -1,0 +1,24 @@
+# Standalone crate on purpose (note the empty [workspace]): dioxus-desktop
+# pulls wry/tao and the system webkit stack, which must not weigh down
+# `cargo test` / `cargo build` of the main crate. Run from this directory:
+#
+#     cargo run
+#
+# This is the polished multi-window showcase ("Mission Control"): live
+# signal-backed widgets that keep animating inside the drag ghost across
+# windows. See docs/superpowers/specs/2026-07-10-desktop-showcase-design.md.
+
+[package]
+name = "desktop-showcase"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+dioxus = { version = "0.7", features = ["desktop"] }
+dioxus-dnd = { path = "../..", features = ["desktop"] }
+# Same time-only tokio the library's desktop feature already drives; the
+# ticker sleeps on it between 50ms liveness steps.
+tokio = { version = "1", default-features = false, features = ["time"] }

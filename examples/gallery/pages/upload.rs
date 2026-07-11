@@ -144,6 +144,9 @@ fn UploadDemo() -> Element {
                                         FileRejection::TooLarge => "over 5 MB",
                                         FileRejection::TooMany => "past the 6-file limit",
                                         FileRejection::Extension => "wrong extension",
+                                        // FileRejection is non-exhaustive:
+                                        // future rules land here.
+                                        _ => "not accepted",
                                     };
                                     format!("{} · {reason}", f.name())
                                 }),

@@ -1,32 +1,4 @@
-//! Reorderable lists - drag a row and the list tells you where it landed.
-//!
-//! Self-contained: `SortableList` manages its own drag state (indices only),
-//! so it needs no `DndProvider`. You keep ownership of the data - the
-//! component just tells you *"move index 3 to index 0"* and you apply it
-//! (usually with [`apply_sort`]).
-//!
-//! Mouse, touch and pen all drive the same pointer-event gesture machine, so
-//! the browser never creates a native drag image. By default the whole row
-//! is the touch target, which sets `touch-action: none` on it - fine for
-//! short lists, but it stops finger-scrolling through the rows. Inside a
-//! scrollable list, set `touch_handle: true` to confine pointer drags to a
-//! leading grip (style it via `[data-sort-handle]`) so the rows themselves
-//! still scroll.
-//!
-//! Headless: the component ships behavior plus a couple of `data-*` styling
-//! hooks; you compose the looks. Rows slide to preview the drop by default -
-//! opt into a floating, caller-composed ghost with `overlay`.
-//!
-//! ```text
-//! let mut items = use_signal(|| vec!["a".to_string(), "b".into(), "c".into()]);
-//! rsx! {
-//!     SortableList {
-//!         len: items.read().len(),
-//!         on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-//!         render: move |ix: usize| rsx! { li { "{items.read()[ix]}" } },
-//!     }
-//! }
-//! ```
+#![doc = include_str!("../docs/api/sortable-lists.md")]
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -35,9 +7,12 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::a11y::use_reduced_motion_css;
-use crate::core::components::overlay_style;
+use crate::core::components::{overlay_style, touch_style, HoldTimer};
 use crate::core::hooks::use_rect_refresh_thunk;
-use crate::core::{platform, transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
+use crate::core::{
+    platform, transition_with, GestureEffect, GestureEvent, GesturePhase, Point, Promotion, Rect,
+    TouchSense,
+};
 
 fn pointer_client(evt: &PointerEvent) -> Point {
     let c = evt.client_coordinates();
@@ -45,10 +20,21 @@ fn pointer_client(evt: &PointerEvent) -> Point {
 }
 
 /// "Move the item at `from` so it ends up at index `to`."
+///
+/// Non-exhaustive so reorder context can be added without a major release;
+/// synthesize your own (reorder buttons, tests) via [`SortEvent::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SortEvent {
     pub from: usize,
     pub to: usize,
+}
+
+impl SortEvent {
+    /// "Move the item at `from` so it ends up at index `to`."
+    pub fn new(from: usize, to: usize) -> Self {
+        Self { from, to }
+    }
 }
 
 /// What a completed reorder gesture means.
@@ -317,6 +303,13 @@ pub fn SortableList(
     /// Style it via `[data-sort-handle]`.
     #[props(default = false)]
     touch_handle: bool,
+    /// How a finger shares whole rows with native scrolling (ignored under
+    /// `touch_handle`, where the grip owns every touch).
+    /// [`TouchSense::Auto`] (default) keeps vertical swipes scrolling and
+    /// picks a row up on a short hold or a sideways pull;
+    /// [`TouchSense::Immediate`] makes any 8px travel drag.
+    #[props(default)]
+    touch: TouchSense,
     /// Content for the `touch_handle` grip, keyed by index. Defaults to a
     /// braille-dots glyph when unset.
     #[props(default)]
@@ -367,9 +360,22 @@ pub fn SortableList(
     // drop target) is resolved synchronously on every tracked move - no
     // derived effect - so the gap never lags the pointer.
     let mut gesture = use_signal(|| GesturePhase::Idle);
+    // Some(pid) while a whole-row touch press under `Auto` waits on its hold
+    // timer; doubles as the timer element's render condition.
+    let mut hold_pid = use_signal(|| None::<i32>);
     let mut step = move |event: GestureEvent| -> GestureEffect {
-        let (next, fx) = transition(*gesture.peek(), event, 8.0);
+        let promotion = if hold_pid.peek().is_some() {
+            Promotion::HoldOrSideways
+        } else {
+            Promotion::Distance
+        };
+        let (next, fx) = transition_with(*gesture.peek(), event, 8.0, promotion);
         gesture.set(next);
+        // Any exit from Pressed retires the pending hold - the drag began,
+        // the press tapped out, or a vertical pull yielded to the scroll.
+        if hold_pid.peek().is_some() && !matches!(next, GesturePhase::Pressed { .. }) {
+            hold_pid.set(None);
+        }
         fx
     };
     // Feed one pointer event and act on the machine's effect. The source row is
@@ -453,7 +459,12 @@ pub fn SortableList(
     // Rows glide via inline transitions; honor prefers-reduced-motion.
     let reduced_motion_css = use_reduced_motion_css();
 
-    let primary_pointer = move |evt: &PointerEvent| evt.is_primary();
+    let primary_pointer = move |evt: &PointerEvent| crate::core::components::primary_press(evt);
+    // Consecutive empty-held moves seen mid-drag (lost-release debounce).
+    let mut empty_held_moves = use_signal(|| 0u8);
+    // Did native pointer capture engage for the current press? Decides
+    // whether the capture-substitute layer renders (see `Draggable`).
+    let mut captured = use_signal(|| false);
     let mut cancel_drag = move || {
         feed(GestureEvent::Cancel);
         press_from.set(None);
@@ -497,14 +508,23 @@ pub fn SortableList(
                 // returns over the list with no button held we finish the drop
                 // rather than track a phantom drag. Touch/pen hold a button
                 // throughout contact, so this only trips for a released mouse.
+                // Debounced: move events carry the display server's state
+                // mask, which some pipelines corrupt for isolated events
+                // (see core::components::RELEASE_RECOVERY_MOVES).
                 if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
-                    if let Some(from) = *drag_from.peek() {
-                        if let Some(n) = mounteds.peek().get(&from).cloned() {
-                            platform::release_pointer(&n, evt.pointer_id());
+                    let streak = empty_held_moves.peek().saturating_add(1);
+                    empty_held_moves.set(streak);
+                    if streak >= crate::core::components::RELEASE_RECOVERY_MOVES {
+                        if let Some(from) = *drag_from.peek() {
+                            if let Some(n) = mounteds.peek().get(&from).cloned() {
+                                platform::release_pointer(&n, evt.pointer_id());
+                            }
                         }
+                        feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() });
+                        return;
                     }
-                    feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() });
-                    return;
+                } else if *empty_held_moves.peek() != 0 {
+                    empty_held_moves.set(0);
                 }
                 feed(GestureEvent::Move { at, pointer_id: evt.pointer_id() });
             },
@@ -529,8 +549,43 @@ pub fn SortableList(
                 cancel_drag();
             },
             onlostpointercapture: move |_| cancel_drag(),
+            // A promoted drag owns the touch: cancel its moves (they bubble
+            // from the row) so the browser can't start a pan mid-drag -
+            // `touch-action` is only consulted at gesture start, so the
+            // rows' `pan-y` alone can't.
+            ontouchmove: move |evt: TouchEvent| {
+                if matches!(*gesture.peek(), GesturePhase::Dragging { .. }) {
+                    evt.prevent_default();
+                }
+            },
+            // Android pops a context menu on touch long-press; mid-gesture
+            // that would tear the hold or the drag. Idle presses keep it.
+            oncontextmenu: move |evt: Event<MouseData>| {
+                if !matches!(*gesture.peek(), GesturePhase::Idle) {
+                    evt.prevent_default();
+                }
+            },
             ..attributes,
             {reduced_motion_css}
+            // Capture substitute (see `Draggable` for the full story):
+            // without native capture, moves die the moment the cursor
+            // leaves the list; this full-viewport child keeps them
+            // bubbling to the container handlers while a row drag is in
+            // flight. Never rendered where real capture engaged.
+            if drag_from().is_some() && !captured() {
+                div {
+                    style: "position: fixed; inset: 0; z-index: 9998; touch-action: none;",
+                    aria_hidden: true,
+                }
+            }
+            // Armed only while a whole-row touch press waits under `Auto`;
+            // the alarm promotes exactly like a threshold crossing.
+            if let Some(pid) = hold_pid() {
+                HoldTimer {
+                    pointer_id: pid,
+                    on_hold: move |pid| feed(GestureEvent::Hold { pointer_id: pid }),
+                }
+            }
             for ix in 0..len {
                 div {
                     key: "{ix}",
@@ -569,7 +624,7 @@ pub fn SortableList(
                         if touch_handle {
                             format!("display: flex; align-items: stretch; width: 100%; {base}")
                         } else {
-                            format!("touch-action: none; {base}")
+                            format!("{} {base}", touch_style(touch))
                         }
                     },
                     // Pointer path (whole-row mode). With `touch_handle` these
@@ -586,13 +641,22 @@ pub fn SortableList(
                         press_at.set(Some(pointer_client(&evt)));
                         // Capture on the stable row wrapper so a mouse drag
                         // survives the cursor leaving the list (real capture with
-                        // the `web` feature; a no-op otherwise, backed by the
-                        // button-release recovery above). Move/up still bubble to
-                        // the container handlers.
-                        if let Some(n) = mounteds.peek().get(&ix).cloned() {
-                            platform::capture_pointer(&n, evt.pointer_id());
+                        // the `web` feature; the capture-substitute layer covers
+                        // the rest). Move/up still bubble to the container.
+                        captured.set(match mounteds.peek().get(&ix).cloned() {
+                            Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
+                            None => false,
+                        });
+                        let pid = evt.pointer_id();
+                        feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: pid });
+                        // Arm the long-press clock: fingers (and pens) under
+                        // `Auto` promote on hold-or-sideways; mice on travel.
+                        if touch == TouchSense::Auto
+                            && evt.pointer_type() != "mouse"
+                            && matches!(*gesture.peek(), GesturePhase::Pressed { pointer_id, .. } if pointer_id == pid)
+                        {
+                            hold_pid.set(Some(pid));
                         }
-                        feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
                     },
                     onmounted: move |evt: Event<MountedData>| {
                         let m: Rc<MountedData> = evt.data();
@@ -626,9 +690,10 @@ pub fn SortableList(
                                 // Capture on the row wrapper (not the grip): it is
                                 // stable across live-preview re-renders, and
                                 // captured events still bubble to the container.
-                                if let Some(n) = mounteds.peek().get(&ix).cloned() {
-                                    platform::capture_pointer(&n, evt.pointer_id());
-                                }
+                                captured.set(match mounteds.peek().get(&ix).cloned() {
+                                    Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
+                                    None => false,
+                                });
                                 feed(GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() });
                             },
                             if let Some(h) = handle {

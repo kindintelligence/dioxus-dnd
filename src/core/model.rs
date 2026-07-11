@@ -1,10 +1,4 @@
-//! Small model helpers for applying completed drops to app-owned state.
-//!
-//! The crate never touches your data: drops arrive as [`DropOutcome`]s and
-//! you decide what they mean. These helpers cover the most common meaning,
-//! the remove-from-source, append-to-target dance, without imposing bounds
-//! on your item type: no `Clone` (the payload arrives owned), no
-//! `PartialEq` (matching is by the key you extract).
+#![doc = include_str!("../../docs/api/drop-effects.md")]
 
 use std::collections::HashMap;
 

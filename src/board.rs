@@ -1,38 +1,13 @@
-//! Cross-container moves - the kanban pattern. Items travel between columns
-//! (and optionally to a position within a column) via the shared
-//! [`crate::core::DndContext`].
-//!
-//! The payload type flowing through the context is [`BoardPayload<T>`], which
-//! remembers where the item came from. Wrap your app (or board) in
-//! `DndProvider::<BoardPayload<Card>>`.
-//!
-//! ```text
-//! DndProvider::<BoardPayload<Card>> {
-//!     for (col_id, cards) in columns {
-//!         BoardColumn::<Card> {
-//!             id: col_id,
-//!             on_move: move |mv: MoveEvent<Card>| {
-//!                 apply_move(&mut board.write(), &mv);
-//!             },
-//!             for (ix, card) in cards.iter().enumerate() {
-//!                 BoardItem::<Card> { item: card.clone(), column: col_id, index: ix,
-//!                     CardView { card: card.clone() }
-//!                 }
-//!             }
-//!         }
-//!     }
-//! }
-//! ```
+#![doc = include_str!("../docs/api/boards.md")]
 
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_zone_id, use_zone_registry, Draggable, DropOutcome, DropZone, ParentZone, ZoneId,
-    ZoneRecord,
+    use_dnd, use_joined_window, use_zone_id, use_zone_registry, Draggable, DropOutcome, DropZone,
+    ParentZone, ZoneId, ZoneRecord,
 };
 
 /// Columns are just zones.
@@ -63,13 +38,25 @@ impl<T: Clone + 'static> Clone for ColumnAccepts<T> {
 impl<T: Clone + 'static> Copy for ColumnAccepts<T> {}
 
 /// A completed cross-container move.
+///
+/// Non-exhaustive so move context can be added without a major release;
+/// synthesize your own (tests, undo stacks) via [`MoveEvent::new`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MoveEvent<T> {
     pub item: T,
     /// `(column, index)` the item came from.
     pub from: (ContainerId, usize),
     /// Target column, and target index - `None` means "append to the end".
     pub to: (ContainerId, Option<usize>),
+}
+
+impl<T> MoveEvent<T> {
+    /// A move of `item` from `(column, index)` to `(column, index)`, where
+    /// a `None` target index means "append to the end".
+    pub fn new(item: T, from: (ContainerId, usize), to: (ContainerId, Option<usize>)) -> Self {
+        Self { item, from, to }
+    }
 }
 
 /// Apply a [`MoveEvent`] to a `HashMap<ContainerId, Vec<T>>` board model.
@@ -165,8 +152,10 @@ pub fn BoardColumn<T: Clone + PartialEq + 'static>(
 ///
 /// Stop-gap-free precise ordering: render one slot before each item and one
 /// at the end. While a drag is in flight the slot carries
-/// `data-active="true"` (absent otherwise) - style it visible then, e.g.
-/// Tailwind `h-0 data-active:h-2`.
+/// `data-active="true"` (absent otherwise) - reveal it without moving
+/// layout, e.g. Tailwind `h-2 opacity-0 data-active:opacity-100`. Growing
+/// the slot itself (`h-0` to `h-2`) reflows the column mid-drag and strands
+/// the cached zone rects.
 #[component]
 pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     /// The column this slot belongs to.
@@ -181,11 +170,10 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     children: Element,
 ) -> Element {
     let dnd = use_dnd::<BoardPayload<T>>();
+    let joined = use_joined_window::<BoardPayload<T>>();
     let mut registry = use_zone_registry::<BoardPayload<T>>();
     let zone_id = use_zone_id();
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None);
     // The enclosing column's acceptance filter (WIP limits), inherited via
     // context so a precise-insert honors the same limit as an append. The
     // `Callback` is a stable handle whose closure reads live state at call
@@ -226,16 +214,16 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
         });
     });
     let registered_label = slot_label.clone();
-    use_hook(move || {
+    let registration = use_hook(move || {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
             label: registered_label.clone(),
             on_drop: registered_drop,
             accepts: Some(registered_accepts),
-            mounted,
-            rect,
-        });
+            mounted: None,
+            rect: None,
+        })
     });
     use_drop(move || {
         registry.unregister(zone_id);
@@ -244,14 +232,18 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
 
     // Does the in-flight payload pass the inherited column filter?
     let acceptable = move || dnd.payload().map(accepts).unwrap_or(false);
+    let is_over = move || match joined {
+        Some(joined) => joined.is_over(zone_id),
+        None => dnd.over() == Some(zone_id),
+    };
 
     rsx! {
         div {
             "data-active": if acceptable() { "true" },
-            "data-over": if dnd.over() == Some(zone_id) && acceptable() { "true" },
+            "data-over": if is_over() && acceptable() { "true" },
             onmounted: move |evt: Event<MountedData>| {
-                let mut mounted = mounted;
-                mounted.set(Some(evt.data()));
+                let mut registry = registry;
+                registry.set_mounted(registration, evt.data());
             },
             ..attributes,
             {children}

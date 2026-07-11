@@ -1,34 +1,9 @@
-//! 2D grids - dashboards, tile galleries, icon views. A grid is a flat
-//! `Vec` displayed in `cols` columns; dragging a tile onto another either
-//! **inserts** (everything reflows, like a photo gallery) or **swaps**
-//! (tiles trade places, like a dashboard) depending on [`ReorderMode`].
-//!
-//! Reuses the sortable vocabulary: drops emit [`SortEvent`]s you apply with
-//! [`crate::sortable::apply_sort`] or [`crate::sortable::apply_swap`].
-//!
-//! ```text
-//! let mut tiles = use_signal(|| (0..12).collect::<Vec<u32>>());
-//! rsx! {
-//!     SortableGrid {
-//!         len: tiles.read().len(),
-//!         cols: 4,
-//!         mode: ReorderMode::Swap,
-//!         render: move |ix: usize| rsx! { Tile { n: tiles.read()[ix] } },
-//!         on_sort: move |ev: SortEvent| apply_swap(&mut tiles.write(), ev),
-//!     }
-//! }
-//! ```
-//!
-//! Grid coordinate helpers ([`cell_of`], [`index_of`]) are provided for
-//! custom layouts and keyboard grid navigation.
-//!
-//! Mouse, touch and pen use pointer events via the same gesture machine as
-//! [`crate::core::Draggable`], so the browser does not create a native drag
-//! image. Tiles carry
-//! `touch-action: none` (grids rarely need to scroll by dragging across
-//! their own tiles). The hovered tile is simply the one under the pointer -
-//! no hysteresis needed, since tiles don't shift while you hover in
-//! swap/insert grids.
+//! 2D tile reorder: [`SortableGrid`] displays a flat `Vec` in `cols`
+//! columns and emits the same [`SortEvent`]s as `SortableList`, applied
+//! with [`crate::sortable::apply_sort`] (insert-and-reflow) or
+//! [`crate::sortable::apply_swap`] (tiles trade places). The full
+//! reference for both components lives with the [`crate::sortable`]
+//! module docs, docs/api/sortable-lists.md.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -191,7 +166,12 @@ pub fn SortableGrid(
         }
         GestureEffect::None => {}
     };
-    let primary_pointer = move |evt: &PointerEvent| evt.is_primary();
+    let primary_pointer = move |evt: &PointerEvent| crate::core::components::primary_press(evt);
+    // Consecutive empty-held moves seen mid-drag (lost-release debounce).
+    let mut empty_held_moves = use_signal(|| 0u8);
+    // Did native pointer capture engage for the current press? Decides
+    // whether the capture-substitute layer renders (see `Draggable`).
+    let mut captured = use_signal(|| false);
     // The grid itself doesn't animate, but its tiles commonly do (FlipItem
     // siblings can't share context with each other) - anchor the
     // reduced-motion stylesheet once for the whole subtree.
@@ -212,14 +192,23 @@ pub fn SortableGrid(
                 // it, so no `pointerup` reached us - finalize the drop instead
                 // of tracking a phantom drag that can never end. No-op with the
                 // `web` feature (capture delivers the real pointerup).
+                // Debounced: move events carry the display server's state
+                // mask, which some pipelines corrupt for isolated events
+                // (see core::components::RELEASE_RECOVERY_MOVES).
                 if drag_from.peek().is_some() && evt.held_buttons().is_empty() {
-                    if let Some(from) = *drag_from.peek() {
-                        if let Some(n) = mounteds.peek().get(&from).cloned() {
-                            platform::release_pointer(&n, evt.pointer_id());
+                    let streak = empty_held_moves.peek().saturating_add(1);
+                    empty_held_moves.set(streak);
+                    if streak >= crate::core::components::RELEASE_RECOVERY_MOVES {
+                        if let Some(from) = *drag_from.peek() {
+                            if let Some(n) = mounteds.peek().get(&from).cloned() {
+                                platform::release_pointer(&n, evt.pointer_id());
+                            }
                         }
+                        feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() }, None);
+                        return;
                     }
-                    feed(GestureEvent::Up { at, pointer_id: evt.pointer_id() }, None);
-                    return;
+                } else if *empty_held_moves.peek() != 0 {
+                    empty_held_moves.set(0);
                 }
                 feed(GestureEvent::Move { at, pointer_id: evt.pointer_id() }, None);
             },
@@ -244,6 +233,15 @@ pub fn SortableGrid(
             },
             onlostpointercapture: move |_| feed(GestureEvent::Cancel, None),
             ..attributes,
+            // Capture substitute (see `Draggable` for the full story):
+            // keeps moves bubbling to the container while a tile drag is
+            // in flight and native capture did not engage.
+            if drag_from().is_some() && !captured() {
+                div {
+                    style: "position: fixed; inset: 0; z-index: 9998; touch-action: none;",
+                    aria_hidden: true,
+                }
+            }
             for ix in 0..len {
                 div {
                     key: "{ix}",
@@ -265,16 +263,30 @@ pub fn SortableGrid(
                             }
                         });
                     },
+                    oncontextmenu: move |evt: Event<MouseData>| {
+                        // Android's long-press context menu would tear an
+                        // in-flight gesture; idle presses keep the menu.
+                        if !matches!(*gesture.peek(), GesturePhase::Idle) {
+                            evt.prevent_default();
+                        }
+                    },
                     onpointerdown: move |evt: PointerEvent| {
                         if !primary_pointer(&evt) { return; }
+                        // Same suppression as Draggable and the sortable
+                        // rows: no press focus, no text-selection start, and
+                        // no native drag hijack from an <img>/<a> inside the
+                        // tile (this module promises no native drag image).
+                        evt.prevent_default();
                         evt.stop_propagation();
                         press_from.set(Some(ix));
                         // Capture on the stable tile so a mouse drag survives
-                        // the cursor leaving it (no-op without the `web`
-                        // feature).
-                        if let Some(n) = mounteds.peek().get(&ix).cloned() {
-                            platform::capture_pointer(&n, evt.pointer_id());
-                        }
+                        // the cursor leaving it (real capture with the `web`
+                        // feature; the capture-substitute layer covers the
+                        // rest).
+                        captured.set(match mounteds.peek().get(&ix).cloned() {
+                            Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
+                            None => false,
+                        });
                         feed(
                             GestureEvent::Down { at: pointer_client(&evt), pointer_id: evt.pointer_id() },
                             None,

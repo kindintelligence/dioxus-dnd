@@ -5,7 +5,7 @@
 //! `tests/browser/web-pointer-regressions.spec.js`.
 //!
 //! ```sh
-//! dx serve --example regressions --platform web --features web
+//! dx serve --example regressions --platform web --features web,serde
 //! ```
 
 use std::collections::HashMap;
@@ -35,6 +35,227 @@ fn App() -> Element {
         EdgeFixture {}
         VoiceFixture {}
         VirtualFixture {}
+        TouchPreventFixture {}
+        TouchSenseFixture {}
+        FlipFixture {}
+        MatchSourceFixture {}
+        TypedFixture {}
+    }
+}
+
+// --- typed DataTransfer transport (serde) ---------------------------------
+// TypedDragSource serializes its payload (JSON under application/json plus
+// a text/plain fallback) at dragstart; TypedDropZone decodes drops back to
+// the type, ignores untyped drags, and reports undecodable JSON through
+// on_invalid. The spec drives it with real DragEvents carrying a real
+// DataTransfer - the boundary a headless VirtualDom cannot cross.
+
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct TypedCard {
+    id: u32,
+    name: String,
+}
+
+#[component]
+fn TypedFixture() -> Element {
+    let mut landed = use_signal(String::new);
+    let mut invalid = use_signal(|| 0u32);
+    rsx! {
+        section {
+            h2 { "Typed transport" }
+            TypedDragSource::<TypedCard> {
+                payload: TypedCard { id: 7, name: "seven".into() },
+                id: "typed-source",
+                "typed source"
+            }
+            TypedDragSource::<TypedCard> {
+                payload: TypedCard { id: 9, name: "nine".into() },
+                fallback_text: "card nine".to_string(),
+                id: "typed-source-fallback",
+                "typed source with fallback"
+            }
+            TypedDropZone::<TypedCard> {
+                id: "typed-zone",
+                on_drop: move |d: TypedDrop<TypedCard>| {
+                    landed.set(format!("{}:{}", d.payload.id, d.payload.name));
+                },
+                on_invalid: move |_| invalid += 1,
+                "typed zone"
+            }
+            div {
+                id: "typed-status",
+                "data-landed": landed(),
+                "data-invalid": "{invalid}",
+            }
+        }
+    }
+}
+
+// --- match_source ghost + on_settled + SettleSlot ------------------------------
+// DragOverlay { match_source: true }: the ghost wears the grabbed element's
+// measured rect, so grabbing a wide row anywhere keeps the cursor inside the
+// ghost (the pointer - grab anchor is exact when sizes agree). on_settled
+// fires once when the settle glide lands - after release, never racing it.
+// And the landed element, wrapped in SettleSlot { active }, holds its space
+// invisibly (data-settling) until the ghost unmounts - never two copies.
+
+#[component]
+fn MatchSourceFixture() -> Element {
+    let mut settled = use_signal(|| 0u32);
+    let mut landed = use_signal(|| false);
+    rsx! {
+        section {
+            h2 { "Match source" }
+            DndProvider::<u32> {
+                Draggable::<u32> {
+                    payload: 11u32,
+                    label: "wide row",
+                    id: "ms-drag",
+                    style: "display:block; width:260px; padding:10px; border:1px solid #333; \
+                            background:#fff; cursor:grab; user-select:none;",
+                    "a deliberately wide row"
+                }
+                DropZone::<u32> {
+                    on_drop: move |_o: DropOutcome<u32>| landed.set(true),
+                    class: "ms-zone",
+                    style: "margin-top:90px; width:260px; min-height:60px; \
+                            border:2px dashed #999; padding:8px;",
+                    "target"
+                    if landed() {
+                        SettleSlot::<u32> {
+                            active: true,
+                            id: "ms-landed",
+                            div { style: "padding:6px; border:1px solid #393; background:#efe;",
+                                "delivered"
+                            }
+                        }
+                    }
+                }
+                DragOverlay::<u32> {
+                    match_source: true,
+                    settle: true,
+                    on_settled: move |_| settled += 1,
+                    class: "ms-ghost",
+                    style: "border:1px solid #339; background:#eef; padding:10px;",
+                    "ghost"
+                }
+                div {
+                    id: "ms-status",
+                    "data-settled": "{settled}",
+                    "settled: {settled}"
+                }
+            }
+        }
+    }
+}
+
+// --- FLIP: the reorder glide is armed synchronously on the real element -------
+// With the `web` feature, `FlipItem` hands invert-flush-release to the DOM in
+// one step, so by the time anything can observe the swap there is a live CSS
+// transition carrying the tile home - no dependency on a painted in-between
+// frame. Drives: a running animation exists right after the swap commits,
+// and the tiles land at exchanged positions.
+
+#[component]
+fn FlipFixture() -> Element {
+    let mut order = use_signal(|| vec!["A".to_string(), "B".to_string()]);
+    let mut epoch = use_signal(|| 0usize);
+    rsx! {
+        section {
+            h2 { "Flip" }
+            button {
+                id: "flip-swap",
+                onclick: move |_| {
+                    order.write().reverse();
+                    epoch += 1;
+                },
+                "swap"
+            }
+            div { style: "display: flex; gap: 12px; width: 300px; margin-top: 8px;",
+                for name in order.read().clone() {
+                    FlipItem {
+                        key: "{name}",
+                        epoch: epoch(),
+                        duration: 600.0,
+                        div {
+                            id: "flip-{name}",
+                            style: "width: 80px; height: 40px; background: #eee; \
+                                    display: grid; place-items: center;",
+                            "{name}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- touch auto-sense: scroll by swipe, drag by hold or sideways pull ---------
+// Whole-row SortableList under the default `TouchSense::Auto` inside a
+// scrollable container - the exact setup that used to trap mobile scrolling.
+// Drives: a vertical swipe scrolls the container and reorders nothing; a
+// 250ms hold picks the row up and the container stays put; a sideways pull
+// picks it up with no hold at all.
+
+#[component]
+fn TouchSenseFixture() -> Element {
+    let mut rows = use_signal(|| (1..=10).map(|n| format!("Item {n}")).collect::<Vec<_>>());
+    rsx! {
+        section {
+            h2 { "Touch sense" }
+            div {
+                id: "ts-scroll",
+                style: "height: 160px; overflow-y: auto; width: 300px; border: 1px solid #ccc;",
+                SortableList {
+                    len: rows.read().len(),
+                    on_sort: move |ev: SortEvent| apply_sort(&mut rows.write(), ev),
+                    render: move |ix: usize| rsx! {
+                        div { style: "height: 40px; padding: 10px; box-sizing: border-box; \
+                                      border-bottom: 1px solid #eee; background: #fff;",
+                            "{rows.read()[ix]}"
+                        }
+                    },
+                }
+            }
+            div {
+                id: "ts-status",
+                "data-order": rows.read().join(","),
+                "order: {rows.read().join(\",\")}"
+            }
+        }
+    }
+}
+
+// --- touch: prevent_default() on ontouchmove blocks native scroll -------------
+// The touch auto-sensor rests on this: dioxus-web registers its delegated
+// listener without `passive`, and the default mount root `#main` is a plain
+// element (browsers force passive only on window/document/body), so a
+// synchronous handler's prevent_default() still reaches the native event in
+// time to cancel the pan. Two swipe lanes in one scroller pin it from both
+// sides: the blocking lane must not scroll, the free lane must.
+
+#[component]
+fn TouchPreventFixture() -> Element {
+    rsx! {
+        section {
+            h2 { "Touch preventDefault" }
+            div {
+                id: "tp-scroll",
+                style: "height:150px; overflow-y:auto; width:300px; border:1px solid #ccc;",
+                div {
+                    id: "tp-blocker",
+                    style: "height:70px; background:#fdd; touch-action: pan-y;",
+                    ontouchmove: move |evt: TouchEvent| evt.prevent_default(),
+                    "swipe here: no scroll"
+                }
+                div {
+                    id: "tp-free",
+                    style: "height:70px; background:#dfd;",
+                    "swipe here: scrolls"
+                }
+                div { style: "height:600px;", "filler" }
+            }
+        }
     }
 }
 

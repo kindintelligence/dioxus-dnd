@@ -1,25 +1,4 @@
-//! Localizable strings - every phrase the crate voices, in one place.
-//!
-//! Screen-reader announcements ("Picked up Piranesi. …"), reorder-button
-//! labels and the selection badge all read a [`DndStrings`] from context,
-//! falling back to built-in English when none is provided. Provide one
-//! anywhere above your drag UI to localize everything below it:
-//!
-//! ```text
-//! use_context_provider(|| DndStrings {
-//!     dropped_in: Rc::new(|name| t!("dropped-in", name: name)),
-//!     ..Default::default()
-//! });
-//! ```
-//!
-//! The fields are plain `Rc<dyn Fn(..) -> String>`, so the crate stays
-//! dependency-free while any i18n system plugs in - the closures above call
-//! **dioxus-i18n**'s `t!` (the Fluent-based crate the Dioxus docs
-//! recommend), but a `match` on your own locale signal works just as well.
-//! Have the closures *read* your locale state rather than re-providing the
-//! struct on switch: components capture `DndStrings` once at mount, and a
-//! closure that reads a signal re-renders its readers when the locale
-//! changes.
+#![doc = include_str!("../../docs/api/localization.md")]
 
 use std::rc::Rc;
 

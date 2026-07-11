@@ -6,14 +6,15 @@
 //! `DataTransfer` - so they can be any `Clone` type with zero serialization.
 //! (`DataTransfer` interop for external drags lives in [`crate::external`].)
 //!
-//! State is held in a [`struct@Store`], Dioxus 0.8's fine-grained reactivity
+//! State is held in a [`struct@Store`], Dioxus 0.7's fine-grained reactivity
 //! primitive: each field gets its own lazy subscription. A component that
 //! reads `dnd.over()` in its render only reruns when the hovered zone
 //! changes - not on every pointer move.
 
 use dioxus::prelude::*;
 
-use super::types::{DragMode, DropEffect, Point, Rect, ZoneId};
+use super::session::SourceCompletion;
+use super::types::{DragMode, DropEffect, Point, PointerKind, Rect, ZoneId};
 
 /// A snapshot of an in-flight drag.
 ///
@@ -35,6 +36,24 @@ pub struct DragState<T: 'static> {
     pub effect: DropEffect,
     /// How this drag is being driven (pointer vs keyboard).
     pub mode: DragMode,
+    /// Which pointer device drives a pointer drag (mouse/touch/pen).
+    /// Meaningful only while `mode` is [`DragMode::Pointer`]; host-side
+    /// glue reads it to bridge exactly the input layers the device
+    /// needs (see [`PointerKind`]). `Draggable` records it at pickup;
+    /// custom sources that never do get the safe `Mouse` default.
+    pub pointer_kind: PointerKind,
+    /// Client rect of the dragged element, measured at pickup. Feeds
+    /// size-matched ghosts (`DragOverlay { match_source: true }`); `None`
+    /// until the async measurement lands or when a custom source never set
+    /// it.
+    pub source_rect: Option<Rect>,
+    /// Payload of a just-completed keyboard drop, awaiting focus
+    /// restoration: the drop re-mounts the moved item at its landing place
+    /// and the browser dumps focus on `<body>` when the source element
+    /// unmounts, so the matching `Draggable` claims this on mount and
+    /// focuses itself - keyboard users keep their place. Cleared by the
+    /// claim or by the next drag starting.
+    pub refocus: Option<T>,
     /// Destination rect of a just-completed drop whose overlay is still
     /// gliding home (the drop-settle animation). While set, `dragging()` is
     /// false but `payload` stays readable so the ghost keeps its content.
@@ -51,6 +70,9 @@ impl<T> Default for DragState<T> {
             grab: Point::default(),
             effect: DropEffect::default(),
             mode: DragMode::default(),
+            pointer_kind: PointerKind::default(),
+            source_rect: None,
+            refocus: None,
             settle: None,
         }
     }
@@ -62,6 +84,10 @@ pub struct DndContext<T: Clone + 'static> {
     /// Screen-reader announcement channel, rendered by
     /// [`crate::a11y::LiveRegion`].
     announcement: Signal<String>,
+    /// Origin-runtime callback for the current pointer gesture. Kept
+    /// outside `DragState` so consuming a payload cannot lose the source
+    /// lifecycle that still needs to be completed.
+    pub(super) completion: Signal<Option<SourceCompletion>>,
 }
 
 // Manual impls: `derive` would add unnecessary `T: Copy` / `T: PartialEq`
@@ -84,6 +110,7 @@ impl<T: Clone + 'static> DndContext<T> {
         Self {
             state,
             announcement,
+            completion: Signal::new(None),
         }
     }
 
@@ -105,9 +132,58 @@ impl<T: Clone + 'static> DndContext<T> {
             grab,
             effect,
             mode,
+            // The safe default; the drag source refines it right after
+            // this call via `set_pointer_kind` (as `Draggable` does).
+            pointer_kind: PointerKind::default(),
+            // Measured (async) by the drag source right after this call.
+            source_rect: None,
+            // A new drag supersedes any unclaimed focus restoration.
+            refocus: None,
             // Starting a new drag interrupts any settle still gliding.
             settle: None,
         });
+    }
+
+    /// Record which pointer device drives the current drag (see
+    /// [`DragState::pointer_kind`]). `Draggable` sets this right after
+    /// pickup from the initiating event's `pointerType`; call it from
+    /// custom pointer sources so host-side glue (cursor pollers, raw
+    /// input bridges) can tell captured pointers from blind ones. Left
+    /// alone, every drag reads as `Mouse`.
+    pub fn set_pointer_kind(&mut self, kind: PointerKind) {
+        self.state.pointer_kind().set(kind);
+    }
+
+    /// Record that `payload` just landed via a keyboard drop and its new
+    /// element should take focus when it mounts (see
+    /// [`DragState::refocus`]). `Draggable` calls this on its own keyboard
+    /// drops; call it from custom keyboard sources to get the same focus
+    /// continuity.
+    pub fn request_refocus(&mut self, payload: T) {
+        self.state.refocus().set(Some(payload));
+    }
+
+    /// Claim a pending focus restoration if it matches `payload`; returns
+    /// whether the caller should focus itself. First matching claimant
+    /// wins - the request is consumed.
+    pub fn claim_refocus(&mut self, payload: &T) -> bool
+    where
+        T: PartialEq,
+    {
+        let mut refocus = self.state.refocus();
+        let hit = refocus.peek().as_ref() == Some(payload);
+        if hit {
+            refocus.set(None);
+        }
+        hit
+    }
+
+    /// Record the dragged element's client rect (see
+    /// [`DragState::source_rect`]). `Draggable` measures and sets this right
+    /// after pickup; call it from custom drag sources so size-matched ghosts
+    /// (`DragOverlay { match_source: true }`) can dress themselves.
+    pub fn set_source_rect(&mut self, rect: Option<Rect>) {
+        self.state.source_rect().set(rect);
     }
 
     /// Update the tracked pointer position (drives `DragOverlay`). Granular:
@@ -155,6 +231,10 @@ impl<T: Clone + 'static> DndContext<T> {
     /// [`crate::core::components::DragOverlay`] can glide the ghost home.
     /// After this, `dragging()` is false and `over()` is cleared; call
     /// [`Self::finish_settle`] (the overlay does) to reset fully.
+    ///
+    /// Custom sources in a joined [`crate::core::world::DndWorld`] must call
+    /// [`crate::core::world::DndWorld::claim_settle`] first: world overlays
+    /// only present and finish a settle for the elected window.
     pub fn take_settling(&mut self, to: Rect) -> Option<(T, Option<ZoneId>)> {
         let mut s = self.state.write();
         let payload = s.payload.clone()?;
@@ -164,12 +244,40 @@ impl<T: Clone + 'static> DndContext<T> {
         Some((payload, source))
     }
 
+    /// Re-aim an in-flight settle at a better rect - typically the landed
+    /// element's own, measured after the drop re-rendered the model
+    /// (`SettleSlot` does this for you). The overlay's glide retargets
+    /// smoothly, mid-flight included. A no-op unless currently settling.
+    pub fn retarget_settle(&mut self, to: Rect) {
+        let mut settle = self.state.settle();
+        // The equality guard is load-bearing: a `SettleSlot` retargets from
+        // an effect that (via its render) subscribes to `settle`, and
+        // signal writes notify even when the value is unchanged - writing
+        // the same rect back would loop effect -> write -> effect forever.
+        if settle.peek().is_some() && *settle.peek() != Some(to) {
+            settle.set(Some(to));
+        }
+    }
+
     /// End the settling phase and reset all state. A no-op unless currently
     /// settling, so a late `transitionend` can never clobber a new drag.
     pub fn finish_settle(&mut self) {
         if self.state.settle().peek().is_some() {
             self.state.set(DragState::default());
         }
+    }
+
+    /// Is the underlying state still alive? Destructors check this before
+    /// touching the context, because store lens access on a dead store
+    /// panics (even `try_` reads - the selector internals do) and a panic
+    /// in a destructor aborts the process. A world context is process-
+    /// lived so this holds by construction there; the gate keeps every
+    /// other wiring (custom `from_parts` contexts, unforeseen drop orders)
+    /// degrading gracefully instead. Probed through the announcement
+    /// signal, a plain `Signal` created alongside the store, whose
+    /// `try_peek` IS dead-safe.
+    pub(crate) fn alive(&self) -> bool {
+        self.announcement.try_peek().is_ok()
     }
 
     /// Abort the drag and reset all state.
@@ -191,6 +299,12 @@ impl<T: Clone + 'static> DndContext<T> {
     /// [`Self::take_settling`]), if any.
     pub fn settling(&self) -> Option<Rect> {
         self.state.settle().cloned()
+    }
+
+    /// Non-subscribing version of [`Self::settling`] for imperative world
+    /// bookkeeping (destructors, event handlers) that must not subscribe.
+    pub(crate) fn settling_peek(&self) -> bool {
+        self.state.settle().peek().is_some()
     }
 
     /// Clone of the current payload, if dragging.
@@ -218,6 +332,11 @@ impl<T: Clone + 'static> DndContext<T> {
         self.state.grab().cloned()
     }
 
+    /// Client rect of the dragged element measured at pickup, if available.
+    pub fn source_rect(&self) -> Option<Rect> {
+        self.state.source_rect().cloned()
+    }
+
     /// Effect the drag was started with.
     pub fn effect(&self) -> DropEffect {
         self.state.effect().cloned()
@@ -226,6 +345,12 @@ impl<T: Clone + 'static> DndContext<T> {
     /// How the current drag is being driven.
     pub fn mode(&self) -> DragMode {
         self.state.mode().cloned()
+    }
+
+    /// Which pointer device drives the current drag (meaningful for
+    /// [`DragMode::Pointer`] drags; `Mouse` otherwise and by default).
+    pub fn pointer_kind(&self) -> PointerKind {
+        self.state.pointer_kind().cloned()
     }
 
     /// Push a screen-reader announcement (rendered by

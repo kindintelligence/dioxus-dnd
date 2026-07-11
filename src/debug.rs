@@ -1,29 +1,8 @@
-//! **Dev-only** drag-and-drop inspector.
-//!
-//! [`DndDebugOverlay`] draws every zone registered in a provider as a
-//! tinted, labeled outline pinned over the page: acceptance state live
-//! while a drag is in flight (rejecting zones dim and go dashed), the
-//! hovered zone filled as the pointer or keyboard moves, and a status chip
-//! with the registry's view of the world. Everything it shows *is* the
-//! registry - if an outline is missing or misplaced, hit-testing sees
-//! exactly the same wrong thing, which is the point.
-//!
-//! This is a development tool: it renders unstyled debug chrome over your
-//! UI and its output is not localized. Gate it yourself and keep it out of
-//! release builds:
-//!
-//! ```text
-//! DndProvider::<Card> {
-//!     if cfg!(debug_assertions) {
-//!         DndDebugOverlay::<Card> {}
-//!     }
-//!     // ... your app ...
-//! }
-//! ```
+#![doc = include_str!("../docs/api/debugging.md")]
 
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, use_zone_registry};
+use crate::core::{use_dnd, use_joined_window, use_zone_registry};
 
 /// Draws every registered zone of one payload world as a tinted outline
 /// (color derived from the zone id, so it's stable across renders), with
@@ -42,23 +21,22 @@ pub fn DndDebugOverlay<T: Clone + PartialEq + 'static>(
 ) -> Element {
     let _ = phantom;
     let dnd = use_dnd::<T>();
+    let joined = use_joined_window::<T>();
     let registry = use_zone_registry::<T>();
 
     // The core only measures rects at drag start; an inspector wants
     // outlines while idle. Re-measure whenever the zone set changes or a
-    // zone's DOM handle arrives (both read here, subscribing this effect);
-    // the rect writes this triggers are *not* read here, so no loop.
+    // zone's DOM handle arrives. The registry exposes a separate revision
+    // for those events so the rect writes this triggers cannot loop.
     use_effect(move || {
-        for zone in registry.records() {
-            let _ = zone.mounted.read();
-        }
+        registry.track_mounts();
         registry.refresh_rects();
     });
 
     let payload = dnd.payload();
     let over = dnd.over();
     let records = registry.records();
-    let unmeasured = records.iter().filter(|z| z.rect.read().is_none()).count();
+    let unmeasured = records.iter().filter(|z| z.rect.is_none()).count();
     let status = match (dnd.dragging(), over) {
         (false, _) => format!("{} zones ({unmeasured} unmeasured) - idle", records.len()),
         (true, Some(z)) => format!("dragging - over zone {}", z.0),
@@ -73,12 +51,15 @@ pub fn DndDebugOverlay<T: Clone + PartialEq + 'static>(
             for record in records {
                 {
                     let id = record.id;
-                    let rect = (record.rect)();
+                    let rect = record.cached_rect();
                     // Stable per-id tint; the multiplier scatters neighbors
                     // around the wheel.
                     let hue = (id.0.wrapping_mul(47)) % 360;
                     let accepts = payload.as_ref().map(|p| record.accepts_payload(p));
-                    let is_over = over == Some(id);
+                    let is_over = match joined {
+                        Some(joined) => joined.is_over(id),
+                        None => over == Some(id),
+                    };
                     let name = record.label.clone().unwrap_or_else(|| "zone".to_string());
                     rsx! {
                         if let Some(r) = rect {

@@ -39,7 +39,7 @@ pub fn ReadingListPage() -> Element {
             }
             Prose {
                 p {
-                    "The floating card that follows your cursor is a DragOverlay. It renders your own rsx pinned to the pointer while a drag is in flight, so the ghost is a real element you style, not a screenshot the browser took of the original. With settle: true it also finishes the story: on drop the ghost glides into the receiving shelf instead of vanishing (and snaps near-instantly when the OS asks for reduced motion)."
+                    "The floating card that follows your cursor is a DragOverlay. It renders your own rsx pinned to the pointer while a drag is in flight, so the ghost is a real element you style, not a screenshot the browser took of the original. match_source: true dresses it in the grabbed card's exact measured size, which keeps the cursor precisely where you pressed - no shrink, no jump. And settle: true finishes the story: on drop the ghost glides onto the landing card's exact spot instead of vanishing (snapping near-instantly under reduced motion), and the real card takes over the moment it arrives."
                 }
             }
         }
@@ -55,7 +55,7 @@ pub fn ReadingListPage() -> Element {
                     "rsx! builds the UI tree, like JSX with Rust syntax: components are capitalized, plain elements are lowercase, and braces hold Rust expressions. A #[component] function returns Element and re-runs whenever state it reads changes."
                 }
                 p {
-                    "use_signal creates that state. Reading a signal inside a component subscribes it; writing (bins.write(), flashed.set(...)) re-renders every subscriber. The turbofish ::<Card> just pins the generic payload type."
+                    "use_signal creates that state. Reading a signal inside a component subscribes it; writing (bins.write(), landing.set(...)) re-renders every subscriber. The turbofish ::<Card> just pins the generic payload type."
                 }
             }
         }
@@ -85,8 +85,10 @@ pub fn ReadingListPage() -> Element {
                 title: "DragOverlay props",
                 rows: vec![
                     ("settle", "bool = false", "Glide the ghost from the release point into the receiving zone on drop, instead of vanishing. Honors prefers-reduced-motion; cancelled drags and keyboard drops never settle."),
+                    ("match_source", "bool = false", "Dress the ghost in the grabbed element's measured rect. The pointer stays exactly where you pressed, whatever your ghost rsx renders - no size jump at pickup."),
                     ("duration", "f64 = 200.0", "Settle transition duration in milliseconds."),
                     ("easing", "String = \"ease\"", "CSS easing function for the settle glide."),
+                    ("on_settled", "EventHandler<()>", "Fired when the settle glide lands - the hook for anything that should wait for the ghost (cleanup, sounds, state)."),
                 ],
             }
             PropsTable {
@@ -119,6 +121,10 @@ pub fn ReadingListPage() -> Element {
                         "Touch works out of the box.",
                         "The same pointer gesture serves mouse, touch and pen, and near-miss touch drops snap to the closest acceptable zone within 48px.",
                     ),
+                    (
+                        "SettleSlot completes the illusion.",
+                        "Wrap the element your drop just created and mark it active: it holds its space invisibly while the ghost glides onto its exact rect, then swaps in as the ghost unmounts - one object from pickup to landing, never two copies.",
+                    ),
                 ],
             }
         }
@@ -138,7 +144,12 @@ const SNIPPET: &str = r#"DndProvider::<Card> {
         on_drop: move |o: DropOutcome<Card>| shelve(o.payload, o.to),
         "Drop here"
     }
-    DragOverlay::<Card> { settle: true, class: "rotate-2 shadow-xl", Ghost {} }
+    DragOverlay::<Card> {
+        settle: true,
+        match_source: true,          // ghost wears the grabbed card's rect
+        class: "shadow-xl",
+        Ghost {}
+    }
 }"#;
 
 // --- 1. reading list (core Draggable / DropZone + overlay) -------------------
@@ -164,8 +175,10 @@ fn ReadingListDemo() -> Element {
         );
         m
     });
-    // Book that just landed, so it flashes onto its new shelf.
-    let mut flashed = use_signal(|| None::<u32>);
+    // Book currently mid-glide (pointer drops only - keyboard drops never
+    // settle): its SettleSlot holds the space and swaps in as the ghost
+    // lands. No arrival effect beyond the glide itself.
+    let mut landing = use_signal(|| None::<u32>);
     let move_card = move |o: DropOutcome<Card>| {
         let id = o.payload.id;
         let mut b = bins.write();
@@ -174,13 +187,15 @@ fn ReadingListDemo() -> Element {
         }
         b.entry(o.to).or_default().push(o.payload);
         drop(b);
-        flashed.set(Some(id));
+        if o.mode != DragMode::Keyboard {
+            landing.set(Some(id));
+        }
     };
 
     rsx! {
         Section {
             title: "Reading list",
-            note: "Two shelves: what you're reading, and what you've finished. Release a book over the other shelf and the ghost settles into it, then the book flashes into place.",
+            note: "Two shelves: what you're reading, and what you've finished. Pick a book up and it lifts off its shelf; release it over the other shelf and it glides into its new place.",
             tag: "DropZone",
             DndProvider::<Card> {
                 LiveRegion::<Card> {}
@@ -198,25 +213,42 @@ fn ReadingListDemo() -> Element {
                                 span { class: "text-[10px] text-[#BBB8AE]", "{hint}" }
                             }
                             for card in bins.read().get(&zone).cloned().unwrap_or_default() {
-                                Draggable::<Card> {
-                                    payload: card.clone(),
-                                    zone,
-                                    label: card.title.clone(),
-                                    class: if flashed() == Some(card.id) { format!("{ITEM} drop-flash") } else { ITEM.to_string() },
-                                    // Clear the flash when any card is picked up, so the
-                                    // next drop re-triggers the animation cleanly.
-                                    on_drag_start: move |_| flashed.set(None),
-                                    div { class: ROW,
-                                        CardFace { card: card.clone() }
+                                // The slot makes the drop read as one object:
+                                // the landed card holds its space invisibly
+                                // while the ghost glides onto this exact spot,
+                                // then swaps in as the ghost unmounts.
+                                SettleSlot::<Card> {
+                                    key: "{card.id}",
+                                    active: landing() == Some(card.id),
+                                    Draggable::<Card> {
+                                        payload: card.clone(),
+                                        zone,
+                                        label: card.title.clone(),
+                                        // One copy, ever: the ghost wears this card's
+                                        // exact rect at pickup, so hiding the original
+                                        // outright reads as the card itself lifting off
+                                        // (its empty slot stays open behind it).
+                                        class: format!("{ITEM} data-dragging:!opacity-0"),
+                                        div { class: ROW,
+                                            CardFace { card: card.clone() }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                // The ghost is the card, not a summary of it: match_source
+                // wears the grabbed row's exact rect (so the cursor stays
+                // where you pressed) and the content mirrors CardFace. The
+                // landing card takes over silently as the glide ends.
                 DragOverlay::<Card> {
                     settle: true,
-                    class: "pointer-events-none flex items-center gap-2 rounded-xl bg-gradient-to-b from-[#FBFAF6] to-[#F6F3EC] px-3.5 py-2.5 text-[13px] font-medium text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_20px_44px_-12px_rgba(26,24,21,0.14)]",
+                    match_source: true,
+                    duration: 160.0,
+                    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+                    on_settled: move |_| landing.set(None),
+                    class: GHOST,
                     CardGhost {}
                 }
             }
@@ -229,8 +261,7 @@ fn CardGhost() -> Element {
     let dnd = use_dnd::<Card>();
     rsx! {
         if let Some(c) = dnd.payload() {
-            span { class: "h-4 w-1 shrink-0 rounded-full {swatch(c.id)}" }
-            span { "{c.title}" }
+            CardFace { card: c }
         }
     }
 }

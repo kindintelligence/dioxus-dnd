@@ -1,38 +1,4 @@
-//! Multi-select drag: select several items, drag them as one payload.
-//!
-//! The design leans on the core being generic: the payload type flowing
-//! through the provider is simply `Vec<K>` - so wrap your app in
-//! `DndProvider::<Vec<K>>` and your `DropZone`s receive the whole selection
-//! in one `DropOutcome<Vec<K>>`.
-//!
-//! What this module adds is the interaction layer:
-//! - [`use_selection`] - selection state with the usual click semantics
-//!   (click selects one, Ctrl/Cmd+click toggles).
-//! - [`SelectableDraggable`] - a `Draggable` that resolves its payload from
-//!   the selection: dragging a *selected* item carries the whole selection;
-//!   dragging an *unselected* item carries just that item.
-//! - [`SelectionCount`] - a badge for your `DragOverlay` ghost ("3 items").
-//!
-//! ```text
-//! let selection = use_selection::<FileId>();
-//! rsx! {
-//!     DndProvider::<Vec<FileId>> {
-//!         for file in files {
-//!             SelectableDraggable::<FileId> {
-//!                 key: "{file.id.0}",
-//!                 item: file.id,
-//!                 selection,
-//!                 FileRow { file }
-//!             }
-//!         }
-//!         DropZone::<Vec<FileId>> {
-//!             on_drop: move |o: DropOutcome<Vec<FileId>>| trash(o.payload),
-//!             "Trash"
-//!         }
-//!         DragOverlay::<Vec<FileId>> { SelectionCount::<FileId> {} }
-//!     }
-//! }
-//! ```
+#![doc = include_str!("../docs/api/multiselect.md")]
 
 use dioxus::prelude::*;
 
@@ -123,7 +89,7 @@ pub fn use_selection<K: Clone + PartialEq + 'static>() -> Selection<K> {
 ///
 /// - Click / Ctrl+click manage the selection (via [`Selection::click`]).
 /// - Dragging a selected item picks up **the whole selection**; dragging an
-///   unselected one picks up just that item (and selects it).
+///   unselected one picks up just that item (the selection is unchanged).
 /// - Works with mouse, touch, pen and keyboard.
 /// - The wrapper exposes `data-selected="true"` for styling (absent when
 ///   unselected, so presence-based selectors like Tailwind
@@ -159,11 +125,20 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     };
     let click_key = item.clone();
     let mut selection = selection;
+    // The browser fires a trailing `click` on the source after a completed
+    // pointer drag; letting it through would collapse the just-dragged
+    // multi-selection to this one item. Drag start arms the flag, the next
+    // click consumes it - exactly one trailing click is swallowed.
+    let mut dragged = use_signal(|| false);
 
     rsx! {
         div {
             "data-selected": if selected { "true" },
             onclick: move |evt: MouseEvent| {
+                if *dragged.peek() {
+                    dragged.set(false);
+                    return;
+                }
                 selection.click(click_key.clone(), evt.modifiers());
             },
             ..attributes,
@@ -172,6 +147,7 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
                 zone,
                 effect,
                 label,
+                on_drag_start: move |_| dragged.set(true),
                 {children}
             }
         }

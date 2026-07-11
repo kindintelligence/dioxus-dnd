@@ -386,6 +386,12 @@ struct Scrap {
     tone: &'static str,
 }
 
+const HERO_BOARD: ZoneId = ZoneId(4200);
+const HERO_BOUNDS: Bounds = Bounds {
+    width: 640.0,
+    height: 150.0,
+};
+
 /// The hero's proof-of-work: a dot-grid board where every scrap is a real
 /// `Draggable` on a real `CanvasDropZone`. The landing page runs on the
 /// library it advertises.
@@ -447,10 +453,8 @@ fn HeroBoard() -> Element {
         DndProvider::<Scrap> {
             LiveRegion::<Scrap> {}
             CanvasDropZone::<Scrap> {
-                bounds: Bounds {
-                    width: 640.0,
-                    height: 150.0,
-                },
+                id: HERO_BOARD,
+                bounds: HERO_BOUNDS,
                 label: "Hero board",
                 on_drop: move |d: CanvasDrop<Scrap>| {
                     let mut s = scraps.write();
@@ -460,15 +464,7 @@ fn HeroBoard() -> Element {
                     }
                 },
                 class: "relative h-52 overflow-hidden rounded-2xl bg-[#F6F3EC] bg-[radial-gradient(#E1DDCE_1px,transparent_1px)] [background-size:18px_18px] ring-1 ring-[#E8E5D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_1px_2px_rgba(26,24,21,0.04)] transition data-active:ring-[#A6C1B0]",
-                for scrap in scraps.read().clone() {
-                    Draggable::<Scrap> {
-                        payload: scrap.clone(),
-                        label: scrap.label,
-                        style: "position: absolute; left: {scrap.x}px; top: {scrap.y}px;",
-                        class: "cursor-grab select-none rounded-md px-2.5 py-1.5 font-mono text-[11.5px] font-medium ring-1 ring-[#1A1815]/10 shadow-[0_1px_2px_rgba(26,24,21,0.08),0_6px_14px_-6px_rgba(26,24,21,0.16)] transition hover:-translate-y-px active:cursor-grabbing data-dragging:opacity-40 {scrap.rot} {scrap.tone}",
-                        "{scrap.label}"
-                    }
-                }
+                HeroScraps { scraps }
             }
             p { class: "mt-3 text-[12.5px] leading-relaxed text-[#7A776C]",
                 "Every scrap up there is a "
@@ -595,6 +591,43 @@ fn Home() -> Element {
             p { class: "mx-auto max-w-md text-[17px] font-light leading-relaxed text-[#45423B]",
                 "The library moves the payload. "
                 span { class: "font-medium text-[#1C4A38]", "What it means is yours." }
+            }
+        }
+    }
+}
+
+/// The scraps themselves. The one in flight rides the pointer through the
+/// exact corrected placement its drop will use - the element travels across
+/// the board and stops where you let go. Nothing fades, nothing is left
+/// behind, no overlay.
+#[component]
+fn HeroScraps(scraps: Signal<Vec<Scrap>>) -> Element {
+    let dnd = use_dnd::<Scrap>();
+    let registry = use_zone_registry::<Scrap>();
+    let live_pos = move |scrap: &Scrap| -> Point {
+        let in_flight = dnd.dragging()
+            && dnd.mode() == DragMode::Pointer
+            && dnd.payload().map(|p| p.id) == Some(scrap.id);
+        if in_flight {
+            if let Some(rect) = registry.cached_rect(HERO_BOARD) {
+                let pointer = client_to_canvas(dnd.pointer(), rect);
+                return canvas_position(pointer, dnd.grab(), None, Some(HERO_BOUNDS));
+            }
+        }
+        Point::new(scrap.x, scrap.y)
+    };
+    rsx! {
+        for scrap in scraps.read().clone() {
+            Draggable::<Scrap> {
+                key: "{scrap.id}",
+                payload: scrap.clone(),
+                label: scrap.label,
+                style: {
+                    let p = live_pos(&scrap);
+                    format!("position: absolute; left: {}px; top: {}px;", p.x, p.y)
+                },
+                class: "cursor-grab select-none rounded-md px-2.5 py-1.5 font-mono text-[11.5px] font-medium ring-1 ring-[#1A1815]/10 shadow-[0_1px_2px_rgba(26,24,21,0.08),0_6px_14px_-6px_rgba(26,24,21,0.16)] hover:-translate-y-px active:cursor-grabbing data-dragging:z-10 {scrap.rot} {scrap.tone}",
+                "{scrap.label}"
             }
         }
     }

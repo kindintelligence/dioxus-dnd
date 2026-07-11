@@ -87,8 +87,8 @@ pub fn MailboxPage() -> Element {
                         "Render a count in the DragOverlay instead of cloning rows; dragging forty messages costs the same as dragging one.",
                     ),
                     (
-                        "Dragging an unselected row selects it,",
-                        "matching what users expect from desktop mail and file managers.",
+                        "Dragging an unselected row carries just that row.",
+                        "The selection stays as it was, so a stray drag never dismantles a carefully built stack.",
                     ),
                     (
                         "Clear the selection in your drop handler.",
@@ -242,7 +242,7 @@ fn MailboxDemo() -> Element {
                                     item: e.id,
                                     selection,
                                     label: e.subject,
-                                    class: "block cursor-grab select-none border-b border-[#E8E5D9] px-3 py-2.5 text-[13px] transition last:border-0 hover:bg-[#E1DDCE]/50 active:cursor-grabbing data-selected:bg-[#1C4A38]/15 data-dragging:opacity-40",
+                                    class: "block cursor-grab select-none border-b border-[#E8E5D9] px-3 py-2.5 text-[13px] transition last:border-0 hover:bg-[#E1DDCE]/50 active:cursor-grabbing data-selected:bg-[#1C4A38]/15 [&_[data-dragging]]:opacity-40",
                                     div { class: "flex w-full items-center gap-2.5",
                                         span { class: if e.unread { "h-1.5 w-1.5 shrink-0 rounded-full bg-[#1C4A38]" } else { "h-1.5 w-1.5 shrink-0 rounded-full bg-transparent" } }
                                         span { class: if e.unread { "w-24 shrink-0 truncate font-semibold text-[#1A1815]" } else { "w-24 shrink-0 truncate font-medium text-[#45423B]" },
@@ -347,7 +347,11 @@ fn MailboxDemo() -> Element {
                         }
                     }
                 }
-                DragOverlay::<Vec<u32>> { class: "pointer-events-none rotate-2 rounded-lg bg-[#FBFAF6] px-3.5 py-2 text-[12px] font-semibold text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_20px_44px_-12px_rgba(26,24,21,0.14)]",
+                DragOverlay::<Vec<u32>> {
+                    settle: true,
+                    duration: 160.0,
+                    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+                    class: "pointer-events-none rotate-2 rounded-lg bg-[#FBFAF6] px-3.5 py-2 text-[12px] font-semibold text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_2px_4px_rgba(26,24,21,0.10),0_12px_24px_-8px_rgba(26,24,21,0.12)]",
                     MailGhost {}
                 }
             }

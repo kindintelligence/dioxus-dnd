@@ -169,6 +169,7 @@ fn NewsletterDemo() -> Element {
                             }
                             for card in zones.read().get(&zone).cloned().unwrap_or_default() {
                                 Draggable::<Card> {
+                                    key: "{card.id}",
                                     payload: card.clone(),
                                     zone,
                                     label: card.title.clone(),

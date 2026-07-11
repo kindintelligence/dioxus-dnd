@@ -119,12 +119,10 @@ fn QueueDemo() -> Element {
             .map(|n| format!("Ep {n:02}  ·  {}", T[(n - 1) as usize % T.len()]))
             .collect::<Vec<_>>()
     });
-    // Index of the row that just landed, so it can flash.
-    let mut dropped = use_signal(|| None::<usize>);
     rsx! {
         Section {
             title: "Podcast queue",
-            note: "A queue longer than the window. Drag toward the top or bottom edge and it scrolls itself; the episode flashes where it lands. On a phone the dotted grip does the dragging, so a finger on the rows still scrolls the list.",
+            note: "A queue longer than the window. Drag toward the top or bottom edge and it scrolls itself. On a phone the dotted grip does the dragging, so a finger on the rows still scrolls the list.",
             tag: "AutoScroll",
             // The scroll container *is* the well: flat rows, hairline
             // dividers, and the grabbed row lifts out of the surface.
@@ -134,25 +132,12 @@ fn QueueDemo() -> Element {
                     // Inside a scroll container, claim only the grip for touch
                     // drags - the rows themselves keep scrolling by finger.
                     touch_handle: true,
-                    on_sort: move |ev: SortEvent| {
-                        apply_sort(&mut rows.write(), ev);
-                        dropped.set(Some(ev.to));
-                    },
+                    on_sort: move |ev: SortEvent| apply_sort(&mut rows.write(), ev),
                     class: "[&>*]:px-1.5 [&>*]:transition [&>*+*]:border-t [&>*+*]:border-[#E8E5D9] [&>*:hover]:bg-[#E1DDCE]/50 [&>[data-dragging]]:relative [&>[data-dragging]]:z-10 [&>[data-dragging]]:bg-[#FBFAF6] [&>[data-dragging]]:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_12px_26px_-10px_rgba(26,24,21,0.14)] [&_[data-sort-handle]]:w-6 [&_[data-sort-handle]]:shrink-0 [&_[data-sort-handle]]:cursor-grab [&_[data-sort-handle]]:text-[13px] [&_[data-sort-handle]]:text-[#BBB8AE] [&_[data-sort-handle]]:transition [&_[data-sort-handle]:hover]:text-[#1C4A38]",
-                    render: move |ix: usize| {
-                        let flash = if dropped() == Some(ix) { "drop-flash" } else { "" };
-                        rsx! {
-                            div {
-                                class: "cursor-grab select-none rounded-md px-2 py-2.5 text-[13px] text-[#2C2A25] transition {flash}",
-                                // Reset once the flash finishes so the same row
-                                // can flash again on its next drop.
-                                onanimationend: move |_| {
-                                    if dropped() == Some(ix) {
-                                        dropped.set(None);
-                                    }
-                                },
-                                "{rows.read()[ix]}"
-                            }
+                    render: move |ix: usize| rsx! {
+                        div {
+                            class: "cursor-grab select-none rounded-md px-2 py-2.5 text-[13px] text-[#2C2A25] transition",
+                            "{rows.read()[ix]}"
                         }
                     },
                 }

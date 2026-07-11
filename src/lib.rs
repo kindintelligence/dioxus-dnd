@@ -9,6 +9,8 @@ pub mod autoscroll;
 pub mod board;
 pub mod canvas;
 pub mod debug;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 pub mod dragout;
 pub mod external;
 pub mod files;
@@ -26,6 +28,7 @@ pub mod prelude {
     pub use crate::board::{
         apply_move, BoardColumn, BoardItem, BoardPayload, BoardSlot, ContainerId, MoveEvent,
     };
+    pub use crate::bridge_drop_zone;
     pub use crate::canvas::{
         canvas_keyboard_pointer, canvas_position, canvas_to_client, client_to_canvas, Bounds,
         CanvasDrop, CanvasDropZone, CanvasKeyboardPlacement, SnapGrid,
@@ -33,16 +36,22 @@ pub mod prelude {
     pub use crate::core::{
         apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point, edge_of,
         effective_effect, element_point, screen_delta_to_world, screen_to_world, transition,
-        use_dnd, use_dnd_provider, use_dnd_strings, use_rect_refresh, use_zone_id,
-        use_zone_registry, world_delta_to_screen, world_to_screen, BridgeDropZone, CanvasViewport,
-        Direction, DndContext, DndProvider, DndStrings, DragId, DragMode, DragModifier,
-        DragOverlay, DragState, Draggable, DropEffect, DropOutcome, DropZone, Edge, EdgeSet,
-        GestureEffect, GestureEvent, GesturePhase, ModifierCtx, ParentZone, Point, Rect,
-        RectRefresh, ZoneId, ZoneRecord, ZoneRegistry,
+        use_bridge_world, use_dnd, use_dnd_provider, use_dnd_strings, use_dnd_world,
+        use_joined_window, use_rect_refresh, use_zone_id, use_zone_registry, world_delta_to_screen,
+        world_to_screen, BridgeDropZone, BridgeGeometry, BridgeWorld, CanvasViewport, Direction,
+        DndContext, DndProvider, DndStrings, DndWorld, DragId, DragMode, DragModifier, DragOverlay,
+        DragState, Draggable, DropEffect, DropOutcome, DropZone, Edge, EdgeSet, GestureEffect,
+        GestureEvent, GesturePhase, JoinedWindow, ModifierCtx, ParentZone, Point, PointerKind,
+        Rect, RectRefresh, SettleSlot, TouchSense, WindowGeometry, WindowKey, ZoneId, ZoneRecord,
+        ZoneRegistration, ZoneRegistry,
     };
     pub use crate::debug::DndDebugOverlay;
+    #[cfg(feature = "serde")]
+    pub use crate::dragout::TypedDragSource;
     pub use crate::dragout::{ExternalDragSource, OutboundContent};
     pub use crate::external::{classify, ExternalDrop, ExternalDropZone, ExternalPayload};
+    #[cfg(feature = "serde")]
+    pub use crate::external::{TypedDrop, TypedDropZone};
     pub use crate::files::{FileDrop, FileDropZone, FileFilter, FileRejection};
     pub use crate::grid::{cell_of, index_of, SortableGrid};
     pub use crate::multiselect::{use_selection, SelectableDraggable, Selection, SelectionCount};

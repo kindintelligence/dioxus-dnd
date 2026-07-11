@@ -1,10 +1,4 @@
-//! Hierarchical drops - file explorers, nested menus, outliners.
-//!
-//! The classic tree problem: a drop on a node can mean three different things.
-//! [`DropIntent`] captures that trichotomy, [`intent_from_offset`] derives it
-//! from where inside the row the pointer sits (top quarter = before, bottom
-//! quarter = after, middle = into), and [`would_create_cycle`] guards against
-//! dropping a node into its own subtree.
+#![doc = include_str!("../docs/api/trees.md")]
 
 use std::rc::Rc;
 
@@ -12,7 +6,8 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone, Rect, ZoneRecord,
+    use_dnd, use_joined_window, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone,
+    Rect, ZoneRecord,
 };
 
 /// Identifies a tree node.
@@ -37,11 +32,26 @@ pub enum DropIntent {
 }
 
 /// A completed tree drop.
+///
+/// Non-exhaustive so drop context can be added without a major release;
+/// synthesize your own (tests, programmatic moves) via [`TreeDropEvent::new`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TreeDropEvent<T> {
     pub payload: T,
     pub target: NodeId,
     pub intent: DropIntent,
+}
+
+impl<T> TreeDropEvent<T> {
+    /// A drop of `payload` landing relative to `target` per `intent`.
+    pub fn new(payload: T, target: NodeId, intent: DropIntent) -> Self {
+        Self {
+            payload,
+            target,
+            intent,
+        }
+    }
 }
 
 /// Derive a [`DropIntent`] from the pointer's Y offset within a row of the
@@ -87,9 +97,9 @@ pub fn would_create_cycle(
 ///
 /// The payload type `T` travels through the shared `DndContext<T>` (use the
 /// core `Draggable` on your rows to start drags).
-/// While hovered, the wrapper carries `data-intent="before" | "after" |
-/// "into"` for styling insertion indicators - for pointer (mouse, touch,
-/// pen) and keyboard drags alike. The attribute is absent when not hovered,
+/// While a pointer drag (mouse, touch, pen) hovers, the wrapper carries
+/// `data-intent="before" | "after" | "into"` for styling insertion
+/// indicators. The attribute is absent when not hovered,
 /// so both value selectors (Tailwind `data-[intent=into]:bg-blue-50`) and
 /// presence selectors (`data-intent:outline`) work.
 ///
@@ -120,6 +130,7 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     children: Element,
 ) -> Element {
     let dnd = use_dnd::<T>();
+    let joined = use_joined_window::<T>();
     let mut registry = use_zone_registry::<T>();
     let mut label_now = use_signal(|| label.clone());
     let mut accepts_now = use_signal(|| accepts);
@@ -146,8 +157,6 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     // --- zone registration: makes this row a touch and keyboard target ----
     let zone_id = use_zone_id();
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None::<Rect>);
     // Registry-level filter: would *any* intent be accepted? (Hover can't
     // know the final band yet; the exact intent is re-checked at drop.)
     let registered_accepts = Callback::new(move |p: T| match *accepts_now.peek() {
@@ -172,15 +181,15 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             });
         }
     });
-    use_hook(move || {
+    let registration = use_hook(move || {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
             label: label_now.peek().clone(),
             on_drop: registered_drop,
             accepts: Some(registered_accepts),
-            mounted,
-            rect,
+            mounted: None,
+            rect: None,
         })
     });
     use_drop(move || {
@@ -193,9 +202,16 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     // Pointer drags derive a live band from the shared pointer position, so
     // fingers see the same before/into/after feedback as mice.
     let display_intent = move || -> Option<DropIntent> {
-        if dnd.dragging() && dnd.mode() == DragMode::Pointer && dnd.over() == Some(zone_id) {
-            let r = (*rect.peek())?;
-            return Some(intent_from_offset(dnd.pointer().y - r.y, row_height));
+        let over = match joined {
+            Some(joined) => joined.is_over(zone_id),
+            None => dnd.over() == Some(zone_id),
+        };
+        if dnd.dragging() && dnd.mode() == DragMode::Pointer && over {
+            let r = registry.cached_rect(zone_id)?;
+            let pointer = joined
+                .and_then(|joined| joined.local_pointer())
+                .unwrap_or_else(|| dnd.pointer());
+            return Some(intent_from_offset(pointer.y - r.y, row_height));
         }
         None
     };
@@ -212,17 +228,16 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             "data-intent": intent_str(),
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();
-                let mut mounted = mounted;
-                let mut rect = rect;
-                mounted.set(Some(m.clone()));
+                let mut registry = registry;
+                registry.set_mounted(registration, m.clone());
                 spawn(async move {
                     if let Ok(r) = m.get_client_rect().await {
-                        rect.set(Some(Rect::new(
+                        registry.set_rect_if_present(registration, Rect::new(
                             r.origin.x,
                             r.origin.y,
                             r.size.width,
                             r.size.height,
-                        )));
+                        ));
                     }
                 });
             },

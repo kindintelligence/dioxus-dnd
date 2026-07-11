@@ -1,6 +1,4 @@
-//! Free-position drops - node editors, whiteboards, floor planners. The drop
-//! answers not just "what landed" but "*where* exactly", corrected for grab
-//! offset, optionally snapped to a grid and clamped to bounds.
+#![doc = include_str!("../docs/api/canvas.md")]
 
 use std::rc::Rc;
 
@@ -12,7 +10,11 @@ use crate::core::{
 };
 
 /// A payload dropped at a position on the canvas.
+///
+/// Non-exhaustive: emitted by the zone, only ever consumed by callers, and
+/// likely to grow context fields (modifiers, effect) - destructure with `..`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CanvasDrop<T> {
     pub payload: T,
     /// Top-left position for the dropped element, relative to the canvas -
@@ -206,8 +208,6 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     // registry delivers a `DropOutcome`; `element` is the pointer relative to
     // the canvas and `grab` is the pickup offset.
     let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    let mounted = use_signal(|| None::<Rc<MountedData>>);
-    let rect = use_signal(|| None::<Rect>);
     let registered_drop = Callback::new(move |o: DropOutcome<T>| {
         let pointer = if o.mode == DragMode::Keyboard {
             canvas_keyboard_pointer(*keyboard_now.peek(), o.element)
@@ -216,16 +216,16 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
         };
         place(o.payload, pointer, o.grab);
     });
-    use_hook(|| {
+    let registration = use_hook(|| {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
             label: label.clone(),
             on_drop: registered_drop,
             accepts: None,
-            mounted,
-            rect,
-        });
+            mounted: None,
+            rect: None,
+        })
     });
     use_drop(move || {
         registry.unregister(zone_id);
@@ -239,17 +239,16 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
             "data-active": if dnd.dragging() { "true" },
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();
-                let mut mounted = mounted;
-                let mut rect = rect;
-                mounted.set(Some(m.clone()));
+                let mut registry = registry;
+                registry.set_mounted(registration, m.clone());
                 spawn(async move {
                     if let Ok(r) = m.get_client_rect().await {
-                        rect.set(Some(Rect::new(
+                        registry.set_rect_if_present(registration, Rect::new(
                             r.origin.x,
                             r.origin.y,
                             r.size.width,
                             r.size.height,
-                        )));
+                        ));
                     }
                 });
             },

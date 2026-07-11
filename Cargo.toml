@@ -1,6 +1,6 @@
 [package]
 name = "dioxus-dnd"
-version = "2.4.0"
+version = "3.0.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Modular, accessible drag-and-drop for Dioxus: sortable lists, kanban boards, trees, grids, file drops, multi-select, touch support and more"
@@ -9,7 +9,26 @@ repository = "https://github.com/kindintelligence/dioxus-dnd"
 readme = "README.md"
 keywords = ["dioxus", "drag-and-drop", "dnd", "sortable", "ui"]
 categories = ["gui", "wasm", "web-programming"]
-exclude = [".github/"]
+# Keep repo plumbing out of the published tarball: assets/ carries the README
+# hero GIF; the renderer/Blitz notes, superpowers plans, and reconciliation
+# review are internal working documents; and the package.json/playwright trio
+# plus tests/browser/ are the Playwright browser suite - JS specs a
+# `cargo test` consumer can never run. Public docs stay in the package because
+# the module rustdoc includes docs/api/*.md at compile time.
+# PLATFORMS.md stays IN: it is small and the README's platform table links to
+# it, so excluding it would strand that link in the packaged README.
+exclude = [
+    ".github/",
+    "assets/",
+    "docs/BLITZ-TRACKING-ISSUE.md",
+    "docs/RENDERER-CONTRACT.md",
+    "docs/superpowers/",
+    "DESKTOP-ARCHITECTURE-RECONCILIATION-REVIEW.md",
+    "package.json",
+    "package-lock.json",
+    "playwright.config.js",
+    "tests/browser/",
+]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -23,6 +42,23 @@ serde_json = { version = "1", optional = true }
 # matches only when the type is identical. `Element` brings
 # `set_pointer_capture`. No wasm-bindgen: we downcast via Dioxus, not JsCast.
 web-sys = { version = "0.3.98", optional = true, features = ["Element"] }
+# `desktop` feature only: the windowing-layer glue in `crate::desktop`
+# (geometry feed + cross-window drag bridge) touches tao through
+# dioxus-desktop, and the bridge's cursor poller sleeps on the tokio
+# runtime dioxus-desktop already drives.
+dioxus-desktop = { version = "0.7", optional = true }
+tokio = { version = "1", default-features = false, features = ["time"], optional = true }
+# Bridge-leg diagnostics (`debug`) and platform-model tripwires (`warn`).
+# Already in the dioxus-desktop tree, so this adds no new compilation.
+tracing = { version = "0.1", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The X11 dead-space release leg queries the root pointer + button mask
+# through a first-party connection. tao happens to re-export xlib FFI today,
+# but that re-export is not a semver promise - it can vanish in a tao minor
+# without a breaking release - so the leg must not lean on it. Pure-Rust
+# RustConnection, no extension features, no unsafe.
+x11rb = { version = "0.13", optional = true }
 
 [features]
 default = []
@@ -32,6 +68,18 @@ serde = ["dep:serde", "dep:serde_json"]
 ## on web (keeps your styled `DragOverlay`). Off by default; the core stays
 ## dependency-free and mouse pointer-drag falls back to best-effort.
 web = ["dep:web-sys"]
+## Desktop windowing glue for multi-window drag worlds (`crate::desktop`):
+## `use_window_geometry_feed` + `DragBridge`, the two pieces every
+## dioxus-desktop window needs to join a `DndWorld` with full cross-window
+## drags. Off by default; pulls dioxus-desktop (wry/tao).
+desktop = ["dep:dioxus-desktop", "dep:tokio", "dep:x11rb", "dep:tracing"]
+
+# The browser-suite fixture app uses the typed transport, which is
+# serde-gated (its doc header runs it with `--features web,serde`);
+# without this, a plain feature-less `cargo test` fails compiling it.
+[[example]]
+name = "regressions"
+required-features = ["serde"]
 
 [dev-dependencies]
 # `mounted` is REQUIRED: the pointer path measures element rects via
@@ -45,6 +93,9 @@ dioxus-ssr = "0.7"
 web-sys = { version = "0.3", features = ["Location"] }
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
+# serde derive for the typed-transport tests and fixtures (the library's
+# own optional serde dep stays derive-free).
+serde = { version = "1", features = ["derive"] }
 # The gallery's Packing list page wires DndStrings to dioxus-i18n (the
 # Fluent-based crate the Dioxus docs recommend); the library itself stays
 # dependency-free.

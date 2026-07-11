@@ -23,7 +23,7 @@ pub fn StandupPage() -> Element {
                     ),
                     (
                         "One box, two registrations.",
-                        "Zone ids are process-global while registries are per-type, so the bridge calls use_zone_registry twice and registers the same ZoneId in each, sharing one pair of mounted/rect signals. Both worlds' hit-testing and keyboard navigation now find the same rectangle on their own.",
+                        "Zone ids are process-global while registries are per-type, so the bridge registers the same ZoneId in each. Each provider owns its geometry copy; the element fans one mount and measurement into both registries. Both worlds' hit-testing and keyboard navigation then find the same rectangle on their own.",
                     ),
                     (
                         "Each drop arrives typed.",
@@ -67,13 +67,13 @@ pub fn StandupPage() -> Element {
         DocBlock { title: "Beyond two worlds",
             Prose {
                 p {
-                    "BridgeDropZone packages a recipe you can write yourself - and for three or more providers, you still do. Registries are per-type but zone ids are process-global, so one component registers the same ZoneId in each world's registry, sharing one mounted/rect pair:"
+                    "BridgeDropZone packages a recipe you can write yourself - and for three or more providers, you still do. Registries are per-type but zone ids are process-global, so one component registers the same ZoneId in each world's registry and fans the element's geometry into every provider-owned record:"
                 }
             }
             CodeBlock { code: RECIPE_SNIPPET }
             DioxusNote {
                 p {
-                    "Signals are Copy handles, so passing the same mounted and rect into every record genuinely shares them: any world's refresh_rects() re-measures the one rectangle all registries see."
+                    "Mounted handles and rects are plain values owned by their provider registries. The bridge performs one DOM measurement at mount and copies it into every world; later refresh_rects() calls can safely refresh each registry's own copy."
                 }
             }
             PropsTable {
@@ -81,7 +81,7 @@ pub fn StandupPage() -> Element {
                 rows: vec![
                     ("use_zone_registry::<T>()", "-> ZoneRegistry<T>", "The per-type registry the provider carries. Public precisely so custom zones like this one can exist."),
                     ("use_zone_id()", "-> ZoneId", "A stable, process-unique id. Unique across all types, which is what lets one id live in several registries."),
-                    ("ZoneRecord<T>", "id, parent, label, on_drop, accepts, mounted, rect", "Everything a registry knows about a zone. register() adds or replaces by id; unregister() removes."),
+                    ("ZoneRecord<T>", "id, parent, label, on_drop, accepts, mounted: Option<_>, rect: Option<Rect>", "Everything a registry owns for a zone. register() adds or replaces by id; mutation methods update geometry; unregister() removes."),
                     ("ParentZone", "context marker", "Read it to discover an enclosing zone, provide it so zones nested in the bridge find their parent."),
                 ],
             }
@@ -135,23 +135,35 @@ const RECIPE_SNIPPET: &str = r#"let mut reg_a = use_zone_registry::<Ticket>();
 let mut reg_b = use_zone_registry::<Person>();
 let zone_id = use_zone_id();          // process-unique: valid in both worlds
 let parent = try_use_context::<ParentZone>().map(|p| p.0);
-let mounted = use_signal(|| None);    // one DOM box,
-let rect = use_signal(|| None);       // one rectangle, shared by both records
-use_hook(|| {
+let registration_a = use_hook(|| {
     reg_a.register(ZoneRecord {
         id: zone_id, parent, label: label.clone(),
         on_drop: Callback::new(move |o| on_ticket.call(o)),
-        accepts: None, mounted, rect,
-    });
+        accepts: None, mounted: None, rect: None,
+    })
+});
+let registration_b = use_hook(|| {
     reg_b.register(ZoneRecord {
         id: zone_id, parent, label,   // same id, other registry
         on_drop: Callback::new(move |o| on_person.call(o)),
-        accepts: None, mounted, rect,
-    });
+        accepts: None, mounted: None, rect: None,
+    })
 });
 use_drop(move || {
     reg_a.unregister(zone_id);
     reg_b.unregister(zone_id);
+});
+
+// In the element's onmounted handler, fan one DOM read into both worlds:
+let m = evt.data();
+reg_a.set_mounted(registration_a, m.clone());
+reg_b.set_mounted(registration_b, m.clone());
+spawn(async move {
+    if let Ok(r) = m.get_client_rect().await {
+        let rect = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
+        reg_a.set_rect_if_present(registration_a, rect);
+        reg_b.set_rect_if_present(registration_b, rect);
+    }
 });"#;
 
 // --- 15. standup (two providers bridged by BridgeDropZone) -------------------

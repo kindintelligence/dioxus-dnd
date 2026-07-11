@@ -1,24 +1,4 @@
-//! OS file drops - the one drop type where the payload arrives *in the native
-//! event* (`evt.files()`) rather than through the shared context.
-//!
-//! Works on web and desktop. On desktop, [`dioxus::html::FileData::path`]
-//! gives you the real filesystem path; on web you read contents with
-//! `read_bytes()` / `read_string()` / `byte_stream()`.
-//!
-//! ```text
-//! rsx! {
-//!     FileDropZone {
-//!         filter: FileFilter::new().extensions(["png", "jpg"]).max_size(5_000_000),
-//!         on_files: move |drop: FileDrop| async move {
-//!             for f in drop.files {
-//!                 let bytes = f.read_bytes().await.unwrap();
-//!                 // ...
-//!             }
-//!         },
-//!         "Drop images here"
-//!     }
-//! }
-//! ```
+#![doc = include_str!("../docs/api/file-drops.md")]
 
 use dioxus::html::{FileData, HasFileData};
 use dioxus::prelude::*;
@@ -36,7 +16,11 @@ pub struct FileDrop {
 }
 
 /// Why a file was rejected by a [`FileFilter`].
+///
+/// Non-exhaustive: new acceptance rules mean new rejection reasons, so
+/// keep a wildcard arm with a generic "not accepted" message.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FileRejection {
     /// Extension not in the allow-list.
     Extension,

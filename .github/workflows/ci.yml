@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [development]
+  pull_request:
+
+jobs:
+  markdown:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint documentation
+        uses: rvben/rumdl@v0
+        with:
+          version: "0.2.30"
+          path: docs/
+          config: .rumdl.toml
+          report-type: annotations
+
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --features serde
+
+      - name: Clippy
+        run: cargo clippy --features serde --all-targets -- -D warnings
+
+  desktop:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # dioxus-desktop's system libraries, as documented in
+      # examples/desktop-multiwindow/Cargo.toml.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libxdo-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --features "serde desktop"
+
+      - name: Clippy
+        run: cargo clippy --features "serde desktop" --all-targets -- -D warnings
+
+      # The desktop module's contract is that tao/wry stay an implementation
+      # detail: nothing public may name their types, or every tao minor bump
+      # becomes our breaking change. Line-based heuristic (a multi-line
+      # signature could evade it); the real guard is review, this is the
+      # tripwire.
+      - name: Public desktop API must not leak tao/wry types
+        run: |
+          if grep -rnE '^\s*pub (fn|struct|enum|trait|type|use|const)[^;{(]*\b(tao|wry)::' src/desktop/; then
+            echo "::error::tao/wry types leaked into the public desktop API surface"
+            exit 1
+          fi
+
+  # Non-blocking semver report against the latest published release, so API
+  # changes stay visible. Advisory (continue-on-error): 3.0.0 deliberately
+  # batches #[non_exhaustive] hardening that this job will flag against 2.4.0.
+  semver:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libxdo-dev
+
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          feature-group: all-features

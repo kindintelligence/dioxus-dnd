@@ -33,6 +33,11 @@ jobs:
       - name: Build gallery
         run: dx build --example gallery --platform web --features web --release --base-path /dioxus-dnd/
 
+      # GitHub Pages serves 404.html for unknown paths; serving the app
+      # there lets dioxus-router handle deep links like /itinerary.
+      - name: SPA fallback for deep links
+        run: cp target/dx/gallery/release/web/public/index.html target/dx/gallery/release/web/public/404.html
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3

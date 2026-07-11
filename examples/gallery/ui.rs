@@ -13,8 +13,14 @@ use dioxus::prelude::*;
 // Card recipe: top-lit gradient surface, a 1px inset edge line for
 // definition on the light ground, a soft ambient shadow, and a one-pixel
 // hover lift that presses back down on grab.
-pub const ITEM: &str = "group block cursor-grab select-none rounded-xl bg-gradient-to-b from-[#FBFAF6] to-[#F6F3EC] px-3.5 py-2.5 text-[13px] text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.05),0_1px_2px_rgba(26,24,21,0.10),0_4px_12px_-4px_rgba(26,24,21,0.08)] transition hover:-translate-y-px hover:brightness-[1.06] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_2px_4px_rgba(26,24,21,0.10),0_12px_24px_-8px_rgba(26,24,21,0.12)] active:translate-y-0 active:cursor-grabbing data-dragging:opacity-50";
+pub const ITEM: &str = "group block cursor-grab select-none rounded-xl bg-gradient-to-b from-[#FBFAF6] to-[#F6F3EC] px-3.5 py-2.5 text-[13px] text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.05),0_1px_2px_rgba(26,24,21,0.10),0_4px_12px_-4px_rgba(26,24,21,0.08)] transition hover:-translate-y-px hover:brightness-[1.06] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_2px_4px_rgba(26,24,21,0.10),0_12px_24px_-8px_rgba(26,24,21,0.12)] active:translate-y-0 active:cursor-grabbing data-dragging:opacity-40";
 pub const ROW: &str = "flex w-full items-center gap-2.5";
+
+/// The floating card ghost every Card-based page dresses its `DragOverlay`
+/// in: the ITEM face, lifted (bigger drop shadow, no hover states - it IS
+/// the hover). Pair with `match_source: true` so it wears the grabbed
+/// card's exact rect.
+pub const GHOST: &str = "pointer-events-none flex items-center gap-2.5 rounded-xl bg-gradient-to-b from-[#FBFAF6] to-[#F6F3EC] px-3.5 py-2.5 text-[13px] text-[#1A1815] shadow-[inset_0_1px_0_rgba(255,255,255,0.4),inset_0_0_0_1px_rgba(26,24,21,0.06),0_2px_4px_rgba(26,24,21,0.10),0_12px_24px_-8px_rgba(26,24,21,0.12)]";
 pub const ZONE: &str = "rounded-xl border border-dashed border-[#7A776C]/30 p-3.5 min-h-24 transition space-y-2 data-active:border-[#6C9984] data-active:bg-[#6C9984]/12 data-over:border-solid data-over:border-[#1C4A38] data-over:bg-[#1C4A38]/15";
 
 pub const BASE_CSS: &str = r#"
@@ -36,12 +42,6 @@ pre, code, kbd {
   font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 *:focus:not(:focus-visible) { outline: none; }
-@keyframes drop-flash {
-  0%   { box-shadow: 0 0 0 3px rgba(28,74,56,0.35), 0 20px 40px -12px rgba(26,24,21,0.15); }
-  55%  { box-shadow: 0 0 0 1px rgba(28,74,56,0.12), 0 6px 16px -6px rgba(26,24,21,0.08); }
-  100% { box-shadow: 0 0 0 0 rgba(28,74,56,0),      0 1px 2px 0 rgba(0,0,0,0); }
-}
-.drop-flash { animation: drop-flash 600ms cubic-bezier(0.22, 1, 0.36, 1); }
 /* First-class keyboard focus: every draggable (core Draggable renders
    aria-roledescription) gets a forest ring on focus-visible instead of the
    browser default outline. */
