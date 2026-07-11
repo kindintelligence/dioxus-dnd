@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 
-use crate::core::components::{DropCompletion, SettleRoute};
+use crate::core::components::{resolve_release_target, DropCompletion, SettleRoute};
 use crate::core::types::{effective_effect, DragMode, Point, ZoneId};
 
 use super::geometry::WindowKey;
@@ -95,9 +95,10 @@ impl<T: Clone + 'static> DndWorld<T> {
     }
 
     /// Complete an in-flight pointer drag at a host-reported cursor
-    /// position (global physical px): exact zone hit in whichever window
-    /// contains the point, else that window's 48px snap (in its own CSS
-    /// px), else cancel. Returns the receiving zone. Used by glue that
+    /// position (global physical px): last acceptable exact hit in registry
+    /// order within whichever window contains the point, else that window's
+    /// 48px snap (in its own CSS px), else cancel. Rejecting overlaps are
+    /// skipped. Returns the receiving zone. Used by glue that
     /// detects a release the webviews never saw - e.g. a non-origin
     /// window receiving its first pointer event mid-"drag", which proves
     /// the button is up. A no-op returning `None` when nothing is
@@ -130,10 +131,11 @@ impl<T: Clone + 'static> DndWorld<T> {
             }
             return None;
         };
-        let target = rec.registry.hit_test(local).or_else(|| {
-            ctx.payload()
-                .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
-        });
+        // Release selection is acceptance-aware even for an exact overlap:
+        // a rejecting later registry record must not mask an accepting one.
+        let target = ctx
+            .payload()
+            .and_then(|p| resolve_release_target(rec.registry, &p, local, 48.0));
         // Imperative host delivery peeks the active snapshot rather than
         // subscribing the bridge runtime to modifier updates.
         let modifiers = self

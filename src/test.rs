@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
-use crate::core::components::{deliver_drop, DropCompletion, SettleRoute};
+use crate::core::components::{deliver_drop, resolve_release_target, DropCompletion, SettleRoute};
 use crate::core::hooks::SettleFlag;
 use crate::core::world::{JoinedWindow, WorldHit, WorldMembership};
 use crate::core::{
@@ -219,10 +219,9 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
             if let Some(j) = membership {
                 let _ = j.zone_under(point);
                 if let Some((rec, local)) = j.foreign_window_under(point) {
-                    let target = rec.registry.hit_test(local).or_else(|| {
-                        dnd.payload()
-                            .and_then(|p| rec.registry.hit_test_closest(local, &p, 48.0))
-                    });
+                    let target = dnd
+                        .payload()
+                        .and_then(|p| resolve_release_target(rec.registry, &p, local, 48.0));
                     let delivered = target
                         .filter(|t| {
                             deliver_drop(
@@ -254,10 +253,9 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                     return target;
                 }
             }
-            let target = registry.hit_test(point).or_else(|| {
-                dnd.payload()
-                    .and_then(|p| registry.hit_test_closest(point, &p, 48.0))
-            });
+            let target = dnd
+                .payload()
+                .and_then(|p| resolve_release_target(registry, &p, point, 48.0));
             let delivered = target
                 .filter(|t| match membership {
                     Some(j) => deliver_drop(

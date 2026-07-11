@@ -71,9 +71,10 @@ cancelled, so the assertion and the state change land in one line.
 
 `release` is not a shortcut around your logic. It ends in the same delivery
 code as `Draggable` itself: acceptance filters run, the release mirrors the
-pointer gesture's forgiveness (an exact hit wins, otherwise the drop snaps
-to the closest acceptable zone whose edge is within 48px, else the drag
-cancels), the receiving zone's closest-edge enrichment fills
+pointer gesture's forgiveness (the last acceptable exact hit in registry
+order wins, rejecting overlaps are skipped, otherwise the drop snaps to the
+closest acceptable zone whose edge is within 48px, else the drag cancels),
+the receiving zone's closest-edge enrichment fills
 `DropOutcome::edge`, and the full `DropOutcome` - coordinates, effect,
 `from` and `to` - is constructed and handed to `on_drop`. A test that
 asserts on the outcome is exercising production behavior, not a mock.

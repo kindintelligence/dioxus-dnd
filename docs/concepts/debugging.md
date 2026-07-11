@@ -63,7 +63,7 @@ unmeasured count makes that absence visible instead of silent.
 | No outline where a zone should be | The zone never registered in this world (wrong provider, wrong payload type) or it is still unmeasured; the chip's unmeasured count separates the two. |
 | An outline in the wrong place | The cached rect is stale. Idle outlines refresh when zones mount or unmount; the next drag start re-measures everything, so drag and watch it correct itself, or not. |
 | A zone dims and goes dashed mid-drag | Its `accepts` callback returns `false` for this payload. That zone never highlights, keyboard navigation skips it, and a release over it falls through. |
-| A drop lands on the zone underneath | The zone above rejects the payload, so the release fell through to the acceptable zone beneath it, by design. |
+| A drop lands on an earlier overlapping record | The later record in registry order rejects the payload, so release selection continued in reverse registry order. This is hit-test order, not CSS paint order. |
 | `dragging - over nothing` in a gap between zones | No zone contains the pointer. A release here snaps to the closest acceptable zone within 48px, or ends the drag with nothing consumed. |
 
 ## Mixing payload types and multiple windows

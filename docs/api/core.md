@@ -142,11 +142,13 @@ custom zones can register themselves.
 
 Methods: `accepts_payload(&payload)` runs the filter (true when there is
 none), `cached_rect()` and `mounted_handle()` read this snapshot's values.
+Keep acceptance predicates cheap and do not mutate the same registry from
+them: registry queries invoke the predicate while holding their read guard.
 
 ### `ZoneRegistry<T>`
 
-A `Copy` handle over provider-owned storage of `ZoneRecord`s in mount
-order.
+A `Copy` handle over provider-owned storage of `ZoneRecord`s in registry
+order. Replacing a same-id record retains its existing slot.
 
 Registration:
 
@@ -173,7 +175,9 @@ Lookups. All of these peek (read without subscribing) except `records`:
 
 Keyboard navigation. Order is spatial - top-to-bottom, then reading order,
 which is left-to-right under `Direction::Ltr` and right-to-left under
-`Rtl`; zones without a measured rect come last in registration order:
+`Rtl`. Zone tops within one CSS pixel form a row, preventing sub-pixel
+layout jitter from overriding horizontal order; zones without a measured
+rect come last in registration order:
 
 | Method | What it does |
 |---|---|
@@ -189,8 +193,8 @@ Hit-testing, against cached rects:
 
 | Method | What it does |
 |---|---|
-| `hit_test(point)` | Topmost zone containing the point; later-mounted zones win, approximating DOM paint order. |
-| `hit_test_closest(point, &payload, max_distance)` | Acceptance-aware: the topmost zone that contains the point and accepts the payload, so a drop can land on an accepting zone under a rejecting or decorative one. When nothing contains the point, falls back to the acceptable zone whose rect edge is nearest, within `max_distance` CSS px - the built-in drop passes 48.0 - which forgives releases in the gutter between zones. |
+| `hit_test(point)` | Last record in registry order containing the point. Registry order only approximates DOM paint order: CSS `z-index`, stacking contexts and portals are not inspected. Replacing a same-id record retains its slot. |
+| `hit_test_closest(point, &payload, max_distance)` | Acceptance-aware: the last record in registry order that contains the point and accepts the payload, so a release can pass a rejecting record and land on an earlier acceptable overlap. When nothing contains the point, falls back to the acceptable zone whose rect edge is nearest, within `max_distance` CSS px - the built-in drop passes 48.0 - which forgives releases in the gutter between zones. |
 
 Measurement:
 
@@ -206,6 +210,12 @@ The token `register` returns, identifying one particular registration of a
 token so a result started for the old registration cannot land in its
 same-id replacement. `set_mounted` and `set_rect_if_present` quietly drop
 writes carrying a stale token.
+
+Registry mutators degrade to no-ops instead of panicking when provider
+storage is being torn down or already borrowed. A `trace` event under the
+`dioxus_dnd::registry` target records the operation, storage field, zone,
+registration generation and Dioxus borrow error so a live borrow collision
+is distinguishable from an absent zone.
 
 ### `RectRefresh`
 

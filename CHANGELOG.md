@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Zone-registry hot paths and ordering.** Acceptance-aware release
+  hit-testing now scans the registry once without cloning every acceptable
+  `ZoneRecord`, evaluates each acceptance predicate once per query, and
+  consistently falls through rejecting overlaps in local, simulated,
+  cross-window, and host-driven release paths. Keyboard traversal groups
+  zone tops within one CSS pixel into the same row, preventing fractional
+  layout jitter from producing a zig-zag in LTR or RTL.
+- **Registry mutation diagnostics and structural consistency.** Failed Dioxus
+  signal mutations emit `trace` events under `dioxus_dnd::registry`, and
+  register/unregister acquire both the zone and generation stores before
+  mutating either so a runtime borrow collision cannot split their state.
+  Registry handle equality now includes all four backing signal identities.
+
+### Documented
+
+- **Overlap and reentrancy invariants.** Public docs now state that overlapping
+  targets resolve by registry order rather than CSS stacking/portal paint
+  order, and the architecture guide records the generation revalidation
+  protocol that protects a replacement drag started synchronously inside a
+  receiver or source callback. Identity counters also document their relaxed,
+  process-lifetime non-wrapping assumption.
+
 ## 3.0.1 - 2026-07-11
 
 ### Fixed

@@ -83,6 +83,18 @@ pub(crate) struct SettleRoute<'a, T: Clone + 'static> {
     pub(crate) owner: Option<(&'a DndWorld<T>, WindowKey)>,
 }
 
+/// Acceptance-aware release selection shared by the live pointer path, host
+/// delivery, and `DragSim`, so overlap fall-through cannot diverge between
+/// production and the headless driver.
+pub(crate) fn resolve_release_target<T: Clone + 'static>(
+    registry: ZoneRegistry<T>,
+    payload: &T,
+    point: Point,
+    max_distance: f64,
+) -> Option<ZoneId> {
+    registry.hit_test_closest(point, payload, max_distance)
+}
+
 /// Deliver the in-flight payload to `target`: acceptance check, settle
 /// routing, outcome construction, the zone's callback. THE drop path - the
 /// `Draggable` pointer gesture and [`crate::test::DragSim`] both end here,

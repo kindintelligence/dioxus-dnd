@@ -11,6 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// impossible: any id that fits in a `u32` can never clash with an auto id.
 const AUTO_ID_BASE: u64 = 1 << 32;
 
+// Identity freshness only: Relaxed is sufficient because these counters carry
+// no synchronization. Correctness assumes these process-lifetime u64 counters
+// never wrap; do not narrow them.
 static NEXT_ID: AtomicU64 = AtomicU64::new(AUTO_ID_BASE);
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 

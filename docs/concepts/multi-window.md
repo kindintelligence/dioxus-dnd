@@ -162,6 +162,12 @@ A few invariants hold the world together:
   window that took the drop, survives the origin window closing
   mid-animation, and only that window can finish it. Custom delivery code
   claims this with `DndWorld::claim_settle`.
+- **Callbacks revalidate ownership.** Receiver and source callbacks may
+  synchronously begin a replacement drag. The old result commits before
+  receiver code; completion then re-reads source-session ownership and live
+  drag state before clearing metadata. Host legs separately revalidate their
+  composite generation immediately before acting. See
+  [the callback invariant](architecture.md#callback-boundaries-are-generation-boundaries).
 
 ## Close order and degradation
 

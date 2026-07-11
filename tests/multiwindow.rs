@@ -25,6 +25,7 @@ use dioxus_dnd::test::{drag_sim, rerender, DragSim, DragSimProbe};
 
 const ZONE_A1: ZoneId = ZoneId(1);
 const ZONE_B1: ZoneId = ZoneId(2);
+const ZONE_B2: ZoneId = ZoneId(3);
 
 thread_local! {
     static WORLD: RefCell<Option<DndWorld<String>>> = const { RefCell::new(None) };
@@ -82,6 +83,28 @@ fn window_b() -> Element {
                 "zone-b"
             }
             DragOverlay::<String> { "GHOST" }
+        }
+    }
+}
+
+fn window_b_with_overlapping_rejector() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            DropZone::<String> {
+                id: ZONE_B1,
+                label: "accepting-b",
+                on_drop: move |o: DropOutcome<String>| log_drop("B", &o),
+                "accepting-zone-b"
+            }
+            DropZone::<String> {
+                id: ZONE_B2,
+                label: "rejecting-b",
+                accepts: move |_: String| false,
+                on_drop: move |_: DropOutcome<String>| -> () {
+                    panic!("rejecting zone received drop");
+                },
+                "rejecting-zone-b"
+            }
         }
     }
 }
@@ -833,6 +856,36 @@ fn local_completion_is_idempotent_with_a_late_host_echo() {
     assert_eq!(host_echo, None);
     assert_eq!(sim.completions(&tw.dom_a), vec![true]);
     DROPS.with_borrow(|drops| assert_eq!(drops.len(), 1));
+}
+
+#[test]
+fn foreign_and_host_releases_fall_through_overlapping_rejector() {
+    let tw = two_windows(window_b_with_overlapping_rejector);
+    let mut sim = tw.sim;
+    // The later registry record occupies the exact same rect but rejects every
+    // payload. Hover may name it geometrically; release must select B1.
+    sim.place_in(
+        &tw.dom_a,
+        tw.key_b,
+        ZONE_B2,
+        Rect::new(50.0, 50.0, 100.0, 100.0),
+    );
+
+    sim.pick_up(&tw.dom_a, "foreign".to_string());
+    sim.move_to(&tw.dom_a, Point::new(1200.0, 200.0));
+    assert_eq!(sim.release(&tw.dom_a), Some(ZONE_B1));
+
+    sim.pick_up(&tw.dom_a, "host".to_string());
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0))),
+        Some(ZONE_B1)
+    );
+    assert_eq!(sim.completions(&tw.dom_a), vec![true, true]);
+    DROPS.with_borrow(|drops| {
+        assert_eq!(drops.len(), 2);
+        assert!(drops.iter().all(|drop| drop.2 == ZONE_B1));
+    });
 }
 
 #[test]
