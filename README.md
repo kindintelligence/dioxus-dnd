@@ -8,7 +8,7 @@
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
 [![CI](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml/badge.svg)](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml)
 
-![Two desktop windows sharing one live drag world: a streaming telemetry chart dragged from Mission Control into a satellite window, still streaming inside the drag ghost mid-flight](https://raw.githubusercontent.com/kindintelligence/dioxus-dnd/development/assets/showcase.gif)
+![Two desktop windows sharing one live drag world: a streaming telemetry chart dragged from Mission Control into a satellite window, still streaming inside the drag ghost mid-flight](assets/showcase.gif)
 
 **The chart never stops streaming - even inside the drag ghost, mid-flight
 between windows.** [Multi-window desktop drags](#multi-window-desktop-drags)
