@@ -8,7 +8,7 @@
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
 [![CI](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml/badge.svg)](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml)
 
-![Two desktop windows sharing one live drag world: a streaming telemetry chart dragged from Mission Control into a satellite window, still streaming inside the drag ghost mid-flight](https://raw.githubusercontent.com/kindintelligence/dioxus-dnd/development/assets/showcase.gif)
+![Two desktop windows sharing one live drag world: a streaming telemetry chart dragged from Mission Control into a satellite window, still streaming inside the drag ghost mid-flight](assets/showcase.gif)
 
 **The chart never stops streaming - even inside the drag ghost, mid-flight
 between windows.** [Multi-window desktop drags](#multi-window-desktop-drags)
@@ -92,7 +92,7 @@ cargo add dioxus-dnd
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 2.1 - 2.4 | **0.7** (verified against `0.7.9`) | 1.85+ |
+| 2.1 - 3.0 | **0.7** (verified against `0.7.9`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
 
 The inversion is deliberate: 2.0 was an early spike against the Dioxus
@@ -251,7 +251,7 @@ signal: `DropZone { edge: EdgeSet::Vertical, ... }` carries
 `DropOutcome::edge` records the edge held at release - so the handler maps
 `Top` to "insert before" without re-deriving geometry. The pure function
 behind it, `edge_of(point, rect, edges)`, is public for custom zones. The
-gallery's [*Itinerary*](https://kindintelligence.github.io/dioxus-dnd/itinerary)
+gallery's [*Itinerary*](https://kindintelligence.github.io/dioxus-dnd/)
 page builds a drop-above/drop-below list with it.
 
 ### The drag ghost
@@ -345,7 +345,7 @@ selected."), and custom flows push their own messages with
 [Localization](#localization). In virtualized lists, forward
 `aria-setsize`/`aria-posinset` so position is announced against the full
 list, not the rendered window (the gallery's
-[*Archive*](https://kindintelligence.github.io/dioxus-dnd/archive) page
+[*Archive*](https://kindintelligence.github.io/dioxus-dnd/) page
 shows this).
 
 ### Reordering without any drag at all
@@ -436,7 +436,7 @@ same translation layer (the crate voices the names you give it), and set
 `dir: Direction::Rtl` for right-to-left locales so the keyboard's spatial
 navigation matches the mirrored layout. Custom components can voice
 themselves consistently via `use_dnd_strings()`. The gallery's
-[*Packing list*](https://kindintelligence.github.io/dioxus-dnd/packing-list)
+[*Packing list*](https://kindintelligence.github.io/dioxus-dnd/)
 page shows the full dioxus-i18n wiring - inline Fluent catalogs, a
 live English/Spanish toggle, and a visible mirror of the announcement
 channel. (`DndDebugOverlay` is intentionally not localized; it's a
@@ -635,7 +635,7 @@ a WIP limit is one closure: the full column refuses on pointer, touch and
 keyboard alike. Explicit column ids never collide with slot auto ids:
 auto ids start at 2^32, so any explicit id in u32 range is safe. The
 gallery's
-[*Sprint board*](https://kindintelligence.github.io/dioxus-dnd/sprint-board)
+[*Sprint board*](https://kindintelligence.github.io/dioxus-dnd/)
 page runs the pattern with a live WIP limit.
 
 ## Trees
@@ -664,7 +664,7 @@ is one comparison, and `would_create_cycle` walks the target's ancestors
 through your own parent lookup to stop a folder landing inside itself. The
 band math (`intent_from_offset`) is public for custom tree interactions.
 The gallery's
-[*Project files*](https://kindintelligence.github.io/dioxus-dnd/project-files)
+[*Project files*](https://kindintelligence.github.io/dioxus-dnd/)
 page shows reparenting with the cycle guard live.
 
 ## Multi-select
@@ -896,7 +896,7 @@ BridgeDropZone::<Task, Person> {
 ```
 
 The gallery's
-[*Standup*](https://kindintelligence.github.io/dioxus-dnd/standup) page
+[*Standup*](https://kindintelligence.github.io/dioxus-dnd/) page
 shows it live. For *three or more* worlds,
 generate a component for your exact type list with the
 `bridge_drop_zone!` macro - each row is one world, with its own optional
@@ -932,7 +932,7 @@ rendered rows (each crossing of the container's clip reports an
 IntersectionObserver rect that, with the row's canvas position, recovers
 the scroll offset - Dioxus's documented virtual-list tool) plus
 `AutoScroll`'s `on_scroll` for its own edge-scrolling during drags. The
-gallery's [*Archive*](https://kindintelligence.github.io/dioxus-dnd/archive)
+gallery's [*Archive*](https://kindintelligence.github.io/dioxus-dnd/)
 page runs the full pattern at 10,000 rows, keyboard navigation included.
 
 ## Debug overlay (dev-only)
