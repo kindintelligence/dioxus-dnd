@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  markdown:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint documentation
+        uses: rvben/rumdl@v0
+        with:
+          version: "0.2.30"
+          path: docs/
+          config: .rumdl.toml
+          report-type: annotations
+
   test:
     runs-on: ubuntu-latest
 
@@ -57,10 +71,9 @@ jobs:
             exit 1
           fi
 
-  # Non-blocking semver report against the latest published release, so a
-  # 2.x can't break downstream by accident. Advisory (continue-on-error):
-  # 2.5.0 deliberately batches #[non_exhaustive] hardening that this job
-  # will flag against 2.4.0.
+  # Non-blocking semver report against the latest published release, so API
+  # changes stay visible. Advisory (continue-on-error): 3.0.0 deliberately
+  # batches #[non_exhaustive] hardening that this job will flag against 2.4.0.
   semver:
     runs-on: ubuntu-latest
     continue-on-error: true

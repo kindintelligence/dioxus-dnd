@@ -59,6 +59,10 @@ walkthroughs and API references, and it is built with this crate.
 **Reference:** [Feature flags](#feature-flags) ·
 [Platform notes](#platform-notes) · [Prior art](#prior-art)
 
+Every concept above also has a full guide and API reference in
+[`docs/`](docs/README.md), paired by name; the API references double as
+the module docs on docs.rs.
+
 ## Why this crate
 
 - **Typed payloads, no serialization.** In-app drags carry any `Clone` Rust
@@ -194,7 +198,9 @@ variants (`data-dragging:opacity-50`) work directly:
 | `data-selected` | `SelectableDraggable` | the item is selected |
 | `data-disabled` | `Draggable` | dragging is disabled |
 
-Context-backed attributes follow mouse, touch, pen and keyboard drags alike.
+Context-backed attributes follow mouse, touch, pen and keyboard drags
+alike; the pointer-derived values (`data-edge`, `data-intent`) render for
+pointer drags only.
 Native boundary components (`FileDropZone`, `ExternalDropZone`) reflect
 browser drag events from outside the app. With Tailwind that composes into
 complete drag styling with no extra state:

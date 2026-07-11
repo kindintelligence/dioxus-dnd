@@ -1,28 +1,4 @@
-//! Cross-container moves - the kanban pattern. Items travel between columns
-//! (and optionally to a position within a column) via the shared
-//! [`crate::core::DndContext`].
-//!
-//! The payload type flowing through the context is [`BoardPayload<T>`], which
-//! remembers where the item came from. Wrap your app (or board) in
-//! `DndProvider::<BoardPayload<Card>>`.
-//!
-//! ```text
-//! DndProvider::<BoardPayload<Card>> {
-//!     for (col_id, cards) in columns {
-//!         BoardColumn::<Card> {
-//!             id: col_id,
-//!             on_move: move |mv: MoveEvent<Card>| {
-//!                 apply_move(&mut board.write(), &mv);
-//!             },
-//!             for (ix, card) in cards.iter().enumerate() {
-//!                 BoardItem::<Card> { item: card.clone(), column: col_id, index: ix,
-//!                     CardView { card: card.clone() }
-//!                 }
-//!             }
-//!         }
-//!     }
-//! }
-//! ```
+#![doc = include_str!("../docs/api/boards.md")]
 
 use std::collections::HashMap;
 
@@ -176,8 +152,10 @@ pub fn BoardColumn<T: Clone + PartialEq + 'static>(
 ///
 /// Stop-gap-free precise ordering: render one slot before each item and one
 /// at the end. While a drag is in flight the slot carries
-/// `data-active="true"` (absent otherwise) - style it visible then, e.g.
-/// Tailwind `h-0 data-active:h-2`.
+/// `data-active="true"` (absent otherwise) - reveal it without moving
+/// layout, e.g. Tailwind `h-2 opacity-0 data-active:opacity-100`. Growing
+/// the slot itself (`h-0` to `h-2`) reflows the column mid-drag and strands
+/// the cached zone rects.
 #[component]
 pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     /// The column this slot belongs to.

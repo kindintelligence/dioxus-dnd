@@ -1,0 +1,15 @@
+[global]
+flavor = "gfm"
+exclude = ["docs/superpowers/**"]
+respect_gitignore = true
+
+[MD013]
+line_length = 100
+code_blocks = false
+tables = false
+
+[MD041]
+level = 1
+front-matter-title = "title"
+front-matter-title-pattern = "^(title|header):"
+fix = false

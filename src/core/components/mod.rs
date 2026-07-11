@@ -1,16 +1,4 @@
-//! Ready-made components over the shared drag context.
-//!
-//! ```text
-//! rsx! {
-//!     DndProvider::<Card> {
-//!         Draggable::<Card> { payload: card.clone(), "Drag me" }
-//!         DropZone::<Card> {
-//!             on_drop: move |outcome: DropOutcome<Card>| { /* ... */ },
-//!             "Drop here"
-//!         }
-//!     }
-//! }
-//! ```
+#![doc = include_str!("../../../docs/api/drag-and-drop.md")]
 
 use dioxus::prelude::*;
 

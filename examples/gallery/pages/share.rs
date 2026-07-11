@@ -81,8 +81,8 @@ pub fn SharePage() -> Element {
                         "files, outside content and drag-out require DataTransfer, which pointer events cannot reach. Everything inside your app should use the typed context instead.",
                     ),
                     (
-                        "Typed payloads across windows:",
-                        "the serde feature adds external::typed::store and retrieve for JSON payloads between two of your own windows, wire-compatible with dioxus-html's own helpers.",
+                        "Typed payloads across apps:",
+                        "the serde feature adds external::typed::store and retrieve for JSON payloads between separate apps, wire-compatible with dioxus-html's own helpers. Windows of one app share a DndWorld instead, no serialization.",
                     ),
                     (
                         "classify is public",

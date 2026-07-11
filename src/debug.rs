@@ -1,25 +1,4 @@
-//! **Dev-only** drag-and-drop inspector.
-//!
-//! [`DndDebugOverlay`] draws every zone registered in a provider as a
-//! tinted, labeled outline pinned over the page: acceptance state live
-//! while a drag is in flight (rejecting zones dim and go dashed), the
-//! hovered zone filled as the pointer or keyboard moves, and a status chip
-//! with the registry's view of the world. Everything it shows *is* the
-//! registry - if an outline is missing or misplaced, hit-testing sees
-//! exactly the same wrong thing, which is the point.
-//!
-//! This is a development tool: it renders unstyled debug chrome over your
-//! UI and its output is not localized. Gate it yourself and keep it out of
-//! release builds:
-//!
-//! ```text
-//! DndProvider::<Card> {
-//!     if cfg!(debug_assertions) {
-//!         DndDebugOverlay::<Card> {}
-//!     }
-//!     // ... your app ...
-//! }
-//! ```
+#![doc = include_str!("../docs/api/debugging.md")]
 
 use dioxus::prelude::*;
 

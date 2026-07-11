@@ -325,7 +325,7 @@ impl<T: Clone + 'static> DndWorld<T> {
     }
 
     /// Ask every joined window to re-measure its zones, each inside its own
-    /// runtime (see [`WindowRecord::refresh`]).
+    /// runtime through the window's internal refresh callback.
     pub fn refresh_all_rects(&self) {
         let Ok(windows) = self.windows.try_peek() else {
             return;

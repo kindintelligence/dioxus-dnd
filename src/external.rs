@@ -1,11 +1,4 @@
-//! Drops arriving from *outside* your app - selected text, links dragged from
-//! another tab, content from other applications - plus typed serde payloads
-//! over the `DataTransfer` bridge for interop scenarios the Rust-side
-//! context can't reach.
-//!
-//! For drags between elements of your own app, prefer the core context: it
-//! carries any `Clone` type with zero serialization. Reach for this module
-//! when the *browser* is the transport.
+#![doc = include_str!("../docs/api/external-content.md")]
 
 use dioxus::html::HasFileData;
 use dioxus::prelude::*;
@@ -178,7 +171,7 @@ pub mod typed {
     pub const MIME: &str = "application/json";
 
     /// Store a typed payload on a `DataTransfer` directly. The building
-    /// block behind [`store`]; also the testable seam.
+    /// block behind [`store()`]; also the testable seam.
     pub fn store_in<T: serde::Serialize>(dt: &DataTransfer, value: &T) -> Result<(), String> {
         let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
         dt.set_data(MIME, &json)

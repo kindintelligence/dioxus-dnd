@@ -1,10 +1,4 @@
-//! Hierarchical drops - file explorers, nested menus, outliners.
-//!
-//! The classic tree problem: a drop on a node can mean three different things.
-//! [`DropIntent`] captures that trichotomy, [`intent_from_offset`] derives it
-//! from where inside the row the pointer sits (top quarter = before, bottom
-//! quarter = after, middle = into), and [`would_create_cycle`] guards against
-//! dropping a node into its own subtree.
+#![doc = include_str!("../docs/api/trees.md")]
 
 use std::rc::Rc;
 
@@ -103,9 +97,9 @@ pub fn would_create_cycle(
 ///
 /// The payload type `T` travels through the shared `DndContext<T>` (use the
 /// core `Draggable` on your rows to start drags).
-/// While hovered, the wrapper carries `data-intent="before" | "after" |
-/// "into"` for styling insertion indicators - for pointer (mouse, touch,
-/// pen) and keyboard drags alike. The attribute is absent when not hovered,
+/// While a pointer drag (mouse, touch, pen) hovers, the wrapper carries
+/// `data-intent="before" | "after" | "into"` for styling insertion
+/// indicators. The attribute is absent when not hovered,
 /// so both value selectors (Tailwind `data-[intent=into]:bg-blue-50`) and
 /// presence selectors (`data-intent:outline`) work.
 ///

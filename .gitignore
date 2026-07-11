@@ -4,6 +4,7 @@ examples/desktop-multiwindow/target/
 node_modules/
 test-results/
 playwright-report/
+.rumdl_cache/
 .codex-plans/
 # Session planning/scout/upstream notes live outside history (like TODO.md)
 PLAN-*.md

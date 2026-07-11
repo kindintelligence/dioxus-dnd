@@ -1,6 +1,4 @@
-//! Free-position drops - node editors, whiteboards, floor planners. The drop
-//! answers not just "what landed" but "*where* exactly", corrected for grab
-//! offset, optionally snapped to a grid and clamped to bounds.
+#![doc = include_str!("../docs/api/canvas.md")]
 
 use std::rc::Rc;
 

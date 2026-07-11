@@ -97,7 +97,7 @@ pub fn Draggable<T: Clone + PartialEq + 'static>(
     /// [`TouchSense::Auto`] (default) keeps vertical swipes scrolling the
     /// page and picks up on a short hold or a sideways pull;
     /// [`TouchSense::Immediate`] owns every touch from the first pixel.
-    /// Mouse and pen drags are identical under both.
+    /// Mouse drags are identical under both; pens follow the finger rules.
     #[props(default)]
     touch: TouchSense,
     /// Human label used in screen-reader announcements ("Picked up {label}").

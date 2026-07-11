@@ -1,5 +1,4 @@
-//! Shared primitives: the drag context, id/geometry types, hooks, and the
-//! `Draggable`/`DropZone`/`DragOverlay` components every other module builds on.
+#![doc = include_str!("../../docs/api/core.md")]
 
 pub mod components;
 pub mod hooks;

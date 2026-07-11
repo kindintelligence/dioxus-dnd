@@ -1,46 +1,4 @@
-//! Headless test driver - drag-and-drop in CI, no browser.
-//!
-//! The drag state machine is plain Rust over signals, so a whole pointer
-//! interaction can run inside a `VirtualDom`: pick up, hover, drop, assert.
-//! The one thing a headless run lacks is layout, so *you place the zone
-//! rects* - which makes tests deterministic instead of flaky.
-//!
-//! Mount a [`DragSimProbe`] inside the provider under test, grab the
-//! [`DragSim`] it captured, and drive:
-//!
-//! ```text
-//! fn test_app() -> Element {
-//!     rsx! {
-//!         DndProvider::<Card> {
-//!             DragSimProbe::<Card> {}
-//!             ShelfApp {}   // the component you're testing
-//!         }
-//!     }
-//! }
-//!
-//! let mut dom = VirtualDom::new(test_app);
-//! dom.rebuild_in_place();
-//! let mut sim = drag_sim::<Card>();
-//!
-//! sim.place(&dom, SHELF, Rect::new(0.0, 100.0, 200.0, 80.0));
-//! sim.pick_up(&dom, card.clone());
-//! sim.move_to(&dom, Point::new(100.0, 140.0));
-//! assert_eq!(sim.over(&dom), Some(SHELF));
-//! rerender(&mut dom);
-//! assert!(dioxus_ssr::render(&dom).contains("data-over"));
-//! assert_eq!(sim.release(&dom), Some(SHELF));   // your on_drop just ran
-//! ```
-//!
-//! Or as one line for the common arc: [`simulate_drag`].
-//!
-//! Drops go through the *production* delivery path - acceptance filters,
-//! `DropOutcome` construction, closest-edge enrichment, settle routing -
-//! shared with `Draggable` itself, not a reimplementation. Releases mirror
-//! the pointer gesture: an exact hit wins; otherwise the drop snaps to the
-//! closest acceptable zone whose edge is within 48px (the touch
-//! forgiveness), else the drag cancels. Not simulated: pointer capture,
-//! auto-scroll, and the re-measure that precedes the real snap (headless
-//! rects are wherever you placed them).
+#![doc = include_str!("../docs/api/testing.md")]
 
 use std::any::{Any, TypeId};
 use std::cell::RefCell;

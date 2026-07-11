@@ -1,24 +1,4 @@
-//! Accessibility helpers.
-//!
-//! The keyboard interaction itself is built into the core
-//! [`crate::core::Draggable`] - every draggable is focusable and operable
-//! with Space/Enter (pick up / drop), arrow keys (choose a drop target from
-//! the registered zones) and Escape (cancel). What this module adds is the
-//! **voice**: a visually-hidden `aria-live` region that reads the context's
-//! announcement channel to screen readers.
-//!
-//! Render exactly one `LiveRegion` per provider, anywhere in the subtree:
-//!
-//! ```text
-//! DndProvider::<Card> {
-//!     LiveRegion::<Card> {}
-//!     // ... draggables and zones ...
-//! }
-//! ```
-//!
-//! Give `Draggable` a `label` and `DropZone` a `label` for meaningful
-//! announcements ("Picked up Ship it. …", "Over Done."). Custom flows can
-//! push their own messages with [`crate::core::DndContext::announce`].
+#![doc = include_str!("../docs/api/accessibility.md")]
 
 use dioxus::prelude::*;
 

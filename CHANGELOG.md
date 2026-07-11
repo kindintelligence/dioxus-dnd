@@ -1,8 +1,24 @@
 # Changelog
 
-## Unreleased (2.5.0)
+## 3.0.0 - 2026-07-11
 
 ### Added
+
+- **`docs/`: a full documentation tree, paired by concept.** One
+  plain-language guide (`docs/concepts/`, 22 files) and one developer
+  reference (`docs/api/`, 19 files) per concept, indexed from
+  `docs/README.md`. The API references are also the rustdoc: each module's
+  `//!` block is replaced by `#![doc = include_str!(...)]` pointing at its
+  `docs/api/` file, so one file serves GitHub and docs.rs and cannot
+  silently drift from the crate. Writing them surfaced and fixed a handful
+  of stale claims: pens follow the finger promotion rules (not the mouse
+  rules) under `TouchSense::Auto`, `data-intent` renders for pointer drags
+  only, `DropOutcome::effect` is the modifier-resolved effect, dragging an
+  unselected `SelectableDraggable` leaves the selection unchanged,
+  `BoardSlot` styling should reveal without reflow, sortables ship no
+  keyboard drag of their own (`ReorderButtons` is the path), and the typed
+  `DataTransfer` transport is for separate apps rather than one app's
+  windows.
 
 - **`#[non_exhaustive]` on the event types that provably grow**
   (technically breaking if you exhaustively matched or literally

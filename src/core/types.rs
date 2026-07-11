@@ -293,8 +293,8 @@ impl PointerKind {
 /// How a `Draggable` (or a whole-row sortable) shares touch input with the
 /// page's native gestures.
 ///
-/// Mouse and pen are unaffected: they always promote on plain travel past
-/// the threshold. This only decides what a *finger* means.
+/// A mouse is unaffected: it always promotes on plain travel past the
+/// threshold. Fingers and pens follow the chosen policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TouchSense {
     /// The safe default for anything that can sit in a scrollable view:
@@ -362,7 +362,8 @@ pub struct DropOutcome<T> {
     pub from: Option<ZoneId>,
     /// The zone that received the drop.
     pub to: ZoneId,
-    /// The effect the drag was started with.
+    /// The resolved effect: the drag's base effect with any modifier keys
+    /// applied at release. Keyboard drops carry the base effect unchanged.
     pub effect: DropEffect,
     /// Which input path produced this completed drop.
     pub mode: DragMode,

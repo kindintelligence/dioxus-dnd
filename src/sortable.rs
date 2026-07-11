@@ -1,33 +1,4 @@
-//! Reorderable lists - drag a row and the list tells you where it landed.
-//!
-//! Self-contained: `SortableList` manages its own drag state (indices only),
-//! so it needs no `DndProvider`. You keep ownership of the data - the
-//! component just tells you *"move index 3 to index 0"* and you apply it
-//! (usually with [`apply_sort`]).
-//!
-//! Mouse, touch and pen all drive the same pointer-event gesture machine, so
-//! the browser never creates a native drag image. Whole rows are the touch
-//! target by default, and touch auto-senses ([`TouchSense::Auto`]): a
-//! vertical swipe keeps scrolling the list, a short hold or a sideways pull
-//! picks the row up - no configuration needed inside scrollable views. Set
-//! `touch: TouchSense::Immediate` to make any 8px travel drag (which stops
-//! finger-scrolling across the rows), or `touch_handle: true` to confine
-//! pointer drags to a leading grip (style it via `[data-sort-handle]`).
-//!
-//! Headless: the component ships behavior plus a couple of `data-*` styling
-//! hooks; you compose the looks. Rows slide to preview the drop by default -
-//! opt into a floating, caller-composed ghost with `overlay`.
-//!
-//! ```text
-//! let mut items = use_signal(|| vec!["a".to_string(), "b".into(), "c".into()]);
-//! rsx! {
-//!     SortableList {
-//!         len: items.read().len(),
-//!         on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
-//!         render: move |ix: usize| rsx! { li { "{items.read()[ix]}" } },
-//!     }
-//! }
-//! ```
+#![doc = include_str!("../docs/api/sortable-lists.md")]
 
 use std::collections::HashMap;
 use std::rc::Rc;

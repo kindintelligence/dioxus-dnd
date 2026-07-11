@@ -1,34 +1,9 @@
-//! 2D grids - dashboards, tile galleries, icon views. A grid is a flat
-//! `Vec` displayed in `cols` columns; dragging a tile onto another either
-//! **inserts** (everything reflows, like a photo gallery) or **swaps**
-//! (tiles trade places, like a dashboard) depending on [`ReorderMode`].
-//!
-//! Reuses the sortable vocabulary: drops emit [`SortEvent`]s you apply with
-//! [`crate::sortable::apply_sort`] or [`crate::sortable::apply_swap`].
-//!
-//! ```text
-//! let mut tiles = use_signal(|| (0..12).collect::<Vec<u32>>());
-//! rsx! {
-//!     SortableGrid {
-//!         len: tiles.read().len(),
-//!         cols: 4,
-//!         mode: ReorderMode::Swap,
-//!         render: move |ix: usize| rsx! { Tile { n: tiles.read()[ix] } },
-//!         on_sort: move |ev: SortEvent| apply_swap(&mut tiles.write(), ev),
-//!     }
-//! }
-//! ```
-//!
-//! Grid coordinate helpers ([`cell_of`], [`index_of`]) are provided for
-//! custom layouts and keyboard grid navigation.
-//!
-//! Mouse, touch and pen use pointer events via the same gesture machine as
-//! [`crate::core::Draggable`], so the browser does not create a native drag
-//! image. Tiles carry
-//! `touch-action: none` (grids rarely need to scroll by dragging across
-//! their own tiles). The hovered tile is simply the one under the pointer -
-//! no hysteresis needed, since tiles don't shift while you hover in
-//! swap/insert grids.
+//! 2D tile reorder: [`SortableGrid`] displays a flat `Vec` in `cols`
+//! columns and emits the same [`SortEvent`]s as `SortableList`, applied
+//! with [`crate::sortable::apply_sort`] (insert-and-reflow) or
+//! [`crate::sortable::apply_swap`] (tiles trade places). The full
+//! reference for both components lives with the [`crate::sortable`]
+//! module docs, docs/api/sortable-lists.md.
 
 use std::collections::HashMap;
 use std::rc::Rc;

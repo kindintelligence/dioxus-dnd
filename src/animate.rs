@@ -1,45 +1,4 @@
-//! Drop animations.
-//!
-//! With the `web` feature (on a web renderer), the reorder glide is armed
-//! synchronously on the real DOM element - invert, forced style flush,
-//! release - so it cannot race the browser's paint schedule, and the
-//! animation itself is a plain compositor-driven CSS transition. Without
-//! it, a render-twice fallback stands in; that path is **experimental** -
-//! it depends on the browser painting the inverted frame between two
-//! commits, so validate it in your target renderer and tune `duration` to
-//! taste.
-//!
-//! [`FlipItem`] implements the FLIP technique (First–Last–Invert–Play) for
-//! reorder transitions: when your list order changes, each item measures
-//! where it moved from, renders instantly *back* at its old position via a
-//! transform, then releases the transform with a CSS transition - so tiles
-//! appear to glide to their new slots.
-//!
-//! You drive it with an `epoch` counter: bump it whenever order changes.
-//!
-//! ```text
-//! let mut items = use_signal(|| vec![/* … */]);
-//! let mut epoch = use_signal(|| 0usize);
-//! rsx! {
-//!     SortableList {
-//!         len: items.read().len(),
-//!         render: move |ix: usize| rsx! {
-//!             FlipItem { epoch: epoch(), Row { item: items.read()[ix].clone() } }
-//!         },
-//!         on_sort: move |ev: SortEvent| {
-//!             apply_sort(&mut items.write(), ev);
-//!             epoch += 1;
-//!         },
-//!     }
-//! }
-//! ```
-//!
-//! **Drop-settle** (the ghost gliding into the receiving zone on drop) is
-//! built in: set `settle: true` on
-//! [`crate::core::components::DragOverlay`]. **Snap-back on cancel** needs
-//! no Rust at all - it's a CSS recipe: give the overlay's child
-//! `transition: transform 150ms ease` and revert your item's
-//! `data-dragging` styles with a transition.
+#![doc = include_str!("../docs/api/animation.md")]
 
 use std::rc::Rc;
 

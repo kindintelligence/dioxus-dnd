@@ -1,31 +1,4 @@
-//! Auto-scroll: when a drag hovers near the edge of a scrollable container,
-//! scroll it - the missing piece for long lists and tall boards.
-//!
-//! Scrolling and measuring go through Dioxus's `MountedData`: `dragover`
-//! (native boundary drags) and active `pointermove` events (in-app pointer
-//! drags via [`crate::core::Draggable`]) feed pointer positions; when the
-//! pointer sits within `threshold` px of an edge, the container is scrolled
-//! by up to `speed` px per event, scaled by proximity.
-//!
-//! Scroll *observation* (the rect-refresh ping and the `on_scroll` prop)
-//! rides the events that cause or accompany scrolling - wheel, pointer
-//! contact moves, and the auto-scrolls this component performs - each of
-//! which samples the offset through `MountedData` and reports when it
-//! changed. It has to work this way: dioxus-web 0.7 never delivers
-//! element-level `scroll` events to `onscroll` handlers, and its eval
-//! channel drops messages that resolve after the receiver parked, so
-//! neither a Rust `onscroll` nor a JS listener bridge can carry the
-//! signal. The known blind spot is a scroll no event accompanies (a
-//! programmatic `scroll-to-index` with the pointer at rest) - the code
-//! that initiates one should update its own state, and the next pointer
-//! or wheel activity trues everything up.
-//!
-//! ```text
-//! AutoScroll {
-//!     style: "height: 300px; overflow-y: auto;",
-//!     for item in long_list { Row { item } }
-//! }
-//! ```
+#![doc = include_str!("../docs/api/autoscroll.md")]
 
 use std::rc::Rc;
 
