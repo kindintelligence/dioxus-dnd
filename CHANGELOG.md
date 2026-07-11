@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.0.1 - 2026-07-11
+
+### Fixed
+
+- **Release landing-page links and package metadata.** The README hero now
+  uses the repository-relative `assets/showcase.gif` path instead of a
+  deleted `development` branch, the compatibility table includes 3.0, and
+  gallery references no longer point at GitHub Pages routes that returned
+  404 before the SPA fallback loaded. This patch republishes the corrected
+  README to crates.io and docs.rs; the GitHub Pages workflow redeploys the
+  gallery from the same release source.
+
 ## 3.0.0 - 2026-07-11
 
 ### Added
