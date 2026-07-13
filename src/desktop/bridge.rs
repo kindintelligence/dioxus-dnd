@@ -88,7 +88,8 @@ fn map_modifiers(native: TaoModifiers) -> Modifiers {
 
 /// The cross-window drag bridge: host-side eyes and ears for pointer
 /// drags that leave the origin window (see the module docs for the
-/// per-platform mechanics). Render one INSIDE each window's
+/// per-platform mechanics). [`super::MultiWindowProvider`] mounts this for
+/// ordinary use. When wiring manually, render one INSIDE each window's
 /// `DndProvider<T>`; it renders nothing. A provider that did not join a
 /// [`crate::core::DndWorld`] gets a no-op bridge.
 #[component]

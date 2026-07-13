@@ -7,7 +7,6 @@
 //! live signal every window renders from.
 
 use dioxus::prelude::*;
-use dioxus::signals::{AnyStorage, Owner, UnsyncStorage};
 use dioxus_dnd::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -95,66 +94,54 @@ pub struct Satellite {
     pub widgets: Signal<Vec<Widget>>,
 }
 
-/// Copy handles into model-owned signal storage shared by every window.
-#[derive(Clone, Copy, PartialEq)]
+/// App-wide state created by `use_dnd_model`. Its signals are process-lived;
+/// satellite scopes are reclaimed on close, while scopes for widgets cloned
+/// later are retained by the process-lived `widget_scopes` signal.
+#[derive(Clone)]
 pub struct Model {
     pub dock: Signal<Vec<Widget>>,
     pub satellites: Signal<Vec<Satellite>>,
     /// Bumped by the `D` key; every window snaps itself to the demo layout.
     pub layout_epoch: Signal<u32>,
+    widget_scopes: Signal<Vec<DndScope>>,
+    satellite_scopes: Rc<RefCell<HashMap<ZoneId, DndScope>>>,
+    next_id: Rc<Cell<u32>>,
+    ticker_claimed: Rc<AtomicBool>,
 }
 
-/// Owns the model independently of any one window runtime (the pattern the
-/// close-order regression pinned): every window holds an `Rc`, Mission
-/// Control may close before its satellites, and storage is reclaimed only
-/// after the final window releases it.
-pub struct ModelOwner {
-    pub model: Model,
-    root: Owner<UnsyncStorage>,
-    satellite_owners: RefCell<HashMap<ZoneId, Owner<UnsyncStorage>>>,
-    next_id: Cell<u32>,
-    ticker_claimed: AtomicBool,
-}
-
-impl ModelOwner {
-    pub fn new() -> Rc<Self> {
-        let root = UnsyncStorage::owner();
-        let model = dioxus::core::with_owner(root.clone(), || {
-            let dock = vec![
-                Widget {
-                    id: 1,
-                    kind: WidgetKind::Sparkline,
-                    state: Signal::new(WidgetState::seeded(0x5EED_0001, 0.15)),
-                },
-                Widget {
-                    id: 2,
-                    kind: WidgetKind::Stopwatch,
-                    state: Signal::new(WidgetState::seeded(0x5EED_0002, 0.40)),
-                },
-                Widget {
-                    id: 3,
-                    kind: WidgetKind::Ring,
-                    state: Signal::new(WidgetState::seeded(0x5EED_0003, 0.62)),
-                },
-                Widget {
-                    id: 4,
-                    kind: WidgetKind::Pulse,
-                    state: Signal::new(WidgetState::seeded(0x5EED_0004, 0.85)),
-                },
-            ];
-            Model {
-                dock: Signal::new(dock),
-                satellites: Signal::new(Vec::new()),
-                layout_epoch: Signal::new(0),
-            }
-        });
-        Rc::new(Self {
-            model,
-            root,
-            satellite_owners: RefCell::new(HashMap::new()),
-            next_id: Cell::new(5),
-            ticker_claimed: AtomicBool::new(false),
-        })
+impl Model {
+    pub fn new() -> Self {
+        let dock = vec![
+            Widget {
+                id: 1,
+                kind: WidgetKind::Sparkline,
+                state: Signal::new(WidgetState::seeded(0x5EED_0001, 0.15)),
+            },
+            Widget {
+                id: 2,
+                kind: WidgetKind::Stopwatch,
+                state: Signal::new(WidgetState::seeded(0x5EED_0002, 0.40)),
+            },
+            Widget {
+                id: 3,
+                kind: WidgetKind::Ring,
+                state: Signal::new(WidgetState::seeded(0x5EED_0003, 0.62)),
+            },
+            Widget {
+                id: 4,
+                kind: WidgetKind::Pulse,
+                state: Signal::new(WidgetState::seeded(0x5EED_0004, 0.85)),
+            },
+        ];
+        Self {
+            dock: Signal::new(dock),
+            satellites: Signal::new(Vec::new()),
+            layout_epoch: Signal::new(0),
+            widget_scopes: Signal::new(Vec::new()),
+            satellite_scopes: Rc::new(RefCell::new(HashMap::new())),
+            next_id: Rc::new(Cell::new(5)),
+            ticker_claimed: Rc::new(AtomicBool::new(false)),
+        }
     }
 
     fn mint_id(&self) -> u32 {
@@ -165,13 +152,13 @@ impl ModelOwner {
 
     pub fn new_satellite(&self, n: u32) -> Satellite {
         let zone = ZoneId::auto();
-        let owner = UnsyncStorage::owner();
-        let satellite = dioxus::core::with_owner(owner.clone(), || Satellite {
+        let scope = DndScope::new();
+        let satellite = scope.with(|| Satellite {
             n,
             zone,
             widgets: Signal::new(Vec::new()),
         });
-        self.satellite_owners.borrow_mut().insert(zone, owner);
+        self.satellite_scopes.borrow_mut().insert(zone, scope);
         satellite
     }
 
@@ -179,46 +166,45 @@ impl ModelOwner {
     /// signal as one operation. Repeated teardown is inert. Same quiescent-
     /// teardown reasoning as the desktop-multiwindow example: the sole
     /// `use_drop` callback runs after all render/event guards returned, and
-    /// the captured `Rc` pins every owner below.
+    /// the captured model clone pins every scope below.
     pub fn close_satellite(&self, satellite: Satellite) -> bool {
-        let model = self.model;
-        let retired_owner = {
-            let mut owners = self.satellite_owners.borrow_mut();
-            if !owners.contains_key(&satellite.zone) {
+        let retired_scope = {
+            let mut scopes = self.satellite_scopes.borrow_mut();
+            if !scopes.contains_key(&satellite.zone) {
                 return false;
             }
-            let mut satellites = model.satellites;
+            let mut satellites = self.satellites;
             let mut widgets = satellite.widgets;
-            let mut dock = model.dock;
+            let mut dock = self.dock;
             let mut open = satellites.write();
             let mut leaving = widgets.write();
             let mut docked = dock.write();
 
             open.retain(|s| s.zone != satellite.zone);
             docked.extend(std::mem::take(&mut *leaving));
-            owners
+            scopes
                 .remove(&satellite.zone)
-                .expect("the checked satellite owner remains locked until retirement")
+                .expect("the checked satellite scope remains locked until retirement")
         };
-        drop(retired_owner);
+        drop(retired_scope);
         true
     }
 
     /// Fork a widget into an independently ticking twin: fresh id, state
-    /// seeded from the source's CURRENT values, signal on the root owner so
-    /// the clone outlives whichever window minted it.
+    /// seeded from the source's CURRENT values. Its scope is retained inside
+    /// process-lived model state, so the clone outlives whichever window
+    /// minted it.
     pub fn clone_widget(&self, widget: &Widget) -> Widget {
         let snapshot = widget.state.peek().clone();
         // Mint from the runtime's ROOT scope, not the drop handler's zone
         // scope: dioxus records the creating scope for its dead-signal
         // diagnostics, and a zone-scoped origin makes every later ticker
-        // write warn. Storage lifetime still belongs to the model root via
-        // `with_owner`, so the clone outlives every window regardless.
-        let root = self.root.clone();
+        // write warn. The DndScope controls storage lifetime independently.
+        let scope = DndScope::new();
         let runtime = dioxus::core::Runtime::current();
-        let state = runtime.in_scope(ScopeId::ROOT, || {
-            dioxus::core::with_owner(root, || Signal::new(snapshot))
-        });
+        let state = runtime.in_scope(ScopeId::ROOT, || scope.with(|| Signal::new(snapshot)));
+        let mut widget_scopes = self.widget_scopes;
+        widget_scopes.write().push(scope);
         Widget {
             id: self.mint_id(),
             kind: widget.kind,
@@ -239,8 +225,7 @@ impl ModelOwner {
                 widget
             }
         };
-        let model = self.model;
-        let satellite = model
+        let satellite = self
             .satellites
             .peek()
             .iter()
@@ -252,17 +237,16 @@ impl ModelOwner {
                 widgets.write().push(landing);
             }
             None => {
-                let mut dock = model.dock;
+                let mut dock = self.dock;
                 dock.write().push(landing);
             }
         }
     }
 
     fn detach(&self, id: u32) {
-        let model = self.model;
-        let mut dock = model.dock;
+        let mut dock = self.dock;
         dock.write().retain(|w| w.id != id);
-        for satellite in model.satellites.peek().iter() {
+        for satellite in self.satellites.peek().iter() {
             let mut widgets = satellite.widgets;
             widgets.write().retain(|w| w.id != id);
         }
@@ -284,67 +268,68 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    type OwnerSlot = Rc<RefCell<Option<Rc<ModelOwner>>>>;
+    type ModelSlot = Rc<RefCell<Option<Model>>>;
 
     fn creator_window() -> Element {
-        let slot = use_context::<OwnerSlot>();
-        let owner = use_hook(ModelOwner::new);
-        *slot.borrow_mut() = Some(owner);
+        let slot = use_context::<ModelSlot>();
+        let model = use_dnd_model(Model::new);
+        *slot.borrow_mut() = Some(model);
         rsx! {}
     }
 
     fn closing_satellite_window() -> Element {
-        let owner = use_context::<Rc<ModelOwner>>();
+        let model = use_context::<Model>();
         let satellite = use_context::<Satellite>();
         use_drop(move || {
-            let _ = owner.close_satellite(satellite);
+            let _ = model.close_satellite(satellite);
         });
         rsx! {}
     }
 
-    fn park_owner() -> (Rc<ModelOwner>, VirtualDom) {
-        let slot = OwnerSlot::default();
+    fn park_model() -> (Model, VirtualDom) {
+        let slot = ModelSlot::default();
         let mut creator = VirtualDom::new(creator_window).with_root_context(slot.clone());
         creator.rebuild_in_place();
-        let owner = slot.borrow_mut().take().expect("creator parked the owner");
-        (owner, creator)
+        let model = slot.borrow_mut().take().expect("creator parked the model");
+        (model, creator)
     }
 
     #[test]
     fn satellite_close_returns_widgets_and_repeats_inert() {
-        let (owner, creator) = park_owner();
-        // Owner-creating and signal-creating calls need a current scope, not
+        let (model, creator) = park_model();
+        // Scope-creating and signal-creating calls need a current scope, not
         // just a runtime (Signal::new resolves the current scope id).
-        let satellite = creator.in_scope(ScopeId::ROOT, || owner.new_satellite(1));
+        let satellite = creator.in_scope(ScopeId::ROOT, || model.new_satellite(1));
         creator.in_scope(ScopeId::ROOT, || {
-            let mut satellites = owner.model.satellites;
+            let mut satellites = model.satellites;
             satellites.write().push(satellite);
         });
-        let widget = owner.model.dock.peek()[0];
+        let widget = model.dock.peek()[0];
         creator.in_scope(ScopeId::ROOT, || {
-            owner.deliver(widget, satellite.zone, DropEffect::Move)
+            model.deliver(widget, satellite.zone, DropEffect::Move)
         });
-        assert_eq!(owner.model.dock.peek().len(), 3);
+        assert_eq!(model.dock.peek().len(), 3);
         assert_eq!(satellite.widgets.peek().len(), 1);
 
         let mut window = VirtualDom::new(closing_satellite_window)
-            .with_root_context(owner.clone())
+            .with_root_context(model.clone())
             .with_root_context(satellite);
         window.rebuild_in_place();
+        drop(creator);
         drop(window);
 
-        assert_eq!(owner.model.dock.peek().len(), 4);
-        assert!(owner.model.satellites.peek().is_empty());
+        assert_eq!(model.dock.peek().len(), 4);
+        assert!(model.satellites.peek().is_empty());
         assert!(satellite.widgets.try_read().is_err());
-        assert!(!owner.close_satellite(satellite));
-        assert_eq!(owner.model.dock.peek().len(), 4);
+        assert!(!model.close_satellite(satellite));
+        assert_eq!(model.dock.peek().len(), 4);
     }
 
     #[test]
     fn clone_widget_forks_independent_state() {
-        let (owner, creator) = park_owner();
-        let source = owner.model.dock.peek()[0];
-        let clone = creator.in_scope(ScopeId::ROOT, || owner.clone_widget(&source));
+        let (model, creator) = park_model();
+        let source = model.dock.peek()[0];
+        let clone = creator.in_scope(ScopeId::ROOT, || model.clone_widget(&source));
 
         assert_ne!(clone.id, source.id);
         assert_eq!(clone.kind, source.kind);
@@ -360,32 +345,32 @@ mod tests {
 
     #[test]
     fn copy_delivery_grows_target_and_keeps_source() {
-        let (owner, creator) = park_owner();
-        let satellite = creator.in_scope(ScopeId::ROOT, || owner.new_satellite(1));
+        let (model, creator) = park_model();
+        let satellite = creator.in_scope(ScopeId::ROOT, || model.new_satellite(1));
         creator.in_scope(ScopeId::ROOT, || {
-            let mut satellites = owner.model.satellites;
+            let mut satellites = model.satellites;
             satellites.write().push(satellite);
         });
-        let source = owner.model.dock.peek()[1];
+        let source = model.dock.peek()[1];
         creator.in_scope(ScopeId::ROOT, || {
-            owner.deliver(source, satellite.zone, DropEffect::Copy)
+            model.deliver(source, satellite.zone, DropEffect::Copy)
         });
 
         assert_eq!(
-            owner.model.dock.peek().len(),
+            model.dock.peek().len(),
             4,
             "Copy must not detach the source"
         );
-        assert!(owner.model.dock.peek().iter().any(|w| w.id == source.id));
+        assert!(model.dock.peek().iter().any(|w| w.id == source.id));
         let landed = satellite.widgets.peek()[0];
         assert_ne!(landed.id, source.id);
         assert_eq!(landed.kind, source.kind);
 
         // An unknown zone can never lose a widget: it lands in the dock.
         creator.in_scope(ScopeId::ROOT, || {
-            owner.deliver(landed, ZoneId(9999), DropEffect::Move)
+            model.deliver(landed, ZoneId(9999), DropEffect::Move)
         });
         assert!(satellite.widgets.peek().is_empty());
-        assert_eq!(owner.model.dock.peek().len(), 5);
+        assert_eq!(model.dock.peek().len(), 5);
     }
 }

@@ -2,7 +2,7 @@
 
 > Draft only - not filed. File once someone has run the crate under
 > dioxus-native and can replace at least one "unknown" below with an
-> observation. Numbers like (1)-(13) reference the dependency inventory in
+> observation. Numbers like (1)-(14) reference the dependency inventory in
 > `docs/RENDERER-CONTRACT.md`, which carries file:line citations for every
 > claim here.
 
@@ -44,7 +44,7 @@ reconciliation).
 | `animate` (`FlipItem`) | **degrades to jump-into-place** | inline CSS transitions (#4); already the documented no-`web`-feature caveat |
 | `autoscroll` | **works if #3 holds** | scrolls via `MountedData::scroll`, observes via causing events - deliberately no `scroll`-event dependency |
 | `sortable`, `grid`, `board`, `tree`, `multiselect`, `canvas` | **works if the pointer path works** | pure consumers of core + data-attribute styling (#9) |
-| `files` (OS file drops) | **N/A under Blitz** | HTML5 `DataTransfer` (#11); needs an OS-DnD story in Blitz/winit first |
+| `files` (OS drops + click picker) | **N/A under Blitz** | OS drops need `DataTransfer` or a winit DnD bridge (#11); click-to-choose needs a native file-dialog/FileData bridge in place of the HTML input + eval path (#14) |
 | `dragout` (drag out to other apps) | **N/A under Blitz** | same |
 | `external` + `external::typed` (`serde`) | **N/A under Blitz** | same |
 | virtualized-list recipe (README + gallery Archive) | **N/A until Blitz has IntersectionObserver/`onvisible`** | recipe-level only; core unaffected (#10) |

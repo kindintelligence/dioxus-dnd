@@ -671,7 +671,7 @@ fn NativeBoundaryFixture() -> Element {
                     files.write().extend(drop.files.iter().map(|f| f.name()));
                 },
                 style: "width: 320px; min-height: 80px; border: 2px dashed #999; padding: 12px;",
-                p { "Drop files from your desktop here" }
+                p { "Click to choose files or drop them here" }
                 for name in files.read().clone() {
                     span { "{name}" }
                 }

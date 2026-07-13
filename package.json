@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "pretest:web": "dx build --example regressions --platform web --features web,serde",
     "test:web": "playwright test"
   },
   "devDependencies": {

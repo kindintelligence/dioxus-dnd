@@ -1,0 +1,83 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    groups:
+      rust-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: deps(cargo)
+
+  - package-ecosystem: cargo
+    directory: /examples/desktop-multiwindow
+    target-branch: development
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:15"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 3
+    groups:
+      desktop-multiwindow:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: deps(desktop-multiwindow)
+
+  - package-ecosystem: cargo
+    directory: /examples/desktop-showcase
+    target-branch: development
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 3
+    groups:
+      desktop-showcase:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: deps(desktop-showcase)
+
+  - package-ecosystem: npm
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:45"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 3
+    groups:
+      browser-tests:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: deps(browser)
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:00"
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: deps(actions)

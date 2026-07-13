@@ -1,8 +1,8 @@
 # Core API reference
 
-Shared primitives every other module builds on: the drag context and its
-state store, the provider and consumer hooks, the zone registry, the pointer
-gesture state machine, and the id and geometry types.
+Shared primitives every other module builds on: model ownership, the drag
+context and its state store, provider and consumer hooks, the zone registry,
+the pointer gesture state machine, and the id and geometry types.
 
 Concept guide: [docs/concepts/architecture.md](../concepts/architecture.md).
 The ready-made components re-exported from this module (`DndProvider`,
@@ -19,6 +19,28 @@ let registry = use_zone_registry::<Card>();
 let over = dnd.over();
 let target_rect = over.and_then(|id| registry.cached_rect(id));
 ```
+
+## Model ownership
+
+Multi-window models need a lifetime independent of any one component tree.
+`use_dnd_model<M>(init)` runs `init` once under process-lived Dioxus storage,
+provides `M` in context, and returns it. Use it for app-wide state that must
+survive every window close order. It retains both storage flavors: ordinary
+signals use `UnsyncStorage`, while a `Store` keeps its subscription tree in
+`SyncStorage`. Owner-backed values must be allocated synchronously inside
+`init`; the hook cannot reparent a signal or store created earlier.
+
+`DndScope` is the reclaimable unit primitive. `DndScope::new()` creates an
+`Rc`-shared pair of those owners; `scope.with(|| ...)` mints signals or stores
+under them inside an active Dioxus runtime. State stays valid until the last
+scope clone drops. Use it for dynamic per-window data, removing every shared
+handle before retiring the scope. The last clone may drop only after all
+owned read/write guards have returned; recycling actively borrowed storage
+can panic or block.
+
+Both are core, platform-dependency-free, and re-exported through the prelude.
+See [Multi-window desktop drags](multi-window.md) for the complete wiring and
+teardown pattern.
 
 ## `DndContext<T>`
 
@@ -330,7 +352,7 @@ Also defined in `core::types` but documented with their consumers: `Edge`,
 | `core::machine` | this file |
 | `core::types` | this file; edge primitives and `DropOutcome` in [drag-and-drop.md](drag-and-drop.md), `DropEffect` in [drop-effects.md](drop-effects.md) |
 | `core::components` | [drag-and-drop.md](drag-and-drop.md); `BridgeDropZone` in [mixing-payload-types.md](mixing-payload-types.md) |
-| `core::model` | [drop-effects.md](drop-effects.md) |
+| `core::model` | this file for `DndScope` / `use_dnd_model`; [drop-effects.md](drop-effects.md) for drop-model helpers |
 | `core::modifiers` | [canvas.md](canvas.md) |
 | `core::viewport` | [canvas.md](canvas.md) |
 | `core::strings` | [localization.md](localization.md) |

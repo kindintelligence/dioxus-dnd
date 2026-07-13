@@ -1566,6 +1566,33 @@ fn state_attributes_absent_when_idle() {
 }
 
 #[test]
+fn file_drop_zone_renders_a_headless_native_picker() {
+    fn app() -> Element {
+        rsx! {
+            FileDropZone {
+                filter: FileFilter::new()
+                    .extensions(["png"])
+                    .content_types(["image/*"]),
+                on_files: move |_| {},
+                class: "picker-shell",
+                "Click or drop"
+            }
+        }
+    }
+
+    let html = run(app);
+    assert!(html.contains(r#"class="picker-shell""#), "missing: {html}");
+    assert!(html.contains(r#"type="file""#), "missing: {html}");
+    assert!(html.contains(r#"accept=".png,image/*""#), "missing: {html}");
+    assert!(html.contains("multiple"), "missing: {html}");
+    assert!(html.contains("hidden"), "missing: {html}");
+    assert!(
+        !html.contains("style="),
+        "FileDropZone must not ship visual styles: {html}"
+    );
+}
+
+#[test]
 fn disabled_draggable_carries_data_disabled() {
     fn app() -> Element {
         use_dnd_provider::<String>();

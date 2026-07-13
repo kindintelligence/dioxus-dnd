@@ -26,11 +26,10 @@ One provider, three layers:
   means: tap, scroll, or drag. It is a pure transition function, so every
   edge case is an exhaustive match arm with a test.
 
-Native drag events appear nowhere in this picture. They are reserved for
-the true app boundary - OS file drops, external content in, dragging out -
-where the `DataTransfer` protocol is the only option. In-app drags use
-pointer events plus keyboard, which keeps the payload a Rust value and the
-visuals under your control.
+Native boundary events appear nowhere in this picture. They are reserved for
+OS file drops and picker selections, external content in, and dragging out.
+In-app drags use pointer events plus keyboard, which keeps the payload a Rust
+value and the visuals under your control.
 
 ## The state store
 

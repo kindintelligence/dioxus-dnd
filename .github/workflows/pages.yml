@@ -1,7 +1,9 @@
 name: Deploy gallery
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -16,16 +18,20 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          targets: wasm32-unknown-unknown
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Install stable Rust and the web target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain stable
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
       - name: Install Dioxus CLI
         run: cargo install dioxus-cli --version 0.7.9 --locked
@@ -38,9 +44,9 @@ jobs:
       - name: SPA fallback for deep links
         run: cp target/dx/gallery/release/web/public/index.html target/dx/gallery/release/web/public/404.html
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: target/dx/gallery/release/web/public
 
@@ -54,4 +60,4 @@ jobs:
 
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

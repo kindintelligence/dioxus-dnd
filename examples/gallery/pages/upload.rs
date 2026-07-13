@@ -11,7 +11,7 @@ pub fn UploadPage() -> Element {
         PageIntro {
             kicker: "Beyond the window",
             title: "Upload",
-            lead: "Files come from outside your app, so this is the first pattern that crosses the browser boundary: FileDropZone speaks the native drag protocol, filters what arrives, and hands your code real files. No provider, no payload type.",
+            lead: "Files come from outside your app, so this is the first pattern that crosses the browser boundary: FileDropZone handles native drops and click-to-choose uploads, filters what arrives, and hands your code real files. No provider, no payload type.",
         }
         UploadDemo {}
         DocBlock { title: "How it works",
@@ -19,7 +19,7 @@ pub fn UploadPage() -> Element {
                 steps: vec![
                     (
                         "The file rides the event.",
-                        "OS file drops are the one case where the payload arrives in the native browser event rather than through Rust context. FileDropZone handles the drag-over ceremony the browser requires and exposes data-over for hover styling.",
+                        "Dropped and picker-selected files arrive in native browser events rather than through Rust context. FileDropZone handles the drag-over ceremony, opens the native chooser when clicked, and exposes data-over for drag-hover styling.",
                     ),
                     (
                         "Filter before your code runs.",
@@ -49,7 +49,7 @@ pub fn UploadPage() -> Element {
             PropsTable {
                 title: "FileDropZone props",
                 rows: vec![
-                    ("on_files", "EventHandler<FileDrop>, required", "The accepted files of a drop, with client and element drop coordinates."),
+                    ("on_files", "EventHandler<FileDrop>, required", "The accepted files from a drop or picker selection. Picker selections use zero coordinates."),
                     ("filter", "Option<FileFilter>", "Acceptance rules; everything is accepted when omitted."),
                     ("on_rejected", "EventHandler<Vec<(FileData, FileRejection)>>", "The files that failed, each paired with why."),
                     ("on_hover", "EventHandler<bool>", "True on drag enter, false on leave, when styling needs more than data-over."),
@@ -61,7 +61,7 @@ pub fn UploadPage() -> Element {
                     (".extensions([\"png\", \"jpg\"])", "", "Allow-list by file extension; case-insensitive, leading dot optional."),
                     (".content_types([\"image/*\"])", "", "Allow-list by MIME type. Supports exact types, image/* wildcards, */* for any typed file, and structured suffixes like application/*+json."),
                     (".max_size(5_000_000)", "", "Reject files over this many bytes."),
-                    (".max_files(6)", "", "Accept at most this many per drop; extras reject as TooMany."),
+                    (".max_files(6)", "", "Accept at most this many per incoming batch; extras reject as TooMany."),
                 ],
             }
             PropsTable {
@@ -91,7 +91,7 @@ pub fn UploadPage() -> Element {
                     ),
                     (
                         "Windows desktop file drops have webview quirks;",
-                        "test your target and consider an input element fallback.",
+                        "test your target; clicking the same zone uses its native file-input fallback.",
                     ),
                 ],
             }
@@ -110,7 +110,7 @@ const SNIPPET: &str = r#"FileDropZone {
         }
     },
     on_rejected: move |bad: Vec<(FileData, FileRejection)>| show_reasons(bad),
-    "Drop images here"
+    "Click to choose images or drop them here"
 }"#;
 
 // --- 13. upload (OS file drop, native) ---------------------------------------
@@ -122,7 +122,7 @@ fn UploadDemo() -> Element {
     rsx! {
         Section {
             title: "Upload",
-            note: "Drag images from your desktop. Anything that isn't an image, or weighs over 5 MB, bounces with the reason on its chip. (Native OS drag; in-page pointer drags can't cross the app boundary.)",
+            note: "Click to choose images or drag them from your desktop. Anything that isn't an image, or weighs over 5 MB, bounces with the reason on its chip.",
             tag: "FileFilter",
             FileDropZone {
                 filter: FileFilter::new()
@@ -152,9 +152,9 @@ fn UploadDemo() -> Element {
                                 }),
                         );
                 },
-                class: "flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#7A776C]/30 p-4 text-center transition data-over:border-[#1C4A38] data-over:bg-[#1C4A38]/15",
+                class: "flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#7A776C]/30 p-4 text-center transition data-over:border-[#1C4A38] data-over:bg-[#1C4A38]/15",
                 if accepted.read().is_empty() && refused.read().is_empty() {
-                    p { class: "text-sm font-medium text-[#45423B]", "Drop images here to upload" }
+                    p { class: "text-sm font-medium text-[#45423B]", "Click to choose images or drop them here" }
                     p { class: "text-[12px] text-[#7A776C]", "Up to 6 images, 5 MB each" }
                 } else {
                     if !accepted.read().is_empty() {

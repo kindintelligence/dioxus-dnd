@@ -1,98 +1,100 @@
-# Scheduled canary against upstream Dioxus. The crate pins 0.7 and rides two
-# cross-VirtualDom contracts (tests/multiwindow_seam.rs); this workflow is the
-# early warning that a Dioxus release - patch or next-minor - broke them,
-# before a user's `cargo update` does.
-#
-# Two isolated jobs so their signals never mix:
-#   - Job A (latest-published-patch) floats the Dioxus family to the newest
-#     published 0.7.x and runs the full suite. Red here means a *released*
-#     patch broke us and users are exposed today.
-#   - Job B (git-main) patches to Dioxus git main and runs only the seam and
-#     multiwindow contract tests. Red here is a heads-up: it may be unrelated
-#     upstream churn (main can be a different semver and refuse the patch),
-#     but if the tests themselves fail, the cross-VirtualDom contract is what
-#     broke.
-#
-# Deliberately a separate file from ci.yml: ci.yml answers "did we break us",
-# this answers "did upstream break us", and neither should gate the other.
+# The stable lane answers whether a released Dioxus 0.7 patch broke users.
+# The git-main lane answers whether the next Dioxus line is still source
+# compatible. Stable failures stay red. Git-main failures are informational
+# because upstream main is allowed to change before a release.
 
 name: upstream-canary
 
 on:
   schedule:
-    # Mondays 06:00 UTC - early enough in the week to react before the weekend.
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   latest-published-patch:
-    name: "upstream-canary: full suite on latest published Dioxus 0.7.x"
+    name: latest published Dioxus 0.7
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      # dioxus-desktop's system libraries, same list as ci.yml's desktop job.
-      - name: Install system libraries
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install desktop system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libxdo-dev
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
 
-      # No rust-cache here: a canary must resolve and build the fresh deps it
-      # exists to test, and a stale cache keyed on the committed lockfile would
-      # quietly hand back the pinned world.
-      - name: Float the Dioxus family to the latest published patches
+      - name: Float the Dioxus 0.7 family to current published patches
         run: |
-          grep -oP '(?<=^name = ")dioxus[^"]*' Cargo.lock | sort -u | xargs -r cargo update
-          echo "Lockfile changes:"
+          grep -oP '(?<=^name = ")dioxus[^"]*' Cargo.lock \
+            | sort -u \
+            | xargs -r cargo update
           git diff --stat Cargo.lock
 
-      - name: Test (core + serde)
+      - name: Test core and serde
         run: cargo test --features serde
 
-      - name: Test (desktop)
+      - name: Test desktop
         run: cargo test --features "serde desktop"
 
   git-main:
-    name: "upstream-canary: cross-VirtualDom signal contract (Dioxus git main)"
+    name: Dioxus git main, informational
     runs-on: ubuntu-latest
-    # A red run must be visible, not swallowed - the whole point is the alert.
-    # Isolation from Job A's signal comes from being a separate job, not from
-    # ignoring this one's failures.
-    continue-on-error: false
+    continue-on-error: true
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      # Patch the crates the two contract tests actually resolve: the facade,
-      # the runtime, signals, and dioxus-ssr (the dev-dep the tests render
-      # through). The facade's own family deps are path deps inside the git
-      # workspace, so they follow it; dioxus-desktop stays unpatched because
-      # the contract tests are host-neutral core and never build the `desktop`
-      # feature - keeping wry/tao churn out of this job's signal.
-      - name: Patch Dioxus to git main
+      - name: Install desktop system libraries
         run: |
-          cat >> Cargo.toml <<'EOF'
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
 
-          [patch.crates-io]
-          dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main" }
-          dioxus-core = { git = "https://github.com/DioxusLabs/dioxus", branch = "main" }
-          dioxus-signals = { git = "https://github.com/DioxusLabs/dioxus", branch = "main" }
-          dioxus-ssr = { git = "https://github.com/DioxusLabs/dioxus", branch = "main" }
-          EOF
-          cargo update
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
 
-      # If main has moved to a semver the `0.7` requirement rejects, cargo
-      # leaves the patch unused and the tests would run green against the
-      # pinned release - a false all-clear. Fail loudly instead.
-      - name: Verify the patch actually applied
+      - name: Select Dioxus git main packages
         run: |
-          cargo pkgid dioxus | grep -q 'git+' || {
-            echo "::error::Dioxus git main no longer satisfies the 0.7 requirement; the canary needs updating."
-            exit 1
-          }
+          cargo add dioxus \
+            --git https://github.com/DioxusLabs/dioxus \
+            --branch main \
+            --no-default-features \
+            --features minimal,document
+          cargo add dioxus-desktop \
+            --git https://github.com/DioxusLabs/dioxus \
+            --branch main \
+            --optional
+          cargo add --dev dioxus \
+            --git https://github.com/DioxusLabs/dioxus \
+            --branch main \
+            --no-default-features \
+            --features minimal,launch,web,document,mounted,router
+          cargo add --dev dioxus-ssr \
+            --git https://github.com/DioxusLabs/dioxus \
+            --branch main
 
-      - name: Contract tests only
-        run: cargo test --test multiwindow_seam --test multiwindow
+      - name: Record the upstream revision
+        run: |
+          cargo metadata --format-version 1 \
+            | jq -r '.packages[] | select(.name == "dioxus" and ((.source // "") | startswith("git+"))) | "\(.name) \(.version) \(.source)"'
+
+      - name: Test the full Rust suite against git main
+        run: cargo test --all-features

@@ -1,7 +1,16 @@
 [global]
 flavor = "gfm"
-exclude = ["docs/superpowers/**"]
+exclude = [
+    "DESKTOP-ARCHITECTURE-RECONCILIATION-REVIEW.md",
+    "docs/superpowers/**",
+]
 respect_gitignore = true
+
+[per-file-ignores]
+# The historical changelog predates the public-doc formatting rules. Keep all
+# other checks active while allowing its legacy spacing, repeated section
+# headings, and preserved long release notes.
+"CHANGELOG.md" = ["MD012", "MD013", "MD024", "MD076"]
 
 [MD013]
 line_length = 100
