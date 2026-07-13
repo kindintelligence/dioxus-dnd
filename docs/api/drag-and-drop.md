@@ -78,7 +78,7 @@ hit-testable.
 |---|---|---|---|
 | `id` | `Option<ZoneId>` | auto | Stable identity. Auto-generated ids start at 2^32; explicit ids in `u32` range never collide with them. |
 | `label` | `Option<String>` | `None` | Human name for announcements ("Over {label}"). Kept in sync if the prop changes. |
-| `accepts` | `Option<Callback<T, bool>>` | accept all | Return `false` to reject a payload: the zone will not highlight, keyboard navigation skips it, and drops fall through it. |
+| `accepts` | `Option<Callback<T, bool>>` | accept all | Return `false` to reject a payload: the zone will not highlight, keyboard navigation skips it, and drops fall through it. Keep it cheap and do not mutate this zone registry from the predicate; registry queries invoke it under their read guard. |
 | `edge` | `Option<EdgeSet>` | `None` | Opt into the closest-edge signal: renders `data-edge` live while an acceptable pointer drag hovers, and fills `DropOutcome::edge` at release. |
 | `on_drop` | `EventHandler<DropOutcome<T>>` | required | Fired on a successful drop. |
 
@@ -96,6 +96,12 @@ the shared context rather than DOM events.
 Nesting is automatic: a `DropZone` inside another discovers its parent
 through `ParentZone` and provides itself to zones deeper down, which is
 what hierarchical keyboard traversal walks.
+
+Overlap precedence follows registry order, not browser paint order. Among
+overlapping acceptable zones, the later record receives the drop; a rejecting
+one is skipped at release. CSS `z-index`, stacking contexts and portals are
+not inspected, so keep registry and visual order aligned when targets overlap,
+or avoid the overlap. Replacing a same-id record retains its slot.
 
 ## `DragOverlay`
 

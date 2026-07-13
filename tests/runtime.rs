@@ -114,7 +114,14 @@ fn registry_register_replace_unregister_and_labels() {
 
         // re-registering the same id replaces, not duplicates
         let replacement = reg.register(record(1, "uno"));
-        assert_eq!(reg.acceptable(&0).len(), 2);
+        assert_eq!(
+            reg.acceptable(&0)
+                .iter()
+                .map(|zone| zone.id)
+                .collect::<Vec<_>>(),
+            vec![ZoneId(1), ZoneId(2)],
+            "same-id replacement retains its registry slot"
+        );
         assert_eq!(reg.get(ZoneId(1)).unwrap().label.as_deref(), Some("uno"));
 
         // A measurement captured by the first registration cannot land in
@@ -187,7 +194,7 @@ fn registry_spatial_step_accepts_and_hit_test() {
 
         // hit_test: point inside C only
         assert_eq!(reg.hit_test(Point::new(10.0, 10.0)), Some(ZoneId(3)));
-        // overlapping zones: the later-registered one wins (topmost)
+        // overlapping zones: the later registry record wins
         reg.register(record(5, Some(Rect::new(0.0, 0.0, 40.0, 40.0)), None));
         assert_eq!(reg.hit_test(Point::new(10.0, 10.0)), Some(ZoneId(5)));
         // outside everything
@@ -229,6 +236,85 @@ fn registry_spatial_step_accepts_and_hit_test() {
             reg.hit_test_closest(Point::new(190.0, 500.0), &5, 48.0),
             Some(ZoneId(7))
         );
+
+        rsx! { div {} }
+    }
+    run(app);
+}
+
+/// A near-miss evaluates each acceptance predicate once and allocates no
+/// cloned registry snapshot. Equal-distance fallback keeps the historical
+/// tie-break: the earlier record in registry order wins.
+#[test]
+fn registry_closest_miss_evaluates_once_and_preserves_ties() {
+    fn app() -> Element {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use_dnd_provider::<u32>();
+        let mut reg = use_zone_registry::<u32>();
+        let calls = Rc::new(Cell::new(0));
+        let record = |id: u64, x: f64, calls: Rc<Cell<usize>>| ZoneRecord::<u32> {
+            id: ZoneId(id),
+            parent: None,
+            label: Some(format!("zone-{id}")),
+            on_drop: Callback::new(|_| {}),
+            accepts: Some(Callback::new(move |_: u32| {
+                calls.set(calls.get() + 1);
+                true
+            })),
+            mounted: None,
+            rect: Some(Rect::new(x, 0.0, 40.0, 40.0)),
+        };
+        reg.register(record(81, 0.0, calls.clone()));
+        reg.register(record(82, 60.0, calls.clone()));
+
+        // Ten pixels from both rect edges. Reverse direct-hit order must not
+        // change the fallback's earlier-record-in-registry-order tie-break.
+        assert_eq!(
+            reg.hit_test_closest(Point::new(50.0, 20.0), &7, 20.0),
+            Some(ZoneId(81))
+        );
+        assert_eq!(calls.get(), 2, "each accepts callback runs exactly once");
+
+        rsx! { div {} }
+    }
+    run(app);
+}
+
+/// Fractional layout tops within one CSS pixel are one visual row, so their
+/// x positions decide reading order instead of sub-pixel y jitter.
+#[test]
+fn registry_spatial_rows_tolerate_subpixel_jitter() {
+    fn app() -> Element {
+        use_dnd_provider::<u32>();
+        let mut reg = use_zone_registry::<u32>();
+        let record = |id: u64, x: f64, y: f64| ZoneRecord::<u32> {
+            id: ZoneId(id),
+            parent: None,
+            label: None,
+            on_drop: Callback::new(|_| {}),
+            accepts: None,
+            mounted: None,
+            rect: Some(Rect::new(x, y, 40.0, 40.0)),
+        };
+
+        // Raw (y, x) sorting would visit 2 before 1 and 3 before 4.
+        reg.register(record(1, 0.0, 0.3));
+        reg.register(record(2, 50.0, 0.0));
+        reg.register(record(3, 50.0, 50.0));
+        reg.register(record(4, 0.0, 50.3));
+
+        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(1)));
+        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(2)));
+        assert_eq!(reg.step_zone(Some(ZoneId(2)), &0, 1), Some(ZoneId(4)));
+        assert_eq!(reg.step_zone(Some(ZoneId(4)), &0, 1), Some(ZoneId(3)));
+
+        reg.set_direction(Direction::Rtl);
+        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(2)));
+        assert_eq!(reg.step_zone(Some(ZoneId(2)), &0, 1), Some(ZoneId(1)));
+        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(3)));
+        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, 1), Some(ZoneId(4)));
 
         rsx! { div {} }
     }
@@ -1480,6 +1566,33 @@ fn state_attributes_absent_when_idle() {
 }
 
 #[test]
+fn file_drop_zone_renders_a_headless_native_picker() {
+    fn app() -> Element {
+        rsx! {
+            FileDropZone {
+                filter: FileFilter::new()
+                    .extensions(["png"])
+                    .content_types(["image/*"]),
+                on_files: move |_| {},
+                class: "picker-shell",
+                "Click or drop"
+            }
+        }
+    }
+
+    let html = run(app);
+    assert!(html.contains(r#"class="picker-shell""#), "missing: {html}");
+    assert!(html.contains(r#"type="file""#), "missing: {html}");
+    assert!(html.contains(r#"accept=".png,image/*""#), "missing: {html}");
+    assert!(html.contains("multiple"), "missing: {html}");
+    assert!(html.contains("hidden"), "missing: {html}");
+    assert!(
+        !html.contains("style="),
+        "FileDropZone must not ship visual styles: {html}"
+    );
+}
+
+#[test]
 fn disabled_draggable_carries_data_disabled() {
     fn app() -> Element {
         use_dnd_provider::<String>();
@@ -2436,6 +2549,47 @@ fn drag_sim_release_respects_acceptance_and_snap() {
     assert_eq!(sim.over(&dom), None, "gap hovers nothing");
     assert_eq!(sim.release(&dom), Some(ZoneId(74)), "48px snap");
     assert_eq!(*TAKEN.lock().unwrap(), vec![5]);
+}
+
+/// Release selection is acceptance-aware before delivery: a rejecting zone
+/// later in registry order cannot mask an accepting overlapping target.
+#[test]
+fn drag_sim_release_falls_through_overlapping_rejector() {
+    static TAKEN: Mutex<Vec<ZoneId>> = Mutex::new(Vec::new());
+
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<u32> {
+                DragSimProbe::<u32> {}
+                DropZone::<u32> {
+                    id: ZoneId(83),
+                    on_drop: move |_: DropOutcome<u32>| TAKEN.lock().unwrap().push(ZoneId(83)),
+                    "accepts"
+                }
+                DropZone::<u32> {
+                    id: ZoneId(84),
+                    accepts: move |_: u32| false,
+                    on_drop: move |_: DropOutcome<u32>| -> () {
+                        panic!("rejecting zone received drop");
+                    },
+                    "rejects"
+                }
+            }
+        }
+    }
+
+    TAKEN.lock().unwrap().clear();
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<u32>();
+    let overlap = Rect::new(0.0, 0.0, 100.0, 40.0);
+    sim.place(&dom, ZoneId(83), overlap);
+    sim.place(&dom, ZoneId(84), overlap);
+
+    sim.pick_up(&dom, 5);
+    sim.move_to(&dom, Point::new(50.0, 20.0));
+    assert_eq!(sim.release(&dom), Some(ZoneId(83)));
+    assert_eq!(*TAKEN.lock().unwrap(), vec![ZoneId(83)]);
 }
 
 /// The one-line arc, and proof the driver ends in the production drop

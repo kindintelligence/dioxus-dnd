@@ -28,11 +28,13 @@ One drag world, several windows:
   serialization and none of the platform roulette of native HTML5
   drag-and-drop.
 - `use_dnd_world::<T>()` creates the world, once, in any window, and
-  provides it in context. Hand the returned handle to sibling windows with
-  `VirtualDom::with_root_context`.
-- A `DndProvider<T>` that finds a `DndWorld<T>` in context joins it instead
-  of creating isolated state. Only a window's outermost provider of `T`
-  joins; nested providers keep their usual shadowing semantics.
+  provides it in context. Create sibling windows with `world.vdom(root)`;
+  it pre-seeds the world so it cannot be forgotten while leaving ordinary
+  root-context chaining visible for the app model and per-window data.
+- `MultiWindowProvider<T>` is the one component each dioxus-desktop window
+  renders. It feeds geometry above `DndProvider`, then mounts the host bridge
+  inside it. A provider that finds the world joins it; nested providers keep
+  their usual shadowing semantics.
 
 Coordinates stay simple: everything zone-shaped remains in client CSS
 pixels of its own window, exactly as in single-window use. The world adds
@@ -45,21 +47,20 @@ conversion, and conversion happens only at the world boundary.
 ```rust,ignore
 use dioxus::desktop::{window, Config, WindowBuilder};
 use dioxus::prelude::*;
-use dioxus_dnd::desktop::{use_window_geometry_feed, DragBridge};
 use dioxus_dnd::prelude::*;
 
 fn board_window() -> Element {
     let world = use_dnd_world::<Card>();      // once, in any window
-    use_window_geometry_feed();               // ABOVE the provider
+    let model = use_dnd_model(Model::new);    // process-lived app state
+    let tray_model = model.clone();
     let open_tray = move |_| {
         window().new_window(
-            VirtualDom::new(tray_window).with_root_context(world),
+            world.vdom(tray_window).with_root_context(tray_model.clone()),
             Config::new().with_window(WindowBuilder::new().with_title("Tray")),
         );
     };
     rsx! {
-        DndProvider::<Card> {                 // joins the world via context
-            DragBridge::<Card> {}             // INSIDE the provider
+        MultiWindowProvider::<Card> {         // complete per-window wiring
             button { onclick: open_tray, "Open tray" }
             // ... zones, DragOverlay, LiveRegion ...
         }
@@ -67,10 +68,9 @@ fn board_window() -> Element {
 }
 
 fn tray_window() -> Element {
-    use_window_geometry_feed();
+    let model = use_context::<Model>();
     rsx! {
-        DndProvider::<Card> {                 // joins via root context
-            DragBridge::<Card> {}
+        MultiWindowProvider::<Card> {         // joins via seeded world
             // ... this window's zones ...
         }
     }
@@ -84,13 +84,24 @@ origin-to-receiver scale ratio, so mixed-DPI setups hand off cleanly), and
 the tray's `on_drop` receives the same `DropOutcome<Card>` a single-window
 drop delivers.
 
-## The two pieces of desktop glue
+## One desktop wrapper, two lower-level pieces
 
 `DndWorld` is core and dependency-free: it consumes window geometry it does
 not compute and host-reported pointer data it cannot see. The `desktop`
 cargo feature (`dioxus_dnd::desktop`) supplies both from tao. The feature
 pulls dioxus-desktop (wry/tao), so it is off by default and the core stays
 dependency-free.
+
+`MultiWindowProvider<T>` is the normal API. It calls the geometry feed in
+its own component scope, renders `DndProvider<T>` below it, then renders the
+bridge inside the provider. The feed-before-join and bridge-after-join order
+cannot be accidentally inverted. If no `DndWorld<T>` is in context, it warns
+once with the `use_dnd_world`/`world.vdom` fix; otherwise that mistake looks
+like a perfectly healthy set of unrelated single-window providers. It also
+warns if it was nested under the old same-type provider during migration:
+replace that provider rather than wrapping it.
+
+The composed pieces remain public for custom hosts:
 
 - `use_window_geometry_feed()`, called ABOVE the provider: feeds this
   window's position, size and scale from tao window events into a
@@ -124,7 +135,7 @@ touch never is. A touch drag is already streamed whole to the origin
 webview by the browser's implicit capture; bridging it too double-drives
 the drag from Windows' touch-synthesized mouse events.
 
-## Payloads that own reactivity
+## Payloads and models that own reactivity
 
 The showcase puts a live `Signal` handle inside the payload, which is what
 keeps the ghost's chart animating mid-drag. That is safe only when the
@@ -132,15 +143,23 @@ signal's storage outlives every window that can render it. A signal created
 inside a window's component scope dies with that window; a surviving window
 still holding the payload then reads a dead signal.
 
-The cure is model-owned storage: a root `Owner<UnsyncStorage>` held in an
-`Rc` that every window keeps alive, with every payload signal created under
-it via `dioxus::core::with_owner`. The reference implementation is
-`ModelOwner` in
-[`examples/desktop-showcase/src/model.rs`](../../examples/desktop-showcase/src/model.rs):
-every window retains the `Rc`, so the model earns the same close-order
-guarantee as the world itself, and per-window state (a satellite's widget
-list) gets its own owner so it is reclaimed promptly when that window
-closes.
+Use `use_dnd_model(Model::new)` for app-wide state. It creates both kinds of
+Dioxus owner under a process-lived scope, provides the model in context, and
+returns it. Process lifetime is intentional: `Signal` and `Store` handles are
+copyable and do not carry an ownership guard, so no close order can make a
+surviving handle dangle. Both owners matter: signals use unsynchronized
+storage, but a `Store` keeps its subscription tree in synchronized storage.
+Allocate every such reactive value synchronously inside `Model::new`; an
+existing handle keeps its original owner even when wrapped in the model.
+
+Use `DndScope` for dynamic state that should be reclaimed, such as each
+tray's card signal. Mint it with `scope.with(|| Signal::new(...))`, retain a
+scope clone in the model, then remove every handle and drop that scope as one
+teardown operation. The
+[`desktop-multiwindow` example](../../examples/desktop-multiwindow/src/main.rs)
+does exactly this: closing a tray first returns its cards to the process-lived
+board, then retires the tray scope. Closing the board first is harmless. The
+final scope clone drops only after all signal guards have returned.
 
 ## The invariants
 
@@ -162,6 +181,12 @@ A few invariants hold the world together:
   window that took the drop, survives the origin window closing
   mid-animation, and only that window can finish it. Custom delivery code
   claims this with `DndWorld::claim_settle`.
+- **Callbacks revalidate ownership.** Receiver and source callbacks may
+  synchronously begin a replacement drag. The old result commits before
+  receiver code; completion then re-reads source-session ownership and live
+  drag state before clearing metadata. Host legs separately revalidate their
+  composite generation immediately before acting. See
+  [the callback invariant](architecture.md#callback-boundaries-are-generation-boundaries).
 
 ## Close order and degradation
 
@@ -200,14 +225,13 @@ session exercised, and how each platform's bridge mechanics work - lives in
 
 ## Gotchas
 
-- **Order is load-bearing.** `use_window_geometry_feed()` goes ABOVE the
-  provider (the provider reads the geometry from context at join);
-  `DragBridge` goes INSIDE it (it needs the membership). Swap them and the
-  window joins with inert geometry or the bridge no-ops.
+- **Use the wrapper unless you own the host.** `MultiWindowProvider` enforces
+  the ordering. On the manual custom-host path, the geometry feed still goes
+  above the provider and the bridge still goes inside it.
 - **Create drop-target windows visible.** Windows created hidden and shown
   later have broken drag-and-drop in WebView2 (wry#1639).
-- **No window-scoped signals in payloads.** They die with their window; use
-  the `ModelOwner` pattern above.
+- **No window-scoped signals in shared payloads.** They die with their
+  window; use `use_dnd_model`, or a retained `DndScope` for reclaimable data.
 - **Touch is never bridged, on purpose.** Implicit capture already delivers
   the whole gesture to the origin webview; do not try to bridge around it.
 - **The Windows leg flips a process-global tao setting.** Raw input needs

@@ -18,6 +18,25 @@ cargo run
 weigh down the main crate's builds. Linux needs the usual dioxus-desktop
 system libs.)
 
+### WSLg
+
+From the repository root, launch the same charts example through WSLg/X11:
+
+```sh
+bash examples/desktop-showcase/run-wsl.sh
+```
+
+The launcher defaults to X11 so WSLg exposes the global coordinates needed
+for full cross-window drag handoff. To check the intentional Wayland fallback:
+
+```sh
+GDK_BACKEND=wayland bash examples/desktop-showcase/run-wsl.sh
+```
+
+There is no separate WSL Rust implementation: both launchers use the same
+`src/` code, including `use_dnd_model`, reclaimable `DndScope`s,
+`DndWorld::vdom`, and `MultiWindowProvider`.
+
 ## Things to try
 
 - **Open satellite** spawns tear-off windows; open as many as you like.
@@ -29,14 +48,15 @@ system libs.)
 - Close windows in any order - including Mission Control first. Widgets
   keep running: the liveness ticker fails over to a surviving window
   (`ticker.rs`), and a closing satellite returns its widgets to the dock
-  (`model.rs`, the close-order-safe `ModelOwner` pattern).
+  (`model.rs`, using `use_dnd_model` plus reclaimable `DndScope`s).
 - Press **D** in any window to snap the demo filming layout
   (positions tuned for a 1920x1200 @1.5x screen, clamped elsewhere).
 
 ## Layout
 
-- `model.rs` - shared live model: widgets, satellite lifecycle, move/clone
-  drop semantics. Unit-tested across VirtualDoms.
+- `model.rs` - shared live model: app-lived ownership, reclaimable satellite
+  scopes, widget lifecycle, and move/clone semantics. Unit-tested across
+  VirtualDoms.
 - `ticker.rs` - the liveness engine: pure deterministic state advance
   (unit-tested) plus the claim/release failover hook.
 - `widgets/` - one file per widget body (sparkline, stopwatch, deploy

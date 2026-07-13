@@ -1,5 +1,65 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Click-to-upload file drop zones.** Clicking `FileDropZone` opens the
+  native multi-file picker. Picker selections share the existing filtering,
+  rejection, and `on_files` path with OS drops, while the wrapper remains
+  headless and receives no library-owned visual styles.
+
+- **Multi-window ownership and wiring primitives.** `use_dnd_model` creates
+  app-wide state under process-lived unsynchronized and synchronized owners;
+  `DndScope` gives reclaimable dynamic state the same correct owner pair.
+  With the `desktop` feature, `MultiWindowProvider` structurally installs the
+  geometry feed, drag provider, and host bridge in their required order and
+  warns when no world is present or when it was incorrectly nested beneath
+  the old same-type provider. `DndWorld::vdom` pre-seeds spawned windows with
+  that world while preserving ordinary root-context chaining.
+
+### Fixed
+
+- **Owner restoration and lifetime precision.** `DndScope::with` now restores
+  both Dioxus owner overrides before resuming an initializer panic, and
+  process-owned model/world scopes remain deliberately non-dropping even if
+  their creator UI thread exits. Public docs now call out synchronous
+  allocation and quiescent teardown requirements.
+
+- **Zone-registry hot paths and ordering.** Acceptance-aware release
+  hit-testing now scans the registry once without cloning every acceptable
+  `ZoneRecord`, evaluates each acceptance predicate once per query, and
+  consistently falls through rejecting overlaps in local, simulated,
+  cross-window, and host-driven release paths. Keyboard traversal groups
+  zone tops within one CSS pixel into the same row, preventing fractional
+  layout jitter from producing a zig-zag in LTR or RTL.
+- **Registry mutation diagnostics and structural consistency.** Failed Dioxus
+  signal mutations emit `trace` events under `dioxus_dnd::registry`, and
+  register/unregister acquire both the zone and generation stores before
+  mutating either so a runtime borrow collision cannot split their state.
+  Registry handle equality now includes all four backing signal identities.
+
+### Documented
+
+- **Overlap and reentrancy invariants.** Public docs now state that overlapping
+  targets resolve by registry order rather than CSS stacking/portal paint
+  order, and the architecture guide records the generation revalidation
+  protocol that protects a replacement drag started synchronously inside a
+  receiver or source callback. Identity counters also document their relaxed,
+  process-lifetime non-wrapping assumption.
+
+## 3.0.1 - 2026-07-11
+
+### Fixed
+
+- **Release landing-page links and package metadata.** The README hero now
+  uses the repository-relative `assets/showcase.gif` path instead of a
+  deleted `development` branch, the compatibility table includes 3.0, and
+  gallery references no longer point at GitHub Pages routes that returned
+  404 before the SPA fallback loaded. This patch republishes the corrected
+  README to crates.io and docs.rs; the GitHub Pages workflow redeploys the
+  gallery from the same release source.
+
 ## 3.0.0 - 2026-07-11
 
 ### Added

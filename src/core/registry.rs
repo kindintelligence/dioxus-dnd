@@ -12,7 +12,28 @@ use dioxus::prelude::*;
 
 use super::types::{Direction, DropOutcome, Point, Rect, ZoneId};
 
+// Identity freshness only: Relaxed is sufficient because the counter carries
+// no synchronization. Correctness assumes this process-lifetime u64 never
+// wraps; do not narrow it.
 static NEXT_ZONE_REGISTRATION: AtomicU64 = AtomicU64::new(1);
+
+fn trace_registry_failure(
+    operation: &'static str,
+    storage: &'static str,
+    zone: Option<ZoneId>,
+    generation: Option<u64>,
+    error: &impl std::fmt::Display,
+) {
+    tracing::trace!(
+        target: "dioxus_dnd::registry",
+        operation,
+        storage,
+        zone_id = ?zone,
+        registration_generation = ?generation,
+        error = %error,
+        "zone registry operation skipped"
+    );
+}
 
 /// Identifies one particular registration of a [`ZoneId`].
 ///
@@ -81,7 +102,7 @@ impl<T: Clone + 'static> ZoneRecord<T> {
     }
 }
 
-/// Registry of the currently mounted drop zones, in mount order.
+/// Registry of the currently registered drop zones, in registration order.
 pub struct ZoneRegistry<T: Clone + 'static> {
     zones: Signal<Vec<ZoneRecord<T>>>,
     /// Current generation for each id in `zones`. Kept separately so
@@ -102,7 +123,10 @@ impl<T: Clone + 'static> Clone for ZoneRegistry<T> {
 }
 impl<T: Clone + 'static> PartialEq for ZoneRegistry<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.zones == other.zones && self.dir == other.dir
+        self.zones == other.zones
+            && self.registrations == other.registrations
+            && self.mount_revision == other.mount_revision
+            && self.dir == other.dir
     }
 }
 
@@ -125,10 +149,17 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// Set the layout direction (no-op if unchanged; safe to call every
     /// render). `DndProvider`'s `dir` prop calls this for you.
     pub fn set_direction(&mut self, dir: Direction) {
-        let changed = self.dir.try_peek().map(|current| *current != dir);
-        if changed == Ok(true) {
-            if let Ok(mut current) = self.dir.try_write() {
-                *current = dir;
+        let changed = match self.dir.try_peek() {
+            Ok(current) => *current != dir,
+            Err(error) => {
+                trace_registry_failure("set_direction", "dir", None, None, &error);
+                return;
+            }
+        };
+        if changed {
+            match self.dir.try_write() {
+                Ok(mut current) => *current = dir,
+                Err(error) => trace_registry_failure("set_direction", "dir", None, None, &error),
             }
         }
     }
@@ -139,53 +170,97 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             id: record.id,
             generation: NEXT_ZONE_REGISTRATION.fetch_add(1, Ordering::Relaxed),
         };
-        if let Ok(mut zones) = self.zones.try_write() {
-            if let Some(existing) = zones.iter_mut().find(|z| z.id == record.id) {
-                *existing = record;
-            } else {
-                zones.push(record);
+        // Acquire both halves before mutating either. A runtime borrow
+        // collision must not leave `zones` and `registrations` disagreeing.
+        let mut zones = match self.zones.try_write() {
+            Ok(zones) => zones,
+            Err(error) => {
+                trace_registry_failure(
+                    "register",
+                    "zones",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
+                return registration;
             }
-        }
-        if let Ok(mut registrations) = self.registrations.try_write() {
-            if let Some(existing) = registrations
-                .iter_mut()
-                .find(|(id, _)| *id == registration.id)
-            {
-                existing.1 = registration.generation;
-            } else {
-                registrations.push((registration.id, registration.generation));
+        };
+        let mut registrations = match self.registrations.try_write() {
+            Ok(registrations) => registrations,
+            Err(error) => {
+                trace_registry_failure(
+                    "register",
+                    "registrations",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
+                return registration;
             }
+        };
+        if let Some(existing) = zones.iter_mut().find(|z| z.id == record.id) {
+            *existing = record;
+        } else {
+            zones.push(record);
         }
+        if let Some(existing) = registrations
+            .iter_mut()
+            .find(|(id, _)| *id == registration.id)
+        {
+            existing.1 = registration.generation;
+        } else {
+            registrations.push((registration.id, registration.generation));
+        }
+        drop(registrations);
+        drop(zones);
         self.bump_mount_revision();
         registration
     }
 
     /// Update a zone's label in place (no-op if unchanged or unknown).
     pub fn sync_label(&mut self, id: ZoneId, label: Option<String>) {
-        let needs = self
-            .zones
-            .try_peek()
-            .map(|zones| zones.iter().any(|z| z.id == id && z.label != label))
-            .unwrap_or(false);
+        let needs = match self.zones.try_peek() {
+            Ok(zones) => zones.iter().any(|z| z.id == id && z.label != label),
+            Err(error) => {
+                trace_registry_failure("sync_label", "zones", Some(id), None, &error);
+                return;
+            }
+        };
         if needs {
-            if let Ok(mut zones) = self.zones.try_write() {
-                if let Some(z) = zones.iter_mut().find(|z| z.id == id) {
-                    z.label = label;
+            match self.zones.try_write() {
+                Ok(mut zones) => {
+                    if let Some(z) = zones.iter_mut().find(|z| z.id == id) {
+                        z.label = label;
+                    }
                 }
+                Err(error) => trace_registry_failure("sync_label", "zones", Some(id), None, &error),
             }
         }
     }
 
     /// Remove a zone (call when its component unmounts).
     pub fn unregister(&mut self, id: ZoneId) {
-        let removed = self.zones.try_write().is_ok_and(|mut zones| {
-            let old_len = zones.len();
-            zones.retain(|z| z.id != id);
-            zones.len() != old_len
-        });
-        if let Ok(mut registrations) = self.registrations.try_write() {
-            registrations.retain(|(registered_id, _)| *registered_id != id);
-        }
+        // Structural state is a pair; acquire both guards before changing it.
+        let mut zones = match self.zones.try_write() {
+            Ok(zones) => zones,
+            Err(error) => {
+                trace_registry_failure("unregister", "zones", Some(id), None, &error);
+                return;
+            }
+        };
+        let mut registrations = match self.registrations.try_write() {
+            Ok(registrations) => registrations,
+            Err(error) => {
+                trace_registry_failure("unregister", "registrations", Some(id), None, &error);
+                return;
+            }
+        };
+        let old_len = zones.len();
+        zones.retain(|z| z.id != id);
+        let removed = zones.len() != old_len;
+        registrations.retain(|(registered_id, _)| *registered_id != id);
+        drop(registrations);
+        drop(zones);
         if removed {
             self.bump_mount_revision();
         }
@@ -194,14 +269,25 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// Attach the mounted element to this exact registration. A stale
     /// registration token is ignored.
     pub fn set_mounted(&mut self, registration: ZoneRegistration, mounted: Rc<MountedData>) {
-        if !self.is_current(registration) {
+        if !self.is_current(registration, "set_mounted") {
             return;
         }
         let mut changed = false;
-        if let Ok(mut zones) = self.zones.try_write() {
-            if let Some(zone) = zones.iter_mut().find(|z| z.id == registration.id) {
-                zone.mounted = Some(mounted);
-                changed = true;
+        match self.zones.try_write() {
+            Ok(mut zones) => {
+                if let Some(zone) = zones.iter_mut().find(|z| z.id == registration.id) {
+                    zone.mounted = Some(mounted);
+                    changed = true;
+                }
+            }
+            Err(error) => {
+                trace_registry_failure(
+                    "set_mounted",
+                    "zones",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
             }
         }
         if changed {
@@ -213,12 +299,23 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// current. This never inserts a missing zone and therefore cannot
     /// resurrect one that unmounted during an async measurement.
     pub fn set_rect_if_present(&mut self, registration: ZoneRegistration, rect: Rect) {
-        if !self.is_current(registration) {
+        if !self.is_current(registration, "set_rect_if_present") {
             return;
         }
-        if let Ok(mut zones) = self.zones.try_write() {
-            if let Some(zone) = zones.iter_mut().find(|z| z.id == registration.id) {
-                zone.rect = Some(rect);
+        match self.zones.try_write() {
+            Ok(mut zones) => {
+                if let Some(zone) = zones.iter_mut().find(|z| z.id == registration.id) {
+                    zone.rect = Some(rect);
+                }
+            }
+            Err(error) => {
+                trace_registry_failure(
+                    "set_rect_if_present",
+                    "zones",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
             }
         }
     }
@@ -227,7 +324,7 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// synchronous/manual counterpart to [`Self::set_rect_if_present`], used
     /// by custom layout adapters and the headless test driver.
     pub fn set_rect(&mut self, id: ZoneId, rect: Rect) {
-        if let Some(registration) = self.current_registration(id) {
+        if let Some(registration) = self.current_registration(id, "set_rect") {
             self.set_rect_if_present(registration, rect);
         }
     }
@@ -311,9 +408,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// accept `payload`. `step` is `+1` or `-1`.
     ///
     /// Order is **spatial** (top-to-bottom, then left-to-right) for zones
-    /// with measured rects - call [`Self::refresh_rects`] first, as the
-    /// built-in keyboard interaction does on pickup. Unmeasured zones keep
-    /// registration order, after the measured ones.
+    /// with measured rects; tops within one CSS pixel form a row so sub-pixel
+    /// layout jitter cannot override horizontal reading order. Call
+    /// [`Self::refresh_rects`] first, as the built-in keyboard interaction
+    /// does on pickup. Unmeasured zones keep registration order afterwards.
     pub fn step_zone(&self, current: Option<ZoneId>, payload: &T, step: isize) -> Option<ZoneId> {
         let mut zones = self.acceptable(payload);
         spatial_sort(&mut zones, self.direction());
@@ -332,8 +430,9 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 
     /// Zones directly inside `parent` (`None` = root level) that accept
-    /// `payload`, in spatial order (top-to-bottom, left-to-right; unmeasured
-    /// zones keep registration order at the end).
+    /// `payload`, in spatial order (top-to-bottom, then left-to-right within
+    /// a one-CSS-pixel row band; unmeasured zones keep registration order at
+    /// the end).
     pub fn children_of(&self, parent: Option<ZoneId>, payload: &T) -> Vec<ZoneRecord<T>> {
         let mut zones: Vec<_> = self
             .zones
@@ -369,9 +468,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         self.children_of(Some(id), payload).first().map(|z| z.id)
     }
 
-    /// Topmost zone containing `point` (client coordinates), using cached
-    /// rects - call [`Self::refresh_rects`] when a drag starts. Later-mounted
-    /// zones win, approximating DOM paint order.
+    /// Last record in registry order containing `point` (client coordinates),
+    /// using cached rects - call [`Self::refresh_rects`] when a drag starts.
+    /// This only approximates DOM paint order; CSS stacking and portals are
+    /// not inspected. Replacing a same-id record retains its existing slot.
     pub fn hit_test(&self, point: Point) -> Option<ZoneId> {
         self.zones
             .try_peek()
@@ -382,39 +482,37 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             .map(|z| z.id)
     }
 
-    /// Like [`Self::hit_test`], but acceptance-aware: it returns the topmost
-    /// zone that both contains the point **and** accepts `payload`, and when
-    /// no such zone contains the point, falls back to the acceptable zone
-    /// whose *rect* is nearest - within `max_distance` CSS px of its closest
-    /// edge, not its center, so a large zone snaps a release right beside it
-    /// even though its center sits far away. Skipping zones that reject the
-    /// payload lets a drop land on an accepting zone sitting *under* a
-    /// rejecting (or decorative) one, and is friendlier for imprecise
-    /// (touch) drops that land in the gutter between zones.
+    /// Like [`Self::hit_test`], but acceptance-aware: it returns the last
+    /// record in registry order that both contains the point **and** accepts
+    /// `payload`, and when no such zone contains the point, falls back to the
+    /// acceptable zone whose *rect* is nearest - within `max_distance` CSS px
+    /// of its closest edge, not its center, so a large zone snaps a release
+    /// right beside it even though its center sits far away. Skipping zones
+    /// that reject the payload lets a drop land on an earlier accepting
+    /// overlap, and is friendlier for imprecise (touch) drops that land in the
+    /// gutter between zones.
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
-        if let Some(hit) = self
-            .zones
-            .try_peek()
-            .ok()?
-            .iter()
-            .rev()
-            .find(|z| {
-                z.accepts_payload(payload)
-                    && z.cached_rect().map(|r| r.contains(point)).unwrap_or(false)
-            })
-            .map(|z| z.id)
-        {
-            return Some(hit);
-        }
+        let zones = self.zones.try_peek().ok()?;
         let mut best: Option<(ZoneId, f64)> = None;
-        for z in self.acceptable(payload) {
+        // One borrowed pass: the former miss path built and cloned an entire
+        // `Vec<ZoneRecord<T>>`, then evaluated every acceptance filter twice.
+        for z in zones.iter().rev() {
+            if !z.accepts_payload(payload) {
+                continue;
+            }
             let Some(r) = z.cached_rect() else { continue };
+            if r.contains(point) {
+                return Some(z.id);
+            }
             // Distance to the rect's nearest point (zero on either axis the
             // point already overlaps), not to its center.
             let dx = (r.x - point.x).max(point.x - (r.x + r.width)).max(0.0);
             let dy = (r.y - point.y).max(point.y - (r.y + r.height)).max(0.0);
             let d = (dx * dx + dy * dy).sqrt();
-            if d <= max_distance && best.map(|(_, bd)| d < bd).unwrap_or(true) {
+            // Reverse iteration preserves direct-hit precedence. Replacing on
+            // an equal distance preserves the old fallback tie-break: the
+            // earlier record in registry order wins.
+            if d <= max_distance && best.map(|(_, bd)| d <= bd).unwrap_or(true) {
                 best = Some((z.id, d));
             }
         }
@@ -494,29 +592,50 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             .unwrap_or_default()
     }
 
-    fn is_current(&self, registration: ZoneRegistration) -> bool {
-        self.registrations.try_peek().is_ok_and(|registrations| {
-            registrations.iter().any(|(id, generation)| {
+    fn is_current(&self, registration: ZoneRegistration, operation: &'static str) -> bool {
+        match self.registrations.try_peek() {
+            Ok(registrations) => registrations.iter().any(|(id, generation)| {
                 *id == registration.id && *generation == registration.generation
-            })
-        })
+            }),
+            Err(error) => {
+                trace_registry_failure(
+                    operation,
+                    "registrations",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
+                false
+            }
+        }
     }
 
-    fn current_registration(&self, id: ZoneId) -> Option<ZoneRegistration> {
-        self.registrations
-            .try_peek()
-            .ok()?
-            .iter()
-            .find(|(registered_id, _)| *registered_id == id)
-            .map(|(_, generation)| ZoneRegistration {
-                id,
-                generation: *generation,
-            })
+    fn current_registration(
+        &self,
+        id: ZoneId,
+        operation: &'static str,
+    ) -> Option<ZoneRegistration> {
+        match self.registrations.try_peek() {
+            Ok(registrations) => registrations
+                .iter()
+                .find(|(registered_id, _)| *registered_id == id)
+                .map(|(_, generation)| ZoneRegistration {
+                    id,
+                    generation: *generation,
+                }),
+            Err(error) => {
+                trace_registry_failure(operation, "registrations", Some(id), None, &error);
+                None
+            }
+        }
     }
 
     fn bump_mount_revision(&mut self) {
-        if let Ok(mut revision) = self.mount_revision.try_write() {
-            *revision = revision.wrapping_add(1);
+        match self.mount_revision.try_write() {
+            Ok(mut revision) => *revision = revision.wrapping_add(1),
+            Err(error) => {
+                trace_registry_failure("bump_mount_revision", "mount_revision", None, None, &error)
+            }
         }
     }
 }
@@ -596,23 +715,48 @@ impl RectRefresh {
     }
 }
 
-/// Sort zones spatially: measured rects by (top, reading order), unmeasured
-/// last in their original relative order. Reading order within a row is
-/// left-to-right in LTR and right-to-left in RTL, so keyboard traversal
-/// follows what the user sees either way.
+/// Sort zones spatially: measured rects by row then reading order, unmeasured
+/// last in their original relative order. Tops within one CSS pixel form a
+/// row so sub-pixel layout jitter cannot override horizontal reading order.
+/// Reading order is left-to-right in LTR and right-to-left in RTL.
 fn spatial_sort<T: Clone + 'static>(zones: &mut [ZoneRecord<T>], dir: Direction) {
-    let reading_x = move |x: f64| match dir {
-        Direction::Ltr => x,
-        Direction::Rtl => -x,
-    };
+    const ROW_TOP_SLOP: f64 = 1.0;
+
+    // First establish a total, stable vertical order and move unmeasured
+    // records to the end. Row tolerance cannot live inside this comparator:
+    // pairwise "close enough" comparisons are non-transitive.
     zones.sort_by(|a, b| match (a.cached_rect(), b.cached_rect()) {
-        (Some(ra), Some(rb)) => (ra.y, reading_x(ra.x))
-            .partial_cmp(&(rb.y, reading_x(rb.x)))
-            .unwrap_or(std::cmp::Ordering::Equal),
+        (Some(ra), Some(rb)) => ra.y.total_cmp(&rb.y),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
     });
+
+    let measured = zones
+        .iter()
+        .position(|zone| zone.cached_rect().is_none())
+        .unwrap_or(zones.len());
+    let mut row_start = 0;
+    while row_start < measured {
+        let row_y = zones[row_start].cached_rect().unwrap().y;
+        let mut row_end = row_start + 1;
+        while row_end < measured {
+            let y = zones[row_end].cached_rect().unwrap().y;
+            if !row_y.is_finite() || !y.is_finite() || (y - row_y).abs() > ROW_TOP_SLOP {
+                break;
+            }
+            row_end += 1;
+        }
+        zones[row_start..row_end].sort_by(|a, b| {
+            let ax = a.cached_rect().unwrap().x;
+            let bx = b.cached_rect().unwrap().x;
+            match dir {
+                Direction::Ltr => ax.total_cmp(&bx),
+                Direction::Rtl => bx.total_cmp(&ax),
+            }
+        });
+        row_start = row_end;
+    }
 }
 
 /// Cyclic index stepping: `None` current starts at the first (or last)
@@ -635,7 +779,9 @@ pub(crate) fn cycle(len: usize, current: Option<usize>, step: isize) -> Option<u
 
 #[cfg(test)]
 mod tests {
-    use super::cycle;
+    use dioxus::prelude::*;
+
+    use super::{cycle, Direction, Rect, ZoneId, ZoneRecord, ZoneRegistry};
 
     #[test]
     fn cycle_steps_and_wraps() {
@@ -645,5 +791,96 @@ mod tests {
         assert_eq!(cycle(3, Some(2), 1), Some(0));
         assert_eq!(cycle(3, Some(0), -1), Some(2));
         assert_eq!(cycle(3, Some(1), 1), Some(2));
+    }
+
+    fn equality_probe() -> Element {
+        let zones = use_signal(Vec::<ZoneRecord<u8>>::new);
+        let registrations = use_signal(Vec::<(ZoneId, u64)>::new);
+        let other_registrations = use_signal(Vec::<(ZoneId, u64)>::new);
+        let mount_revision = use_signal(|| 0u64);
+        let other_mount_revision = use_signal(|| 0u64);
+        let dir = use_signal(Direction::default);
+        let registry = ZoneRegistry {
+            zones,
+            registrations,
+            mount_revision,
+            dir,
+        };
+        let copy = registry;
+
+        assert!(registry == copy, "a copied handle must compare equal");
+        assert!(
+            registry
+                != ZoneRegistry {
+                    registrations: other_registrations,
+                    ..registry
+                },
+            "registration identity is part of registry identity"
+        );
+        assert!(
+            registry
+                != ZoneRegistry {
+                    mount_revision: other_mount_revision,
+                    ..registry
+                },
+            "mount-revision identity is part of registry identity"
+        );
+        rsx! {}
+    }
+
+    #[test]
+    fn equality_covers_every_registry_storage_handle() {
+        let mut dom = VirtualDom::new(equality_probe);
+        dom.rebuild_in_place();
+    }
+
+    fn structural_borrow_probe() -> Element {
+        let zones = use_signal(Vec::<ZoneRecord<u8>>::new);
+        let mut registry = ZoneRegistry::from_signal(zones);
+        let record = |id: u64| ZoneRecord {
+            id: ZoneId(id),
+            parent: None,
+            label: None,
+            on_drop: Callback::new(|_| {}),
+            accepts: None,
+            mounted: None,
+            rect: Some(Rect::new(0.0, 0.0, 10.0, 10.0)),
+        };
+        registry.register(record(1));
+
+        // If the zone half is borrowed, registration changes neither half.
+        {
+            let zones = registry.zones;
+            let _zones = zones.read();
+            registry.register(record(2));
+        }
+        assert!(registry.get(ZoneId(2)).is_none());
+        assert!(registry.current_registration(ZoneId(2), "test").is_none());
+
+        // If the generation half is borrowed, the already-acquired zone
+        // guard must still be dropped without mutating either vector.
+        {
+            let registrations = registry.registrations;
+            let _registrations = registrations.read();
+            registry.register(record(3));
+        }
+        assert!(registry.get(ZoneId(3)).is_none());
+        assert!(registry.current_registration(ZoneId(3), "test").is_none());
+
+        // Unregister has the same all-or-nothing structural contract.
+        {
+            let registrations = registry.registrations;
+            let _registrations = registrations.read();
+            registry.unregister(ZoneId(1));
+        }
+        assert!(registry.get(ZoneId(1)).is_some());
+        assert!(registry.current_registration(ZoneId(1), "test").is_some());
+        rsx! {}
+    }
+
+    #[test]
+    fn structural_borrow_failures_cannot_split_registry_state() {
+        let mut dom = VirtualDom::new(structural_borrow_probe);
+        dom.rebuild_in_place();
     }
 }

@@ -23,32 +23,49 @@
 //!
 //! # Wiring
 //!
+//! With the `desktop` feature, render `MultiWindowProvider<T>` once in every
+//! window. It installs the geometry feed above the drag provider and the host
+//! bridge below it, so their required ordering is structural. Create sibling
+//! VDOMs with [`DndWorld::vdom`] so the world cannot be omitted; chain the app
+//! model and legitimate per-window context afterwards:
+//!
 //! ```text
-//! // main window: create the world (root scope - it must outlive every
-//! // joining window), spawn siblings with it in their root context
 //! fn main_window() -> Element {
 //!     let world = use_dnd_world::<Card>();
-//!     // dioxus_desktop::window().new_window(
-//!     //     VirtualDom::new(popup).with_root_context(world), Default::default());
-//!     rsx! { DndProvider::<Card> { /* ... */ } }   // joins via context
+//!     let model = use_dnd_model(Model::new);
+//!     let popup_model = model.clone();
+//!     let open = move |_| {
+//!         let dom = world.vdom(popup).with_root_context(popup_model.clone());
+//!         dioxus::desktop::window().new_window(dom, Default::default());
+//!     };
+//!     rsx! {
+//!         MultiWindowProvider::<Card> {
+//!             button { onclick: open, "Open" }
+//!             // zones, overlay, live region
+//!         }
+//!     }
 //! }
 //!
 //! fn popup() -> Element {
-//!     rsx! { DndProvider::<Card> { /* ... */ } }   // joins via root context
+//!     let model = use_context::<Model>();
+//!     rsx! { MultiWindowProvider::<Card> { /* ... */ } }
 //! }
 //! ```
 //!
-//! A `DndProvider<T>` that finds a `DndWorld<T>` in context joins it
-//! instead of creating isolated state (nested providers keep today's
-//! shadowing semantics: only a window's outermost provider of `T` joins).
-//! Feed each window's [`WindowGeometry`] from your windowing layer - on
-//! desktop, sample `inner_position()` / `inner_size()` / `scale_factor()`
-//! on move/resize events and call [`WindowGeometry::set`]; call
-//! [`WindowGeometry::mark_focused`] on focus so overlapping windows resolve
-//! to the frontmost. **Without geometry the world degrades gracefully**:
-//! drags behave exactly as single-window drags (this is also the honest
-//! Wayland story, where a client can learn neither the cursor's global
-//! position nor its own windows' positions).
+//! `MultiWindowProvider` warns once if it mounts without a world in context;
+//! that window otherwise falls back to isolated drag state.
+//!
+//! Custom windowing hosts use the manual path: provide a [`WindowGeometry`]
+//! above `DndProvider<T>`, update it from host move/resize/focus events, and
+//! render the host bridge inside the provider after it joins. A provider that
+//! finds a world joins it instead of creating isolated state (nested providers
+//! keep today's shadowing semantics: only a window's outermost provider of `T`
+//! joins). Sample placement in global physical pixels and call
+//! [`WindowGeometry::set`]; call [`WindowGeometry::mark_focused`] on focus so
+//! overlapping windows resolve to the frontmost. **Without geometry the world
+//! degrades gracefully**: drags behave exactly as single-window drags (this is
+//! also the honest Wayland story, where a client can learn neither the cursor's
+//! global position nor its own windows' positions).
 //!
 //! # Lifetimes: close windows in any order
 //!
@@ -78,8 +95,8 @@ pub use state::{DndWorld, WindowRecord, ZoneLocation};
 
 /// Create a `DndWorld<T>` (process-lived - see the module docs on
 /// lifetimes) and provide it in context, so providers in this window join
-/// it. Pass the returned handle to sibling windows via
-/// `VirtualDom::with_root_context`. Call it once, in any window.
+/// it. Create sibling windows with [`DndWorld::vdom`]. Call it once, in any
+/// window.
 pub fn use_dnd_world<T: Clone + 'static>() -> DndWorld<T> {
     use_hook(|| provide_context(DndWorld::<T>::new()))
 }
@@ -90,4 +107,41 @@ pub fn use_dnd_world<T: Clone + 'static>() -> DndWorld<T> {
 /// anywhere below the `DndProvider`.
 pub fn use_joined_window<T: Clone + 'static>() -> Option<JoinedWindow<T>> {
     try_use_context::<WorldMembership<T>>().and_then(|m| m.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct WorldSlot(Rc<RefCell<Option<DndWorld<String>>>>);
+
+    fn world_creator() -> Element {
+        let slot = use_context::<WorldSlot>();
+        slot.0.replace(Some(use_dnd_world::<String>()));
+        rsx! {}
+    }
+
+    fn seeded_sibling() -> Element {
+        let slot = use_context::<WorldSlot>();
+        slot.0.replace(Some(use_context::<DndWorld<String>>()));
+        rsx! {}
+    }
+
+    #[test]
+    fn vdom_seeds_the_world_root_context() {
+        let created = WorldSlot::default();
+        let mut creator = VirtualDom::new(world_creator).with_root_context(created.clone());
+        creator.rebuild_in_place();
+        let world = created.0.take().expect("creator published its world");
+
+        drop(creator);
+        let seen = WorldSlot::default();
+        let mut sibling = world.vdom(seeded_sibling).with_root_context(seen.clone());
+        sibling.rebuild_in_place();
+
+        assert!(seen.0.take().is_some_and(|seen| seen == world));
+    }
 }

@@ -12,7 +12,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::model::{ModelOwner, Widget, WidgetState};
+use crate::model::{Model, Widget, WidgetState};
 
 const TICK: Duration = Duration::from_millis(50);
 const RETRY_CLAIM: Duration = Duration::from_millis(500);
@@ -62,24 +62,24 @@ impl WidgetState {
 
 /// Install the failover ticker in this window. Every window calls this; the
 /// claim decides who actually drives.
-pub fn use_ticker(owner: Rc<ModelOwner>) {
+pub fn use_ticker(model: Model) {
     let held = use_hook(|| Rc::new(Cell::new(false)));
-    let release_owner = owner.clone();
+    let release_model = model.clone();
     let release_held = held.clone();
     use_drop(move || {
         if release_held.get() {
-            release_owner.release_ticker();
+            release_model.release_ticker();
         }
     });
     use_future(move || {
-        let owner = owner.clone();
+        let model = model.clone();
         let held = held.clone();
         async move {
             loop {
                 if held.get() {
-                    tick_all(&owner);
+                    tick_all(&model);
                     tokio::time::sleep(TICK).await;
-                } else if owner.claim_ticker() {
+                } else if model.claim_ticker() {
                     held.set(true);
                 } else {
                     tokio::time::sleep(RETRY_CLAIM).await;
@@ -89,8 +89,7 @@ pub fn use_ticker(owner: Rc<ModelOwner>) {
     });
 }
 
-fn tick_all(owner: &ModelOwner) {
-    let model = owner.model;
+fn tick_all(model: &Model) {
     let mut widgets: Vec<Widget> = model.dock.peek().clone();
     for satellite in model.satellites.peek().iter() {
         widgets.extend(satellite.widgets.peek().iter().copied());

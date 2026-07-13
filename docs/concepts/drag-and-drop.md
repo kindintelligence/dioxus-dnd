@@ -152,6 +152,11 @@ Behavior you do not write, on every `Draggable` and `DropZone`:
 - **One `LiveRegion` per provider.** Announcements are one component away;
   without it, keyboard drags work but say nothing.
   See [Accessibility](accessibility.md).
+- **Overlaps use registry order, not paint order.** Among overlapping
+  acceptable zones, the later record receives the drop; rejecting records are
+  skipped at release. CSS `z-index`, stacking contexts and portals are not
+  inspected, so align registry and visual order or avoid overlapping targets.
+  Replacing a same-id record retains its slot.
 
 ## Related
 

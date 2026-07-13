@@ -1,35 +1,46 @@
 # Multi-window API reference
 
 Desktop windowing glue for multi-window drag worlds (the `desktop` cargo
-feature): the per-window geometry feed and the cross-window drag bridge,
-plus the reference for the core `DndWorld` API they drive.
+feature): one correctly ordered per-window provider, plus the lower-level
+geometry feed and cross-window drag bridge it composes. This page also
+covers the core world and model-lifetime APIs they drive.
 
 Concept guide: [docs/concepts/multi-window.md](../concepts/multi-window.md).
 Per-platform verification evidence: [PLATFORMS.md](../../PLATFORMS.md).
 
-`use_window_geometry_feed` and `DragBridge` live in `dioxus_dnd::desktop`
-and need `features = ["desktop"]`, which pulls dioxus-desktop (wry/tao) and
-is therefore off by default. Everything else on this page - `DndWorld`,
-`use_dnd_world`, `use_joined_window`, `JoinedWindow`, `WindowGeometry`,
-`WindowKey`, `WindowRecord`, `ZoneLocation` - is core
-(`dioxus_dnd::core::world`), always compiled and dependency-free. All of
-the core items except `WindowRecord` and `ZoneLocation` are re-exported
-through the prelude; import those two from `dioxus_dnd::core`.
+`MultiWindowProvider`, `use_window_geometry_feed` and `DragBridge` live in
+`dioxus_dnd::desktop` and need `features = ["desktop"]`, which pulls
+dioxus-desktop (wry/tao) and is therefore off by default. The provider is
+also re-exported by the prelude when that feature is enabled.
+
+Everything else on this page - `DndWorld`, `use_dnd_world`, `DndScope`,
+`use_dnd_model`, `use_joined_window`, `JoinedWindow`, `WindowGeometry`,
+`WindowKey`, `WindowRecord`, `ZoneLocation` - is core, always compiled and
+platform-dependency-free. All except `WindowRecord` and `ZoneLocation` are
+re-exported through the prelude; import those two from `dioxus_dnd::core`.
 
 ```rust,ignore
-use dioxus_dnd::desktop::{use_window_geometry_feed, DragBridge};
 use dioxus_dnd::prelude::*;
 
-fn any_window() -> Element {
-    // ABOVE the provider: the provider picks the geometry up from
-    // context when it joins the world.
-    use_window_geometry_feed();
+fn board_window() -> Element {
+    let world = use_dnd_world::<Card>();
+    let model = use_dnd_model(Model::new);
+    let popup_model = model.clone();
+    let open = move |_| {
+        let dom = world.vdom(popup).with_root_context(popup_model.clone());
+        dioxus::desktop::window().new_window(dom, Default::default());
+    };
     rsx! {
-        DndProvider::<Card> {
-            DragBridge::<Card> {}   // INSIDE the provider: needs the join
-            // ... your zones, overlay, live region ...
+        MultiWindowProvider::<Card> {
+            button { onclick: open, "Open" }
+            // ... zones, overlay, live region ...
         }
     }
+}
+
+fn popup() -> Element {
+    let model = use_context::<Model>();
+    rsx! { MultiWindowProvider::<Card> { /* ... */ } }
 }
 ```
 
@@ -37,13 +48,13 @@ fn any_window() -> Element {
 
 `dioxus_dnd::core::world` keeps the library dependency-free by consuming
 window geometry it does not compute and host-reported pointer data it
-cannot see. The `desktop` module is the other half for dioxus-desktop: the
-two pieces every window of a multi-window app needs, promoted from the
-`desktop-multiwindow` example after the per-platform behavior was probed
-and hand-verified (Linux/X11, Linux/Wayland policy, and Windows
-11/WebView2; macOS is expected to work on the same APIs but not yet
-hand-verified).
+cannot see. The `desktop` module is the other half for dioxus-desktop:
+`MultiWindowProvider` is the normal per-window API, composed from these
+lower-level pieces:
 
+- `provider`: calls the feed in its own scope above `DndProvider`, then
+  renders `DragBridge` inside that provider. This makes the ordering
+  invariant structural.
 - `feed`: `use_window_geometry_feed` samples this window's placement from
   tao events into the world's `WindowGeometry`.
 - `bridge`: `DragBridge` gates which drags need host-side help (mouse and
@@ -58,11 +69,51 @@ hand-verified).
   each shared leg without hiding genuinely platform-specific mechanics or
   capability policy.
 
+## `MultiWindowProvider`
+
+The one-per-window component for dioxus-desktop. It forwards `dir` to
+`DndProvider`, supplies the window geometry before that provider joins, and
+mounts `DragBridge<T>` after the join. Put app-styled children such as zones,
+`DragOverlay` and `LiveRegion` inside it.
+
+If it mounts with no `DndWorld<T>` in context, it emits one `tracing::warn!`
+with the fix (`use_dnd_world` plus `DndWorld::vdom`) and falls back to the
+provider's isolated single-window state. This catches the otherwise quiet
+failure where every window works locally but never joins the others.
+It also warns when nested beneath an existing `DndProvider<T>`: replace the
+old provider instead of wrapping it, because only the outermost same-type
+provider may join the world.
+
+| Prop | Type | Default | What it does |
+|---|---|---|---|
+| `dir` | `Direction` | `Ltr` | Forwarded to `DndProvider` for keyboard navigation and spatial ordering. |
+| `children` | `Element` | required | Zones and app-styled provider children. |
+| `phantom` | `PhantomData<T>` | `PhantomData` | Internal type marker; never set it. |
+
+The manual feed/provider/bridge path below remains public for custom hosts
+and integrations that need to insert their own host-side observations.
+
+```rust,ignore
+fn manually_wired_desktop_window() -> Element {
+    use_window_geometry_feed(); // parent scope: available when join runs
+    rsx! {
+        DndProvider::<Card> {
+            DragBridge::<Card> {} // child scope: consumes joined membership
+            // ...
+        }
+    }
+}
+```
+
+A non-tao host substitutes its own `WindowGeometry` provider and bridge,
+driving the world through the host-side methods documented below.
+
 ## `use_window_geometry_feed`
 
 `fn use_window_geometry_feed() -> WindowGeometry` - needs `desktop`.
 
-Provides a `WindowGeometry` for this window in context and keeps it fed
+Lower-level desktop hook used by `MultiWindowProvider`. Provides a
+`WindowGeometry` for this window in context and keeps it fed
 from tao events (position, size and scale, plus visibility eligibility, on
 move, resize, scale change, cursor-enter and focus events). Call it ABOVE
 the `DndProvider`, which picks the geometry up from context when it joins
@@ -85,7 +136,7 @@ Behavior notes:
 
 ## `DragBridge`
 
-The cross-window drag bridge: host-side eyes and ears for pointer drags
+Lower-level component used by `MultiWindowProvider`: host-side eyes and ears for pointer drags
 that leave the origin window. Render one INSIDE each window's
 `DndProvider<T>`; it renders nothing. A provider that did not join a
 `DndWorld` gets a no-op bridge. Needs `desktop`.
@@ -160,8 +211,8 @@ arrives pre-triaged to the leg whose platform assumption moved.
 
 A drag world shared by several windows: one `DndContext<T>` every joined
 provider re-provides, plus the window table cross-window hit-testing walks.
-Cheap to copy; pass it to a sibling window via
-`VirtualDom::with_root_context`. Core, no feature needed.
+Cheap to copy; create a sibling VDOM with `world.vdom(root)`. Core, no
+feature needed.
 
 Dioxus desktop polls every window's `VirtualDom` on the main thread, and
 signal storage is thread-local rather than runtime-local, so a `Signal`
@@ -206,6 +257,7 @@ shadowing semantics.
 | Method | What it does |
 |---|---|
 | `new() -> DndWorld<T>` | Create a world with process-lived state. Must run inside a Dioxus app; prefer `use_dnd_world`, which also provides it in context. `Default` delegates here. |
+| `vdom(root: fn() -> Element) -> VirtualDom` | Create a sibling VDOM with this world already seeded in root context. Chain `with_root_context(model)` and per-window data afterwards. |
 | `context() -> DndContext<T>` | The shared drag context every joined provider re-provides. |
 
 ### Window lookup and geometry
@@ -229,7 +281,7 @@ disabled they are inert.
 |---|---|
 | `begin_from(key: WindowKey)` | Mark a drag as begun from `key` and reset stale presentation state. `Draggable` calls this at pickup; call it from custom drag sources so the world knows which window's client px `ctx.pointer()` is in. |
 | `track_global(global: Point)` | Track an in-flight pointer drag from a host-reported cursor position (global physical px): updates the shared pointer (converted into the origin window's client px, the coordinate anchor everything else expects) and enters/leaves zones across every joined window. No-op when nothing is dragging or the origin window is unknown. |
-| `drop_at_global(global: Point) -> Option<ZoneId>` | Complete an in-flight pointer drag at a host-reported position: exact zone hit in whichever window contains the point, else that window's 48px near-miss snap (in its own CSS px), else cancel. Returns the receiving zone. A no-op returning `None` when nothing is dragging, so double delivery (webview pointerup plus host echo) is harmless. Requires `T: PartialEq`. |
+| `drop_at_global(global: Point) -> Option<ZoneId>` | Complete an in-flight pointer drag at a host-reported position: last acceptable exact hit in registry order within whichever window contains the point (rejecting overlaps are skipped), else that window's 48px near-miss snap in its own CSS px, else cancel. Returns the receiving zone. A no-op returning `None` when nothing is dragging, so double delivery (webview pointerup plus host echo) is harmless. Requires `T: PartialEq`. |
 | `cancel_drag()` | Abort an in-flight drag from the host side (a window manager signal, an escape hatch). No-op when nothing is dragging. Deliberately stays live under the kill switch. |
 | `modifiers() -> Modifiers` | Modifiers currently associated with host delivery; empty outside an active world drag. |
 | `update_modifiers(modifiers: Modifiers)` | Update the live modifiers for the active world drag. Late host events after completion are ignored. |
@@ -241,7 +293,10 @@ Every host leg converges on `track_global`, so overlapping legs are safe by
 construction: same-tick reports are idempotent (every write is
 equality-guarded, re-entering the current zone is a no-op), legs serialize
 on the one event-loop thread, and a tick landing after a drop cannot
-resurrect the drag.
+resurrect the drag. Drop and source callbacks may synchronously begin a
+replacement; completion re-reads source-session ownership and live drag state
+afterwards before clearing world metadata. Host legs separately revalidate
+their captured composite generation immediately before calling into the world.
 
 ### Drag metadata
 
@@ -282,9 +337,51 @@ or neutered variable can never strand cross-window drags by accident.
 `fn use_dnd_world<T: Clone + 'static>() -> DndWorld<T>` - core.
 
 Create a `DndWorld<T>` (process-lived, see the lifetimes note above) and
-provide it in context, so providers in this window join it. Pass the
-returned handle to sibling windows via `VirtualDom::with_root_context`.
-Call it once, in any window.
+provide it in context, so providers in this window join it. Create sibling
+windows with `world.vdom(root)`, which pre-seeds their root context. Call it
+once, in any window.
+
+## App and dynamic model ownership
+
+Signals or stores placed in payloads and shared models must outlive every
+window that can render them. The core API has two layers for that:
+
+### `use_dnd_model`
+
+`fn use_dnd_model<M: Clone + 'static>(init: impl FnOnce() -> M) -> M`
+
+Runs `init` once under a process-lived owner pair, provides the resulting
+model in context, and returns it. Seed the returned `M` into spawned windows
+after `world.vdom(root)`. Its storage is deliberately process-lived, so a
+copyable signal/store handle can never dangle regardless of close order; the
+bounded cost is one owner pair per app-wide model.
+
+Every owner-backed value needing that lifetime must be allocated
+synchronously inside `init`. Passing in a signal created by `use_signal`
+before calling `use_dnd_model` does not transfer ownership, and a later
+allocation uses the owner current at that later call. Later app-lived state
+can use its own `DndScope` retained inside process-lived model state.
+
+The owner pair contains both Dioxus storage flavors. Signals allocate in
+unsynchronized storage, while a `Store` allocates its subscription tree in
+synchronized storage; retaining only the former leaves a store that can fail
+after its creator window closes.
+
+### `DndScope`
+
+A cloneable, `Rc`-shared owner pair for dynamic state that really should be
+reclaimed. Create one with `DndScope::new()` (or `Default`), then call
+`scope.with(|| ...)` inside a Dioxus runtime to mint signals or stores under
+it. The state remains live while any scope clone exists and is reclaimed when
+the last clone drops. Do not drop that last clone while a read or write guard
+from its storage is active: unsynchronized recycling may panic on the live
+borrow, while synchronized recycling must wait for the lock guard.
+
+Use this for per-window state such as a tray's cards. Teardown should first
+remove or move every live handle from the shared app model, then drop the
+scope as one operation. The
+[`desktop-multiwindow` example](../../examples/desktop-multiwindow/src/main.rs)
+shows that choreography.
 
 ## `use_joined_window` and `JoinedWindow`
 
@@ -390,7 +487,8 @@ id without mirroring hovers or misrouting drops. Full derive set including
 [docs/api/drag-and-drop.md](drag-and-drop.md). `PointerKind` and its
 `implicitly_captured` test, which the bridge gates on:
 [docs/api/core.md](core.md). The payload-reactivity ownership rule and the
-`ModelOwner` reference implementation:
-[docs/concepts/multi-window.md](../concepts/multi-window.md) and
-`examples/desktop-showcase/src/model.rs`. Per-platform verification detail:
+`use_dnd_model`/`DndScope` reference implementation:
+[docs/concepts/multi-window.md](../concepts/multi-window.md) and the
+[`desktop-multiwindow` example](../../examples/desktop-multiwindow/src/main.rs).
+Per-platform verification detail:
 [PLATFORMS.md](../../PLATFORMS.md).

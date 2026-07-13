@@ -41,6 +41,13 @@ pub struct ParentZone(pub ZoneId);
 /// delivered [`DropOutcome::edge`] records it at release. Style it with
 /// value selectors, e.g. Tailwind
 /// `data-[edge=top]:shadow-[0_-2px_0_0_currentColor]`.
+///
+/// Overlap precedence follows registry order, not browser paint order: among
+/// overlapping acceptable zones, the later record receives the drop. CSS
+/// `z-index`, stacking contexts, and portals are not inspected. Keep registry
+/// and visual order aligned when targets overlap, or avoid the overlap; a
+/// rejecting later record is skipped at release. Replacing a same-id record
+/// retains its slot.
 #[component]
 pub fn DropZone<T: Clone + PartialEq + 'static>(
     /// Stable identity for this zone. Auto-generated if omitted.
@@ -50,6 +57,8 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     #[props(default)]
     label: Option<String>,
     /// Return `false` to reject a payload (zone won't highlight or accept it).
+    /// Keep this predicate cheap and do not mutate this zone registry from it:
+    /// registry queries invoke acceptance while holding their read guard.
     #[props(default)]
     accepts: Option<Callback<T, bool>>,
     /// Track the zone edge nearest the pointer: `EdgeSet::Vertical` for

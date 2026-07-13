@@ -5,13 +5,17 @@ use dioxus::prelude::*;
 
 use crate::core::{client_point, element_point, Point};
 
-/// A batch of dropped files plus where they landed.
+/// A batch of dropped or selected files plus its interaction coordinates.
 #[derive(Clone, PartialEq)]
 pub struct FileDrop {
     pub files: Vec<FileData>,
     /// Pointer position in client (viewport) coordinates.
+    ///
+    /// File-picker selections have no drop position, so this is `(0, 0)`.
     pub client: Point,
     /// Pointer position relative to the drop zone element.
+    ///
+    /// File-picker selections have no drop position, so this is `(0, 0)`.
     pub element: Point,
 }
 
@@ -32,7 +36,7 @@ pub enum FileRejection {
     TooMany,
 }
 
-/// Declarative acceptance rules for dropped files.
+/// Declarative acceptance rules for dropped or picker-selected files.
 ///
 /// **Advisory, not a security boundary.** These rules match on the browser-
 /// and OS-reported name, content type and size, all of which are
@@ -94,7 +98,7 @@ impl FileFilter {
         self
     }
 
-    /// Accept at most this many files per drop.
+    /// Accept at most this many files per incoming batch.
     pub fn max_files(mut self, n: usize) -> Self {
         self.max_files = Some(n);
         self
@@ -158,6 +162,37 @@ impl FileFilter {
         }
         (ok, bad)
     }
+
+    /// Build the advisory `accept` value for the native file picker.
+    ///
+    /// The picker grammar cannot express every rule supported by
+    /// `FileFilter` (sizes, counts, or structured-suffix wildcards), so the
+    /// selected files still pass through `partition` before callbacks fire.
+    fn picker_accept(&self) -> Option<String> {
+        let mut hints = self
+            .extensions
+            .iter()
+            .map(|extension| format!(".{extension}"))
+            .collect::<Vec<_>>();
+
+        for content_type in &self.content_types {
+            let Some((ty, subtype)) = split_content_type(content_type) else {
+                continue;
+            };
+            // HTML file inputs understand exact MIME types and top-level
+            // wildcards. Broader and structured-suffix wildcards remain
+            // enforced after selection without accidentally hiding valid
+            // files in the dialog.
+            if ty == "*" || ty.contains('*') || (subtype != "*" && subtype.contains('*')) {
+                continue;
+            }
+            if !hints.contains(content_type) {
+                hints.push(content_type.clone());
+            }
+        }
+
+        (!hints.is_empty()).then(|| hints.join(","))
+    }
 }
 
 fn normalize_extension(ext: &str) -> String {
@@ -211,10 +246,40 @@ fn content_type_matches(pattern: &str, content_type: &str) -> bool {
     pattern_subtype == actual_subtype
 }
 
-/// A zone that accepts files dragged in from the operating system.
+fn deliver_files(
+    files: Vec<FileData>,
+    filter: Option<&FileFilter>,
+    on_files: &EventHandler<FileDrop>,
+    on_rejected: Option<&EventHandler<Vec<(FileData, FileRejection)>>>,
+    client: Point,
+    element: Point,
+) {
+    if files.is_empty() {
+        return;
+    }
+    let (accepted, rejected) = match filter {
+        Some(filter) => filter.partition(files),
+        None => (files, Vec::new()),
+    };
+    if !rejected.is_empty() {
+        if let Some(handler) = on_rejected {
+            handler.call(rejected);
+        }
+    }
+    if !accepted.is_empty() {
+        on_files.call(FileDrop {
+            files: accepted,
+            client,
+            element,
+        });
+    }
+}
+
+/// A zone that accepts files dragged in from the operating system or chosen
+/// from the native file picker opened by clicking the zone.
 ///
-/// Independent of `DndContext` - file drops don't come from inside your app,
-/// so no provider is required.
+/// Independent of `DndContext` - native files don't come from inside your
+/// app, so no provider is required.
 ///
 /// While a drag hovers the zone the div carries `data-over="true"` (absent
 /// otherwise), so the classic "highlight the dropzone" style needs no
@@ -225,9 +290,9 @@ pub fn FileDropZone(
     /// Acceptance rules; everything is accepted when omitted.
     #[props(default)]
     filter: Option<FileFilter>,
-    /// Fired with the accepted files of a drop (only if at least one passed).
+    /// Fired with accepted dropped or selected files (if at least one passed).
     on_files: EventHandler<FileDrop>,
-    /// Fired with the rejected files of a drop, if any.
+    /// Fired with rejected dropped or selected files, if any.
     #[props(default)]
     on_rejected: Option<EventHandler<Vec<(FileData, FileRejection)>>>,
     /// Fired with `true` when a drag hovers the zone, `false` when it leaves.
@@ -237,10 +302,31 @@ pub fn FileDropZone(
     children: Element,
 ) -> Element {
     let mut depth = use_signal(|| 0u32);
+    let input_id = use_hook(|| {
+        format!(
+            "dioxus-dnd-file-input-{}",
+            dioxus::core::current_scope_id().0
+        )
+    });
+    let picker_input_id = input_id.clone();
+    let picker_accept = filter.as_ref().and_then(FileFilter::picker_accept);
+    let picker_filter = filter.clone();
+    let picker_on_files = on_files;
+    let picker_on_rejected = on_rejected;
 
     rsx! {
         div {
             "data-over": if depth() > 0 { "true" },
+            onclick: move |_| {
+                // Clear the value before opening so choosing the same file
+                // twice still produces a change event. The generated id is
+                // internal and contains only the numeric Dioxus scope id.
+                let script = format!(
+                    "const input = document.getElementById({picker_input_id:?}); \
+                     if (input) {{ input.value = ''; input.click(); }}"
+                );
+                let _ = dioxus::document::eval(&script);
+            },
             ondragover: move |evt: DragEvent| {
                 // Required: without preventDefault the browser never delivers
                 // the drop (it would open the file instead).
@@ -271,29 +357,37 @@ pub fn FileDropZone(
                 if let Some(h) = &on_hover {
                     h.call(false);
                 }
-                let files = evt.files();
-                if files.is_empty() {
-                    return;
-                }
-                let (accepted, rejected) = match &filter {
-                    Some(f) => f.partition(files),
-                    None => (files, Vec::new()),
-                };
-                if !rejected.is_empty() {
-                    if let Some(h) = &on_rejected {
-                        h.call(rejected);
-                    }
-                }
-                if !accepted.is_empty() {
-                    on_files.call(FileDrop {
-                        files: accepted,
-                        client: client_point(&evt),
-                        element: element_point(&evt),
-                    });
-                }
+                deliver_files(
+                    evt.files(),
+                    filter.as_ref(),
+                    &on_files,
+                    on_rejected.as_ref(),
+                    client_point(&evt),
+                    element_point(&evt),
+                );
             },
             ..attributes,
             {children}
+            input {
+                id: input_id,
+                type: "file",
+                accept: picker_accept,
+                multiple: true,
+                hidden: true,
+                // The programmatic input click bubbles. Stop it here so it
+                // cannot reopen the picker through the zone's click handler.
+                onclick: move |evt: MouseEvent| evt.stop_propagation(),
+                onchange: move |evt: FormEvent| {
+                    deliver_files(
+                        evt.files(),
+                        picker_filter.as_ref(),
+                        &picker_on_files,
+                        picker_on_rejected.as_ref(),
+                        Point::default(),
+                        Point::default(),
+                    );
+                },
+            }
         }
     }
 }
@@ -517,5 +611,22 @@ mod tests {
         assert_eq!(bad.len(), 2);
         assert_eq!(bad[0].1, FileRejection::Extension);
         assert_eq!(bad[1].1, FileRejection::TooMany);
+    }
+
+    #[test]
+    fn picker_accept_uses_only_rules_the_dialog_can_represent() {
+        let filter = FileFilter::new()
+            .extensions(["png", ".JPG"])
+            .content_types(["image/*", "application/pdf", "application/*+json", "*/*"]);
+
+        assert_eq!(
+            filter.picker_accept().as_deref(),
+            Some(".png,.jpg,image/*,application/pdf")
+        );
+        assert_eq!(
+            FileFilter::new().max_size(10).picker_accept(),
+            None,
+            "non-picker rules must not create an empty accept restriction"
+        );
     }
 }

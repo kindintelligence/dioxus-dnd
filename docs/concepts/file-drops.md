@@ -1,10 +1,9 @@
 # File drops
 
-Files dragged in from the operating system: the desktop, a file manager,
-another app's window. The payload cannot travel through Rust context here,
-because the drag starts outside your app; it arrives inside the browser's
-own drag event. `FileDropZone` handles the native ceremony, filters what
-arrives, and hands your handler real files.
+Files dragged in from the operating system or selected from its native file
+picker. The payload cannot travel through Rust context here; it arrives in
+the browser's own drag or form event. `FileDropZone` handles both native
+paths, filters what arrives, and hands your handler real files.
 
 API reference: [api/file-drops.md](../api/file-drops.md).
 Live demo: the
@@ -15,14 +14,14 @@ Live demo: the
 Every other zone in the crate reads the shared drag context. `FileDropZone`
 reads nothing from it, which changes three things:
 
-- **No provider, no payload type.** Drop the component anywhere; it needs
+- **No provider, no payload type.** Put the component anywhere; it needs
   no `DndProvider`. The "payload" is `Vec<FileData>`, Dioxus's platform
   file handle, pulled straight from the native event (`evt.files()`).
 - **`data-over` reflects browser events.** Context-backed zones light up
   for pointer, touch and keyboard drags alike; this zone lights up for real
   OS drag events only. An in-app pointer drag can never trigger it, and an
   OS drag can never trigger an in-app `DropZone`.
-- **Two callbacks split every drop.** Files that pass the filter reach
+- **Two callbacks split every batch.** Files that pass the filter reach
   `on_files` as one `FileDrop` batch; files that fail reach `on_rejected`,
   each paired with a `FileRejection` naming the reason. Honest feedback
   costs one match statement.
@@ -52,7 +51,7 @@ fn Uploader() -> Element {
                 // show each f.name() with its reason
             },
             class: "rounded-xl border-2 border-dashed p-8 data-over:border-blue-500",
-            "Drop images here"
+            "Click to choose images or drop them here"
         }
     }
 }
@@ -61,6 +60,24 @@ fn Uploader() -> Element {
 The handler can be async: Dioxus spawns the future for you, so `on_files`
 awaits `read_bytes` for each file directly, with no separate effect system
 to route reads through.
+
+## Clicking to choose files
+
+Clicking the zone opens the platform's native multi-file picker. The hidden
+file input is behavioral plumbing only: `FileDropZone` keeps the existing
+wrapper `div`, forwards its attributes as before, and adds no visual styles.
+Cursor, focus, hover and active treatment remain application-owned.
+
+Extension and representable MIME rules are mirrored to the picker's `accept`
+hint. A native picker cannot express byte-size and count limits, or structured
+MIME suffix wildcards, so every selected file still passes through the full
+`FileFilter` before either callback runs. Choosing the same file again works:
+the native input value is reset immediately before each dialog opens.
+
+Picker selections use the same `on_files` and `on_rejected` callbacks as
+drops. Because a picker selection has no drop location, its `FileDrop.client`
+and `FileDrop.element` points are both `(0, 0)`. `data-over` and `on_hover`
+continue to describe OS drag hover only; opening the picker does not set them.
 
 ## Filtering
 
@@ -77,7 +94,7 @@ to route reads through.
   parameters such as `; charset=utf-8`, and wildcards match whole
   slash-delimited parts, so `imageevil/png` never sneaks past `image/*`.
 - `max_size(bytes)` rejects files larger than the cap.
-- `max_files(n)` accepts at most `n` files per drop.
+- `max_files(n)` accepts at most `n` files per incoming batch.
 
 Rejections do not consume slots: a file bounced on type does not count
 against `max_files`, so valid files behind it still land. An omitted
@@ -94,7 +111,8 @@ trusting a file.
 
 ## Reading what landed
 
-`FileDrop.files` holds `FileData` values, Dioxus's platform file handle.
+`FileDrop.files` holds `FileData` values, Dioxus's platform file handle,
+whether they were dropped or selected.
 Metadata (`name()`, `size()`, `content_type()`, `last_modified()`) is
 available everywhere; the contents differ by renderer:
 
@@ -116,8 +134,8 @@ counter keeps the attribute stable while the drag crosses the zone's
 children, so nested markup does not make it flicker. When styling needs
 real state, `on_hover` fires `true` on enter and `false` on leave or drop.
 
-The zone is fully headless: borders, tints and result chips in the demo
-are all page styling over `data-over` and the two callbacks.
+The zone is fully headless: borders, cursors, tints and result chips in the
+demo are all page styling over `data-over` and the two callbacks.
 
 ## Gotchas
 
@@ -129,14 +147,16 @@ are all page styling over `data-over` and the two callbacks.
   matches `application/ld+json` but not `application/json`; list both when
   you want both. Subtype wildcards without a suffix (`*/json`) are not
   supported and match nothing.
-- **Empty drops are silent.** A drag that delivers no files (dragged text,
-  for example) fires neither callback. Text and links from other apps are
-  a different concept: [External content in](external-content.md).
+- **Empty native batches are silent.** A drag that delivers no files
+  (dragged text, for example), or a picker dialog that is cancelled, fires
+  neither callback. Text and links from other apps are a different concept:
+  [External content in](external-content.md).
 - **Windows desktop file drops have webview quirks.** wry-based webviews
   have a history of platform issues here; test on your target and consider
-  a file input fallback. wry also makes its drop handler and HTML5
-  drag-and-drop mutually exclusive per window, so a Windows window using
-  the typed `DataTransfer` transport gives up native file drops.
+  the built-in click-to-choose path when OS drops are unreliable. wry also
+  makes its drop handler and HTML5 drag-and-drop mutually exclusive per
+  window, so a Windows window using the typed `DataTransfer` transport gives
+  up native file drops but can still use the picker.
 
 ## Related
 

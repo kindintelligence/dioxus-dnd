@@ -24,7 +24,7 @@ pub use hooks::{
 pub use machine::{
     transition, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion,
 };
-pub use model::{apply_clone_or_move, apply_list_clone_or_move};
+pub use model::{apply_clone_or_move, apply_list_clone_or_move, use_dnd_model, DndScope};
 pub use modifiers::{apply_modifiers, DragModifier, ModifierCtx};
 pub use registry::{RectRefresh, ZoneRecord, ZoneRegistration, ZoneRegistry};
 pub use state::{DndContext, DragState};

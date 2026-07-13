@@ -1,6 +1,6 @@
 [package]
 name = "dioxus-dnd"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Modular, accessible drag-and-drop for Dioxus: sortable lists, kanban boards, trees, grids, file drops, multi-select, touch support and more"
@@ -34,7 +34,9 @@ exclude = [
 all-features = true
 
 [dependencies]
-dioxus = { version = "0.7", default-features = false, features = ["minimal"] }
+# `document` is the cross-renderer bridge used to activate FileDropZone's
+# hidden native file input on click; it adds behavior only, never CSS.
+dioxus = { version = "0.7", default-features = false, features = ["minimal", "document"] }
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 # `web` feature only. Pinned to the version dioxus-web 0.7 pulls so cargo
@@ -42,15 +44,16 @@ serde_json = { version = "1", optional = true }
 # matches only when the type is identical. `Element` brings
 # `set_pointer_capture`. No wasm-bindgen: we downcast via Dioxus, not JsCast.
 web-sys = { version = "0.3.98", optional = true, features = ["Element"] }
-# `desktop` feature only: the windowing-layer glue in `crate::desktop`
-# (geometry feed + cross-window drag bridge) touches tao through
+# `desktop` feature only: `MultiWindowProvider` and its lower-level
+# geometry-feed/cross-window-bridge pieces touch tao through
 # dioxus-desktop, and the bridge's cursor poller sleeps on the tokio
 # runtime dioxus-desktop already drives.
 dioxus-desktop = { version = "0.7", optional = true }
 tokio = { version = "1", default-features = false, features = ["time"], optional = true }
-# Bridge-leg diagnostics (`debug`) and platform-model tripwires (`warn`).
-# Already in the dioxus-desktop tree, so this adds no new compilation.
-tracing = { version = "0.1", optional = true }
+# Registry mutation diagnostics (`trace`), bridge-leg diagnostics (`debug`),
+# and platform-model tripwires (`warn`). Dioxus core/signals already compile
+# tracing, so making it a direct dependency adds no crate to the base graph.
+tracing = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The X11 dead-space release leg queries the root pointer + button mask
@@ -69,10 +72,10 @@ serde = ["dep:serde", "dep:serde_json"]
 ## dependency-free and mouse pointer-drag falls back to best-effort.
 web = ["dep:web-sys"]
 ## Desktop windowing glue for multi-window drag worlds (`crate::desktop`):
-## `use_window_geometry_feed` + `DragBridge`, the two pieces every
-## dioxus-desktop window needs to join a `DndWorld` with full cross-window
-## drags. Off by default; pulls dioxus-desktop (wry/tao).
-desktop = ["dep:dioxus-desktop", "dep:tokio", "dep:x11rb", "dep:tracing"]
+## `MultiWindowProvider` is the one-per-window convenience; the lower-level
+## `use_window_geometry_feed` + `DragBridge` remain available for custom
+## wiring. Off by default; pulls dioxus-desktop (wry/tao).
+desktop = ["dep:dioxus-desktop", "dep:tokio", "dep:x11rb"]
 
 # The browser-suite fixture app uses the typed transport, which is
 # serde-gated (its doc header runs it with `--features web,serde`);

@@ -1,8 +1,8 @@
 # Core API reference
 
-Shared primitives every other module builds on: the drag context and its
-state store, the provider and consumer hooks, the zone registry, the pointer
-gesture state machine, and the id and geometry types.
+Shared primitives every other module builds on: model ownership, the drag
+context and its state store, provider and consumer hooks, the zone registry,
+the pointer gesture state machine, and the id and geometry types.
 
 Concept guide: [docs/concepts/architecture.md](../concepts/architecture.md).
 The ready-made components re-exported from this module (`DndProvider`,
@@ -19,6 +19,28 @@ let registry = use_zone_registry::<Card>();
 let over = dnd.over();
 let target_rect = over.and_then(|id| registry.cached_rect(id));
 ```
+
+## Model ownership
+
+Multi-window models need a lifetime independent of any one component tree.
+`use_dnd_model<M>(init)` runs `init` once under process-lived Dioxus storage,
+provides `M` in context, and returns it. Use it for app-wide state that must
+survive every window close order. It retains both storage flavors: ordinary
+signals use `UnsyncStorage`, while a `Store` keeps its subscription tree in
+`SyncStorage`. Owner-backed values must be allocated synchronously inside
+`init`; the hook cannot reparent a signal or store created earlier.
+
+`DndScope` is the reclaimable unit primitive. `DndScope::new()` creates an
+`Rc`-shared pair of those owners; `scope.with(|| ...)` mints signals or stores
+under them inside an active Dioxus runtime. State stays valid until the last
+scope clone drops. Use it for dynamic per-window data, removing every shared
+handle before retiring the scope. The last clone may drop only after all
+owned read/write guards have returned; recycling actively borrowed storage
+can panic or block.
+
+Both are core, platform-dependency-free, and re-exported through the prelude.
+See [Multi-window desktop drags](multi-window.md) for the complete wiring and
+teardown pattern.
 
 ## `DndContext<T>`
 
@@ -142,11 +164,13 @@ custom zones can register themselves.
 
 Methods: `accepts_payload(&payload)` runs the filter (true when there is
 none), `cached_rect()` and `mounted_handle()` read this snapshot's values.
+Keep acceptance predicates cheap and do not mutate the same registry from
+them: registry queries invoke the predicate while holding their read guard.
 
 ### `ZoneRegistry<T>`
 
-A `Copy` handle over provider-owned storage of `ZoneRecord`s in mount
-order.
+A `Copy` handle over provider-owned storage of `ZoneRecord`s in registry
+order. Replacing a same-id record retains its existing slot.
 
 Registration:
 
@@ -173,7 +197,9 @@ Lookups. All of these peek (read without subscribing) except `records`:
 
 Keyboard navigation. Order is spatial - top-to-bottom, then reading order,
 which is left-to-right under `Direction::Ltr` and right-to-left under
-`Rtl`; zones without a measured rect come last in registration order:
+`Rtl`. Zone tops within one CSS pixel form a row, preventing sub-pixel
+layout jitter from overriding horizontal order; zones without a measured
+rect come last in registration order:
 
 | Method | What it does |
 |---|---|
@@ -189,8 +215,8 @@ Hit-testing, against cached rects:
 
 | Method | What it does |
 |---|---|
-| `hit_test(point)` | Topmost zone containing the point; later-mounted zones win, approximating DOM paint order. |
-| `hit_test_closest(point, &payload, max_distance)` | Acceptance-aware: the topmost zone that contains the point and accepts the payload, so a drop can land on an accepting zone under a rejecting or decorative one. When nothing contains the point, falls back to the acceptable zone whose rect edge is nearest, within `max_distance` CSS px - the built-in drop passes 48.0 - which forgives releases in the gutter between zones. |
+| `hit_test(point)` | Last record in registry order containing the point. Registry order only approximates DOM paint order: CSS `z-index`, stacking contexts and portals are not inspected. Replacing a same-id record retains its slot. |
+| `hit_test_closest(point, &payload, max_distance)` | Acceptance-aware: the last record in registry order that contains the point and accepts the payload, so a release can pass a rejecting record and land on an earlier acceptable overlap. When nothing contains the point, falls back to the acceptable zone whose rect edge is nearest, within `max_distance` CSS px - the built-in drop passes 48.0 - which forgives releases in the gutter between zones. |
 
 Measurement:
 
@@ -206,6 +232,12 @@ The token `register` returns, identifying one particular registration of a
 token so a result started for the old registration cannot land in its
 same-id replacement. `set_mounted` and `set_rect_if_present` quietly drop
 writes carrying a stale token.
+
+Registry mutators degrade to no-ops instead of panicking when provider
+storage is being torn down or already borrowed. A `trace` event under the
+`dioxus_dnd::registry` target records the operation, storage field, zone,
+registration generation and Dioxus borrow error so a live borrow collision
+is distinguishable from an absent zone.
 
 ### `RectRefresh`
 
@@ -320,7 +352,7 @@ Also defined in `core::types` but documented with their consumers: `Edge`,
 | `core::machine` | this file |
 | `core::types` | this file; edge primitives and `DropOutcome` in [drag-and-drop.md](drag-and-drop.md), `DropEffect` in [drop-effects.md](drop-effects.md) |
 | `core::components` | [drag-and-drop.md](drag-and-drop.md); `BridgeDropZone` in [mixing-payload-types.md](mixing-payload-types.md) |
-| `core::model` | [drop-effects.md](drop-effects.md) |
+| `core::model` | this file for `DndScope` / `use_dnd_model`; [drop-effects.md](drop-effects.md) for drop-model helpers |
 | `core::modifiers` | [canvas.md](canvas.md) |
 | `core::viewport` | [canvas.md](canvas.md) |
 | `core::strings` | [localization.md](localization.md) |
