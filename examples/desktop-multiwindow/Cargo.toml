@@ -19,5 +19,5 @@ publish = false
 dioxus = { version = "0.7", features = ["desktop"] }
 # `desktop` brings `MultiWindowProvider`, the correctly ordered geometry,
 # provider and host-bridge wiring each window needs.
-dioxus-dnd = { path = "../..", features = ["serde", "desktop"] }
+dioxus-dnd = { version = "3.1.0", path = "../..", features = ["serde", "desktop"] }
 serde = { version = "1", features = ["derive"] }

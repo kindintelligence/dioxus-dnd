@@ -57,7 +57,8 @@ walkthroughs and API references, and it is built with this crate.
 [Examples and website](#examples-and-website)
 
 **Reference:** [Feature flags](#feature-flags) ·
-[Platform notes](#platform-notes) · [Prior art](#prior-art)
+[Platform notes](#platform-notes) · [Prior art](#prior-art) ·
+[Release process](RELEASING.md)
 
 Every concept above also has a full guide and API reference in
 [`docs/`](docs/README.md), paired by name; the API references double as
@@ -92,12 +93,19 @@ cargo add dioxus-dnd
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 2.1 - 3.0 | **0.7** (verified against `0.7.9`) | 1.85+ |
+| 2.1 - 3.1 | **0.7** (verified against `0.7.9`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
 
 The inversion is deliberate: 2.0 was an early spike against the Dioxus
 0.8 alpha, the 2.1+ line tracks stable 0.7, and an 0.8 line will follow
-when 0.8 stabilizes.
+when 0.8 stabilizes. CI also compiles and runs the 3.1 Rust suite against
+published `0.8.0-alpha.0` as a source-compatibility signal. The published 3.1
+dependency remains on Dioxus 0.7 so existing `0.7.9` applications keep one
+coherent set of Dioxus public types.
+
+Rust 1.85 is tested for the renderer-neutral library. The optional desktop
+dependency graph follows Dioxus Desktop's transitive MSRV and currently needs
+Rust 1.88 for the security-patched `time` release.
 
 The crate depends on `dioxus` with `default-features = false, features =
 ["minimal"]`, so it adds no renderer and no extra dependencies of its own.
@@ -1063,7 +1071,7 @@ holds and sideways pulls drag, promoted drags pin the page), and
 
 ```sh
 cargo test
-npm install && npm run test:web
+npm ci && npm run test:web
 ```
 
 ## Feature flags

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.1.0 - 2026-07-13
+
 ### Added
 
 - **Click-to-upload file drop zones.** Clicking `FileDropZone` opens the
@@ -17,6 +19,29 @@
   warns when no world is present or when it was incorrectly nested beneath
   the old same-type provider. `DndWorld::vdom` pre-seeds spawned windows with
   that world while preserving ordinary root-context chaining.
+
+- **Release and compatibility automation.** CI now covers formatting,
+  documentation, the full Rust feature surface, browser regressions, the
+  release gallery, standalone desktop examples, the Rust 1.85 core MSRV,
+  Windows, macOS, packaging, dependency policy, and SemVer. A required
+  compatibility job runs
+  the full Rust suite against published Dioxus `0.8.0-alpha.0`, while the
+  supported and locked release line remains Dioxus `0.7.9`. Version tags now
+  validate the manifest, lockfiles, changelog, and protected `main` head before
+  crates.io Trusted Publishing and GitHub Release creation.
+
+### Changed
+
+- **CI and deployment safety.** Every Cargo release check uses the committed
+  lockfiles, third-party actions are pinned to immutable revisions, and gallery
+  deployment waits for successful `main` CI. The weekly upstream canary keeps
+  released Dioxus 0.7 failures visible while treating Dioxus git-main churn as
+  an informational early warning.
+- **Dependency maintenance policy.** Dependabot now groups weekly Cargo,
+  browser, and GitHub Actions updates against `development`. `cargo-deny`
+  enforces advisory, license, duplicate, wildcard, registry, and git-source
+  policy, with explicit reasons for the Dioxus Desktop 0.7 GTK3 advisories that
+  cannot be upgraded independently.
 
 ### Fixed
 
@@ -47,6 +72,10 @@
   protocol that protects a replacement drag started synchronously inside a
   receiver or source callback. Identity counters also document their relaxed,
   process-lifetime non-wrapping assumption.
+- **Release operations and Dioxus compatibility.** The maintainer guide records
+  the reviewed release PR, protected tag, OIDC publishing, retry, checksum, and
+  yank procedures. The compatibility table now distinguishes supported Dioxus
+  `0.7.9` from the source-compatibility canary for Dioxus `0.8.0-alpha.0`.
 
 ## 3.0.1 - 2026-07-11
 

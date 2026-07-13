@@ -140,7 +140,7 @@ suite (`tests/browser/`) drives real headless-browser fixtures from
 `examples/regressions.rs` - overlay geometry, releases outside a list
 committing no reorder, autoscroll edges, drop fall-through past rejecting
 zones, real CDP touch gestures, and more. `cargo test` runs the Rust
-layer; `npm install && npm run test:web` runs the browser layer. Your own
+layer; `npm ci && npm run test:web` runs the browser layer. Your own
 app usually needs only the Rust layer, because the browser-dependent parts
 are the crate's job to keep working.
 

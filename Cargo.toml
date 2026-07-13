@@ -1,6 +1,6 @@
 [package]
 name = "dioxus-dnd"
-version = "3.0.1"
+version = "3.1.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Modular, accessible drag-and-drop for Dioxus: sortable lists, kanban boards, trees, grids, file drops, multi-select, touch support and more"
@@ -9,17 +9,20 @@ repository = "https://github.com/kindintelligence/dioxus-dnd"
 readme = "README.md"
 keywords = ["dioxus", "drag-and-drop", "dnd", "sortable", "ui"]
 categories = ["gui", "wasm", "web-programming"]
-# Keep repo plumbing out of the published tarball: assets/ carries the README
-# hero GIF; the renderer/Blitz notes, superpowers plans, and reconciliation
-# review are internal working documents; and the package.json/playwright trio
-# plus tests/browser/ are the Playwright browser suite - JS specs a
-# `cargo test` consumer can never run. Public docs stay in the package because
-# the module rustdoc includes docs/api/*.md at compile time.
+# Keep repo plumbing out of the published tarball: lint, security, and workflow
+# files serve maintainers; assets/ carries the README hero GIF;
+# the renderer/Blitz notes, superpowers plans, and reconciliation review are
+# internal working documents; and the package.json/playwright trio plus
+# tests/browser/ are the Playwright browser suite - JS specs a `cargo test`
+# consumer can never run. Public docs stay in the package because the module
+# rustdoc includes docs/api/*.md at compile time.
 # PLATFORMS.md stays IN: it is small and the README's platform table links to
 # it, so excluding it would strand that link in the packaged README.
 exclude = [
     ".github/",
+    ".rumdl.toml",
     "assets/",
+    "deny.toml",
     "docs/BLITZ-TRACKING-ISSUE.md",
     "docs/RENDERER-CONTRACT.md",
     "docs/superpowers/",

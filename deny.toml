@@ -1,0 +1,56 @@
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2024-0411", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0412", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0413", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0414", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0415", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0416", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0418", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0419", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0420", reason = "GTK3 is transitive through Dioxus Desktop 0.7 and has no compatible maintained replacement." },
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 is transitive through Dioxus Desktop 0.7. The fix requires the incompatible GTK 0.20 family and is tracked for the Dioxus 0.8 migration." },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is transitive through the Dioxus Desktop GTK3 stack and has no direct replacement here." },
+    { id = "RUSTSEC-2024-0436", reason = "paste is transitive through the Dioxus Desktop image stack and has no direct replacement here." },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash is transitive through wry and selectors and has no direct replacement here." },
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7 is a transitive build dependency without its log feature, so the vulnerable custom-logger path is not enabled." },
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow-workspace = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

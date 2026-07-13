@@ -2,90 +2,326 @@ name: CI
 
 on:
   push:
-    branches: [development]
+    branches: [development, main]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
-  markdown:
+  quality:
+    name: quality
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Lint documentation
-        uses: rvben/rumdl@v0
+      - name: Install Rust formatting tools
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Check root formatting
+        run: cargo +stable fmt --all -- --check
+
+      - name: Check standalone desktop formatting
+        run: |
+          cargo +stable fmt --manifest-path examples/desktop-multiwindow/Cargo.toml -- --check
+          cargo +stable fmt --manifest-path examples/desktop-showcase/Cargo.toml -- --check
+
+      - name: Lint public Markdown
+        uses: rvben/rumdl@067aba16501ffb3670c569a136b007622146c8f7 # v0
         with:
           version: "0.2.30"
-          path: docs/
+          path: .
           config: .rumdl.toml
           report-type: annotations
 
-  test:
+  core:
+    name: core
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup target add wasm32-unknown-unknown --toolchain stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
 
-      - name: Test
-        run: cargo test --features serde
+      - name: Test the minimal feature set
+        run: cargo +stable test --locked --no-default-features --lib --tests
 
-      - name: Clippy
-        run: cargo clippy --features serde --all-targets -- -D warnings
+      - name: Test serde support
+        run: cargo +stable test --locked --features serde
 
-  desktop:
+      - name: Check the web library target
+        run: cargo +stable check --locked --target wasm32-unknown-unknown --features web --lib
+
+      - name: Clippy core, serde, and web targets
+        run: cargo +stable clippy --locked --features "serde web" --all-targets -- -D warnings
+
+  desktop-linux:
+    name: desktop-linux
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # dioxus-desktop's system libraries, as documented in
-      # examples/desktop-multiwindow/Cargo.toml.
-      - name: Install system libraries
+      - name: Install desktop system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libxdo-dev
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: desktop-linux
 
-      - name: Test
-        run: cargo test --features "serde desktop"
+      - name: Test every library feature
+        run: cargo +stable test --locked --all-features
 
-      - name: Clippy
-        run: cargo clippy --features "serde desktop" --all-targets -- -D warnings
+      - name: Clippy every target and feature
+        run: cargo +stable clippy --locked --all-features --all-targets -- -D warnings
 
-      # The desktop module's contract is that tao/wry stay an implementation
-      # detail: nothing public may name their types, or every tao minor bump
-      # becomes our breaking change. Line-based heuristic (a multi-line
-      # signature could evade it); the real guard is review, this is the
-      # tripwire.
-      - name: Public desktop API must not leak tao/wry types
+      - name: Build docs exactly as docs.rs does
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo +stable doc --locked --all-features --no-deps
+
+      - name: Test and lint standalone desktop examples
         run: |
-          if grep -rnE '^\s*pub (fn|struct|enum|trait|type|use|const)[^;{(]*\b(tao|wry)::' src/desktop/; then
-            echo "::error::tao/wry types leaked into the public desktop API surface"
+          for manifest in \
+            examples/desktop-multiwindow/Cargo.toml \
+            examples/desktop-showcase/Cargo.toml
+          do
+            cargo +stable test --locked --manifest-path "$manifest"
+            cargo +stable clippy --locked --manifest-path "$manifest" --all-targets -- -D warnings
+            cargo +stable build --locked --manifest-path "$manifest" --bins
+          done
+
+      - name: Public desktop API must not leak tao or wry types
+        run: |
+          if grep -rnE '^\s*pub (fn|struct|enum|trait|type|use|const)[^;{(]*\b(tao|wry)::' src/desktop/
+          then
+            echo "::error::tao or wry types leaked into the public desktop API surface"
             exit 1
           fi
 
-  # Non-blocking semver report against the latest published release, so API
-  # changes stay visible. Advisory (continue-on-error): 3.0.0 deliberately
-  # batches #[non_exhaustive] hardening that this job will flag against 2.4.0.
-  semver:
-    runs-on: ubuntu-latest
-    continue-on-error: true
+  desktop-platforms:
+    name: desktop-${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+          - platform: macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Install system libraries
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: desktop-${{ matrix.platform }}
+
+      - name: Test platform-specific desktop code
+        run: cargo +stable test --locked --features "serde desktop" --lib --tests
+
+      - name: Clippy platform-specific desktop code
+        run: cargo +stable clippy --locked --features "serde desktop" --lib --tests -- -D warnings
+
+      - name: Check standalone desktop examples
+        run: |
+          cargo +stable check --locked --manifest-path examples/desktop-multiwindow/Cargo.toml
+          cargo +stable check --locked --manifest-path examples/desktop-showcase/Cargo.toml
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install stable Rust and the web target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain stable
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: web
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install browser test dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Install the Dioxus CLI
+        run: cargo +stable install dioxus-cli --version 0.7.9 --locked
+
+      - name: Run browser regressions
+        run: npm run test:web
+
+      - name: Build the release gallery
+        run: dx build --example gallery --platform web --features web --release --base-path /dioxus-dnd/
+
+      - name: Upload browser diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  msrv:
+    name: msrv-core-1.85
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install the minimum supported Rust version
+        run: rustup toolchain install 1.85.0 --profile minimal
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: msrv-core-1.85
+
+      - name: Check the renderer-neutral library on the MSRV
+        run: cargo +1.85.0 check --locked --no-default-features --lib
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: package
+
+      - name: Verify the crates.io payload
+        run: cargo +stable publish --dry-run --locked
+
+      - name: Show the packaged file list
+        run: cargo +stable package --list --locked
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: cargo-deny@0.19.4
+
+      - name: Audit the root dependency graph
+        run: >-
+          cargo deny --locked --all-features check --hide-inclusion-graph
+          advisories licenses bans sources
+
+      - name: Audit the standalone desktop dependency graphs
+        run: |
+          cargo deny --locked --all-features \
+            --manifest-path examples/desktop-multiwindow/Cargo.toml \
+            check --hide-inclusion-graph advisories licenses bans sources
+          cargo deny --locked --all-features \
+            --manifest-path examples/desktop-showcase/Cargo.toml \
+            check --hide-inclusion-graph advisories licenses bans sources
+
+  semver:
+    name: semver
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install desktop system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libxdo-dev
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
 
-      - uses: obi1kenobi/cargo-semver-checks-action@v2
+      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
         with:
           feature-group: all-features
+
+  dioxus-next:
+    name: dioxus-0.8-alpha
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install desktop system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: dioxus-0.8-alpha
+
+      - name: Select published Dioxus 0.8 alpha packages
+        run: |
+          cargo add dioxus@0.8.0-alpha.0 \
+            --no-default-features --features minimal,document
+          cargo add dioxus-desktop@0.8.0-alpha.0 --optional
+          cargo add --dev dioxus@0.8.0-alpha.0 \
+            --no-default-features --features minimal,launch,web,document,mounted,router
+          cargo add --dev dioxus-ssr@0.8.0-alpha.0
+
+      - name: Test against published Dioxus 0.8 alpha
+        run: cargo test --all-features
