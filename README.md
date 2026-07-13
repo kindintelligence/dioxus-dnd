@@ -71,9 +71,9 @@ the module docs on docs.rs.
 - **One input model.** Pointer events serve mouse, touch and pen; keyboard
   drag and drop is built into every draggable. There is no native/hybrid
   mode to choose for app UI.
-- **Native where it must be.** OS file drops, external text/links/HTML, and
-  drag-out to other applications use the real `DataTransfer` protocol,
-  because that boundary demands it.
+- **Native where it must be.** OS file drops, native file-picker selections,
+  external text/links/HTML, and drag-out to other applications use their real
+  browser boundary events rather than pretending to be in-app Rust payloads.
 - **Headless and Tailwind-ready.** No CSS ships. Drag state is exposed as
   presence-based data attributes (`data-dragging`, `data-over`, ...), so
   `data-over:border-blue-500` or plain `[data-over]` selectors are all the
@@ -149,7 +149,7 @@ to their wrapper `div`.
 | [`tree`](#trees) | nested drops with before/after/into intent (`TreeNodeTarget`) | context |
 | [`canvas`](#canvas-drops) | free-position drops with snap and bounds (`CanvasDropZone`) | context |
 | [`multiselect`](#multi-select) | drag N selected items as one (`SelectableDraggable`) | context (`Vec<K>`) |
-| [`files`](#file-drops) | OS file drops (`FileDropZone`, `FileFilter`) | native event (`evt.files()`) |
+| [`files`](#file-drops) | OS drops + native picker (`FileDropZone`, `FileFilter`) | native event (`evt.files()`) |
 | [`external`](#dragging-out) | text, URLs and HTML dropped in from other apps | native `DataTransfer` |
 | [`dragout`](#dragging-out) | drag text, links and HTML out to other apps (`ExternalDragSource`) | native `DataTransfer` |
 | [`autoscroll`](#auto-scroll) | edge-scrolling containers (`AutoScroll`) | n/a |
@@ -169,7 +169,8 @@ a component that reads `dnd.over()` in render to highlight a zone reruns
 only when the hovered zone changes, not on every pointer move.
 
 Native events are used only for what requires the browser/OS boundary: OS
-files, external text/links/HTML, and content dragged out to another app.
+file drops, file-picker selections, external text/links/HTML, and content
+dragged out to another app.
 In-app drag sources use pointer events plus keyboard controls, which avoids
 the browser's native drag image and keeps visual state under your control.
 
@@ -458,9 +459,9 @@ plus keyboard controls where a typed provider is involved.
 - `SortableList` and `SortableGrid` carry their own built-in pointer path,
   avoiding the browser's native drag image during reorders.
 - Native components stay native because they cross the app boundary:
-  `FileDropZone`, `ExternalDropZone`, `ExternalDragSource` and
-  `external::typed` use `DataTransfer` for file drops, external drops,
-  drag-out and cross-window interop.
+  `FileDropZone` combines `DataTransfer` drops with a native file input;
+  `ExternalDropZone`, `ExternalDragSource` and `external::typed` use
+  `DataTransfer` for external drops, drag-out and cross-app interop.
 
 Touch surfaces auto-sense by default (`TouchSense::Auto`): a `Draggable`
 or whole-row `SortableList` carries `touch-action: pan-y`, so a vertical
@@ -702,9 +703,14 @@ FileDropZone {
         }
     },
     on_rejected: move |bad: Vec<(FileData, FileRejection)>| { /* toast */ },
-    "Drop images"
+    "Click to choose images or drop them here"
 }
 ```
+
+Clicking the zone opens a native multi-file picker; native OS drag-and-drop
+continues to work on the same wrapper. Both paths use the same filter and
+callbacks. The component adds no visual styles, so cursor, focus and hover
+treatment remain application-owned.
 
 `FileFilter::content_types` supports exact MIME types (`application/pdf`),
 top-level wildcards (`image/*`), all typed files (`*/*`) and structured
@@ -747,17 +753,25 @@ serialization, no `DataTransfer`, same `on_drop` you already have.
 ```rust,ignore
 fn board_window() -> Element {
     let world = use_dnd_world::<Card>();          // once, in any window
+    let model = use_dnd_model(Model::new);        // app-lived state
+    let tray_model = model.clone();
     let open_tray = move |_| {
         dioxus::desktop::window().new_window(
-            VirtualDom::new(tray_window).with_root_context(world),
+            world.vdom(tray_window).with_root_context(tray_model.clone()),
             Default::default(),
         );
     };
-    rsx! { DndProvider::<Card> { /* joins the world via context */ } }
+    rsx! {
+        MultiWindowProvider::<Card> {
+            button { onclick: open_tray, "Open tray" }
+            /* zones, overlay, live region */
+        }
+    }
 }
 
 fn tray_window() -> Element {
-    rsx! { DndProvider::<Card> { /* joins via root context */ } }
+    let model = use_context::<Model>();
+    rsx! { MultiWindowProvider::<Card> { /* joins the seeded world */ } }
 }
 ```
 
@@ -770,14 +784,15 @@ included).
 
 ### The desktop glue
 
-Two pieces of glue make it spatial, shipped as the **`desktop` cargo
-feature** (`dioxus_dnd::desktop`):
+`MultiWindowProvider<T>` is the one-per-window API shipped by the
+**`desktop` cargo feature**. It structurally composes the two lower-level
+pieces in their required order:
 
-- **`use_window_geometry_feed()`** (call ABOVE the provider): feeds
+- **`use_window_geometry_feed()`** above the provider: feeds
   each window's position/size/scale into a `WindowGeometry` from tao's
   window events, so the world can hit-test windows in desktop
   coordinates.
-- **`DragBridge::<T>`** (render INSIDE the provider): host-side eyes
+- **`DragBridge::<T>`** inside the provider: host-side eyes
   and ears for pointer drags that leave the origin window. Webview
   pointer events stop at the viewport edge, and while a button is held
   every *other* window is event-blind (that's how pointer grabs work) -
@@ -794,6 +809,12 @@ feature** (`dioxus_dnd::desktop`):
   process-global `DeviceEventFilter::Never` installation exactly once
   for raw-input delivery.
 
+The lower-level pieces remain public for custom hosts. In ordinary desktop
+code, the wrapper also turns a missing world into one actionable warning;
+create siblings with `world.vdom(root)` so that context cannot be omitted.
+Replace an existing same-payload `DndProvider` with the wrapper rather than
+nesting the wrapper beneath it; that migration mistake warns too.
+
 The feature pulls dioxus-desktop (wry/tao), so it is off by default and
 the core stays dependency-free.
 
@@ -805,16 +826,21 @@ render it. A signal created inside a window's component scope dies with
 that window; a surviving window still holding the payload then reads a
 dead signal.
 
-The cure is model-owned storage: a root `Owner<UnsyncStorage>` held in
-an `Rc` that every window keeps alive, with every payload signal created
-under it via `dioxus::core::with_owner`.
-[`examples/desktop-showcase/src/model.rs`](examples/desktop-showcase/src/model.rs)
-(`ModelOwner`) is the reference implementation. The board example's card
-model follows the same pattern and earns the same close-order guarantee
-as the world itself: every window retains an `Rc<ModelOwner>` whose
-signal storage belongs to the app rather than the board `VirtualDom`.
-Closing the board and one tray leaves another tray fully live, while
-each closed tray's separately owned card signal is reclaimed promptly.
+The cure is `use_dnd_model(Model::new)`: it creates both Dioxus owner
+flavors under process-lived storage, provides the model in context and
+returns it. Both owners are required because signals use unsynchronized
+storage while a `Store` keeps its subscription tree in synchronized
+storage. No window close order can leave a copyable model handle dangling.
+Every reactive value needing that lifetime must be allocated synchronously
+inside `Model::new`; wrapping a handle created earlier does not reparent it.
+
+For dynamic state that should be reclaimed, use `DndScope`. Mint a tray's
+signals with `scope.with(|| ...)`, keep a clone of the scope until teardown,
+then remove every live handle before dropping it. The
+[`desktop-multiwindow` example](examples/desktop-multiwindow/src/main.rs)
+uses this split: the board model is app-lived, each tray's cards are
+reclaimed when that tray closes, and the board may still close first. Drop
+the last scope clone only after every read/write guard has returned.
 
 ### The invariants
 
@@ -1089,11 +1115,12 @@ npm install && npm run test:web
   - *Known trap*: windows created hidden then shown have broken
     DnD in WebView2 (wry#1639), so create drop-target windows visible.
 - **Windows desktop file drops** have a history of platform quirks in
-  wry-based webviews. Test on your target and consider a file input
-  fallback. Note the tradeoff wry imposes on Windows: its drop handler
-  and HTML5 drag-and-drop are mutually exclusive per window
-  (`with_disable_drag_drop_handler`), so a window using the typed
-  `DataTransfer` transport there gives up native file drops.
+  wry-based webviews. Test on your target and use `FileDropZone`'s built-in
+  click-to-choose path when OS drops are unreliable. Note the tradeoff wry
+  imposes on Windows: its drop handler and HTML5 drag-and-drop are mutually
+  exclusive per window (`with_disable_drag_drop_handler`), so a window using
+  the typed `DataTransfer` transport there gives up native file drops but can
+  still use the picker.
 - **`animate::FlipItem`** with the `web` feature arms its glide
   synchronously on the real element (invert, forced style flush, release),
   so it cannot race the browser's paint schedule. Without `web` it falls
@@ -1109,8 +1136,8 @@ The Dioxus ecosystem has several dnd crates with different philosophies:
 sortable primitives). This crate's live-preview displacement, collision
 fallback, modifier chain and gesture state machine were informed by reading
 them, and by dnd-kit and react-beautiful-dnd before that. What it does that
-the others do not: the native boundary path (OS file drops, drag-out to
-other apps, copy/move effects) alongside touch and keyboard, across
+the others do not: the native boundary path (OS drops, file picking, drag-out
+to other apps, copy/move effects) alongside touch and keyboard, across
 fourteen patterns - and multi-window desktop drags with live payloads, a
 story neither dnd-kit nor pragmatic-drag-and-drop tells either.
 

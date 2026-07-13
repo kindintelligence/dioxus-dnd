@@ -2,7 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- **Click-to-upload file drop zones.** Clicking `FileDropZone` opens the
+  native multi-file picker. Picker selections share the existing filtering,
+  rejection, and `on_files` path with OS drops, while the wrapper remains
+  headless and receives no library-owned visual styles.
+
+- **Multi-window ownership and wiring primitives.** `use_dnd_model` creates
+  app-wide state under process-lived unsynchronized and synchronized owners;
+  `DndScope` gives reclaimable dynamic state the same correct owner pair.
+  With the `desktop` feature, `MultiWindowProvider` structurally installs the
+  geometry feed, drag provider, and host bridge in their required order and
+  warns when no world is present or when it was incorrectly nested beneath
+  the old same-type provider. `DndWorld::vdom` pre-seeds spawned windows with
+  that world while preserving ordinary root-context chaining.
+
 ### Fixed
+
+- **Owner restoration and lifetime precision.** `DndScope::with` now restores
+  both Dioxus owner overrides before resuming an initializer panic, and
+  process-owned model/world scopes remain deliberately non-dropping even if
+  their creator UI thread exits. Public docs now call out synchronous
+  allocation and quiescent teardown requirements.
 
 - **Zone-registry hot paths and ordering.** Acceptance-aware release
   hit-testing now scans the registry once without cloning every acceptable

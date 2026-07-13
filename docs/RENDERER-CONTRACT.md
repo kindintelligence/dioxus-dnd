@@ -29,6 +29,7 @@ promote an unknown to "works" without running it.
 | 11 | HTML5 `DataTransfer` / `DragEvent` | native boundary modules | file drops, drag-out, typed transport dead | structurally N/A until Blitz has an OS-DnD story |
 | 12 | `touch-action` CSS | touch scroll-vs-drag arbitration | page pans fight drags on touch | unknown |
 | 13 | `position: fixed` + `transform` | ghost, capture substitute | ghost mispositioned / substitute dead | unknown |
+| 14 | HTML file input + `document::eval` | `FileDropZone` click-to-choose | picker path dead; OS drops still work if #11 does | structurally N/A without a native file-dialog bridge |
 
 ## 1. Pointer events and their fields
 
@@ -233,6 +234,22 @@ fatal for pointer drags.
 
 Blitz status: **unknown, structurally likely** (core CSS layout), left
 unverified per the honesty rule.
+
+## 14. HTML file input + `document::eval`
+
+`FileDropZone` keeps its headless wrapper and renders a hidden
+`input[type=file][multiple]` (`src/files.rs`). Its wrapper click handler uses
+Dioxus's document evaluator to clear and click that input; `onchange` then
+reads `FormEvent::files()` and enters the same filtering/callback path as a
+drop. No CSS or layout behavior is part of this dependency.
+
+Without it: clicking the zone cannot open a picker. The OS-drop path remains
+independent and continues to work to the extent (11) holds; `FileFilter`
+itself is pure Rust.
+
+Blitz status: **structurally N/A in the current implementation**. A native
+renderer needs a file-dialog API that can return Dioxus `FileData`; it has no
+browser file input or JavaScript document to evaluate.
 
 ## What core explicitly does NOT depend on
 

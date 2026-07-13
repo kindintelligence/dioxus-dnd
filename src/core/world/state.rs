@@ -2,11 +2,12 @@
 //! join/leave lifecycle, and window lookup.
 
 use std::cell::RefCell;
+use std::mem::ManuallyDrop;
 
 use dioxus::prelude::*;
-use dioxus::signals::{AnyStorage, Owner, SyncStorage, UnsyncStorage};
 
 use crate::core::hooks::SettleFlag;
+use crate::core::model::DndScope;
 use crate::core::registry::ZoneRegistry;
 use crate::core::state::{DndContext, DragState};
 use crate::core::types::{Point, ZoneId};
@@ -24,8 +25,9 @@ thread_local! {
     /// world, one world per payload type per app, window records pruned on
     /// close. Both storage flavors: signals live in unsync storage, but a
     /// store's subscription tree allocates in SYNC storage.
-    static WORLD_OWNERS: RefCell<Vec<(Owner<UnsyncStorage>, Owner<SyncStorage>)>> =
-        const { RefCell::new(Vec::new()) };
+    /// `ManuallyDrop` keeps the process-lifetime contract true even if the UI
+    /// thread itself exits before the surrounding process.
+    static WORLD_OWNERS: RefCell<Vec<ManuallyDrop<DndScope>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The world's initial bridging policy from `DIOXUS_DND_NO_BRIDGE`,
@@ -75,8 +77,7 @@ impl<T: Clone + 'static> Clone for WindowRecord<T> {
 
 /// A drag world shared by several windows: one [`DndContext`] every joined
 /// provider re-provides, plus the window table cross-window hit-testing
-/// walks. Cheap to copy; pass it to a sibling window via
-/// `VirtualDom::with_root_context`.
+/// walks. Cheap to copy; seed sibling windows with [`Self::vdom`].
 pub struct DndWorld<T: Clone + 'static> {
     pub(super) ctx: DndContext<T>,
     windows: Signal<Vec<WindowRecord<T>>>,
@@ -117,26 +118,41 @@ impl<T: Clone + 'static> DndWorld<T> {
     /// run inside a Dioxus app; prefer [`use_dnd_world`](super::use_dnd_world), which also
     /// provides the world in context.
     pub fn new() -> Self {
-        let owner = UnsyncStorage::owner();
-        let sync_owner = SyncStorage::owner();
-        let world = dioxus::core::with_owner(owner.clone(), || {
-            dioxus::core::with_owner(sync_owner.clone(), || Self {
-                ctx: DndContext::from_parts(
-                    Store::new(DragState::default()),
-                    Signal::new(String::new()),
-                ),
-                windows: Signal::new(Vec::new()),
-                active: Signal::new(None),
-                global_pointer: Signal::new(None),
-                over_location: Signal::new(None),
-                settle_claim: Signal::new(None),
-                bridging: Signal::new(default_bridging(
-                    std::env::var("DIOXUS_DND_NO_BRIDGE").ok().as_deref(),
-                )),
-            })
+        let scope = DndScope::new();
+        let world = scope.with(|| Self {
+            ctx: DndContext::from_parts(
+                Store::new(DragState::default()),
+                Signal::new(String::new()),
+            ),
+            windows: Signal::new(Vec::new()),
+            active: Signal::new(None),
+            global_pointer: Signal::new(None),
+            over_location: Signal::new(None),
+            settle_claim: Signal::new(None),
+            bridging: Signal::new(default_bridging(
+                std::env::var("DIOXUS_DND_NO_BRIDGE").ok().as_deref(),
+            )),
         });
-        WORLD_OWNERS.with_borrow_mut(|owners| owners.push((owner, sync_owner)));
+        WORLD_OWNERS.with_borrow_mut(|owners| owners.push(ManuallyDrop::new(scope)));
         world
+    }
+
+    /// Create a sibling window's [`VirtualDom`] with this world already in
+    /// its root context.
+    ///
+    /// Chain `with_root_context` for the app model and any per-window data:
+    ///
+    /// ```ignore
+    /// let dom = world
+    ///     .vdom(tray_window)
+    ///     .with_root_context(model)
+    ///     .with_root_context(tray);
+    /// ```
+    ///
+    /// This is the preferred way to seed spawned windows because omitting the
+    /// world would otherwise leave their providers silently isolated.
+    pub fn vdom(self, root: fn() -> Element) -> VirtualDom {
+        VirtualDom::new(root).with_root_context(self)
     }
 
     /// The shared drag context every joined provider re-provides.

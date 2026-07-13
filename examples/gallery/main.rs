@@ -194,7 +194,7 @@ fn nav() -> Vec<(&'static str, &'static str, Vec<NavItem>)> {
             vec![
                 NavItem {
                     title: "Upload",
-                    blurb: "OS file drops with declarative acceptance and honest rejections.",
+                    blurb: "Click-to-choose and OS file drops with declarative acceptance and honest rejections.",
                     route: Route::UploadPage {},
                 },
                 NavItem {

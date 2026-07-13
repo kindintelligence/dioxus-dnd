@@ -18,6 +18,8 @@ publish = false
 
 [dependencies]
 dioxus = { version = "0.7", features = ["desktop"] }
+# Supplies `use_dnd_model`, `DndScope`, `DndWorld::vdom`, and the correctly
+# ordered `MultiWindowProvider` used by every showcase window.
 dioxus-dnd = { path = "../..", features = ["desktop"] }
 # Same time-only tokio the library's desktop feature already drives; the
 # ticker sleeps on it between 50ms liveness steps.

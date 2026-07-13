@@ -432,7 +432,30 @@ test("native DataTransfer paths handle files, external drops, and drag-out", asy
   await openFixtures(page);
 
   const files = await section(page, "File drop");
-  const fileZone = files.getByText("Drop files from your desktop here", { exact: true });
+  const fileZone = files.getByText("Click to choose files or drop them here", { exact: true });
+
+  const chooserPromise = page.waitForEvent("filechooser");
+  await fileZone.click();
+  const chooser = await chooserPromise;
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles({
+    name: "picker-notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("native picker payload"),
+  });
+  const pickerNotes = files.getByText("picker-notes.txt", { exact: true });
+  await expect(pickerNotes).toHaveCount(1);
+
+  const repeatedChooserPromise = page.waitForEvent("filechooser");
+  await fileZone.click();
+  const repeatedChooser = await repeatedChooserPromise;
+  await repeatedChooser.setFiles({
+    name: "picker-notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("native picker payload"),
+  });
+  await expect(pickerNotes).toHaveCount(2);
+
   await dispatchNativeDrop(fileZone, {
     file: { name: "agent-notes.txt", type: "text/plain", body: "native file payload" },
   });

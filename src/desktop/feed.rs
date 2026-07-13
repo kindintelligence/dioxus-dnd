@@ -11,9 +11,10 @@ use super::platform::{self, GlobalCapability};
 
 /// Provide a [`WindowGeometry`] for this window and keep it fed from tao
 /// events (position/size/scale and visibility eligibility on
-/// move/resize/focus). Call it ABOVE the
-/// `DndProvider`, which picks the geometry up from context when it joins
-/// the world. Returns the geometry handle (rarely needed directly).
+/// move/resize/focus). [`super::MultiWindowProvider`] calls this in the
+/// correct scope for ordinary use. When wiring manually, call it ABOVE the
+/// `DndProvider`, which picks the geometry up from context when it joins the
+/// world. Returns the geometry handle (rarely needed directly).
 ///
 /// On Wayland, where a window cannot learn its own screen position, the
 /// feed leaves geometry cleared and this window drags per-window only.

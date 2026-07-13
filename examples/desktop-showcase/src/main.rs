@@ -16,12 +16,10 @@ mod widgets;
 use dioxus::desktop::tao::dpi::LogicalSize;
 use dioxus::desktop::{window, Config, WindowBuilder};
 use dioxus::prelude::*;
-use dioxus_dnd::desktop::{use_window_geometry_feed, DragBridge};
 use dioxus_dnd::prelude::*;
-use std::rc::Rc;
 
 use layout::WindowRole;
-use model::{ModelOwner, Satellite, Widget, DOCK};
+use model::{Model, Satellite, Widget, DOCK};
 use widgets::WidgetCard;
 
 fn main() {
@@ -38,25 +36,21 @@ fn main() {
 
 fn mission_control() -> Element {
     let world = use_dnd_world::<Widget>();
-    use_window_geometry_feed();
-    // Provided as context so `WidgetZone` (and satellites, via root context)
-    // reach the owner without it being a component prop.
-    let owner = use_context_provider(ModelOwner::new);
-    ticker::use_ticker(owner.clone());
-    use_demo_layout(owner.clone(), WindowRole::MissionControl);
-    let model = owner.model;
+    let model = use_dnd_model(Model::new);
+    ticker::use_ticker(model.clone());
+    use_demo_layout(model.clone(), WindowRole::MissionControl);
 
     let mut satellite_seq = use_signal(|| 0u32);
-    let spawn_owner = owner.clone();
+    let spawn_model = model.clone();
     let open_satellite = move |_| {
         let n = *satellite_seq.peek() + 1;
         satellite_seq.set(n);
-        let satellite = spawn_owner.new_satellite(n);
-        let mut satellites = model.satellites;
+        let satellite = spawn_model.new_satellite(n);
+        let mut satellites = spawn_model.satellites;
         satellites.write().push(satellite);
-        let dom = VirtualDom::new(satellite_window)
-            .with_root_context(world)
-            .with_root_context(spawn_owner.clone())
+        let dom = world
+            .vdom(satellite_window)
+            .with_root_context(spawn_model.clone())
             .with_root_context(satellite);
         window().new_window(
             dom,
@@ -91,12 +85,11 @@ fn mission_control() -> Element {
 }
 
 fn satellite_window() -> Element {
-    use_window_geometry_feed();
-    let owner = use_context::<Rc<ModelOwner>>();
-    ticker::use_ticker(owner.clone());
+    let model = use_context::<Model>();
+    ticker::use_ticker(model.clone());
     let satellite = use_context::<Satellite>();
-    use_demo_layout(owner.clone(), WindowRole::Satellite(satellite.n));
-    use_satellite_cleanup(owner.clone(), satellite);
+    use_demo_layout(model.clone(), WindowRole::Satellite(satellite.n));
+    use_satellite_cleanup(model, satellite);
     rsx! {
         Chrome {
             header: rsx! {
@@ -115,8 +108,8 @@ fn satellite_window() -> Element {
 
 /// Watch the shared layout epoch; each bump snaps THIS window to its demo
 /// slot (only a window's own runtime may touch its tao handle).
-fn use_demo_layout(owner: Rc<ModelOwner>, role: WindowRole) {
-    let epoch = owner.model.layout_epoch;
+fn use_demo_layout(model: Model, role: WindowRole) {
+    let epoch = model.layout_epoch;
     use_effect(move || {
         if epoch() > 0 {
             layout::snap(role);
@@ -124,11 +117,11 @@ fn use_demo_layout(owner: Rc<ModelOwner>, role: WindowRole) {
     });
 }
 
-fn use_satellite_cleanup(owner: Rc<ModelOwner>, satellite: Satellite) {
+fn use_satellite_cleanup(model: Model, satellite: Satellite) {
     // Closing a satellite returns its widgets to the dock, retires its zone,
     // and reclaims its independently owned list signal; repeats are inert.
     use_drop(move || {
-        let _ = owner.close_satellite(satellite);
+        let _ = model.close_satellite(satellite);
     });
 }
 
@@ -136,11 +129,10 @@ fn use_satellite_cleanup(owner: Rc<ModelOwner>, satellite: Satellite) {
 /// accessibility live region.
 #[component]
 fn Chrome(header: Element, children: Element) -> Element {
-    let owner = use_context::<Rc<ModelOwner>>();
+    let model = use_context::<Model>();
     rsx! {
         style { {theme::STYLE} }
-        DndProvider::<Widget> {
-            DragBridge::<Widget> {}
+        MultiWindowProvider::<Widget> {
             div {
                 class: "chrome",
                 tabindex: "0",
@@ -148,7 +140,7 @@ fn Chrome(header: Element, children: Element) -> Element {
                 onkeydown: move |event| {
                     // `D` anywhere: snap every window to the filming layout.
                     if event.key().to_string().eq_ignore_ascii_case("d") {
-                        let mut epoch = owner.model.layout_epoch;
+                        let mut epoch = model.layout_epoch;
                         let next = *epoch.peek() + 1;
                         epoch.set(next);
                     }
@@ -183,13 +175,13 @@ fn WidgetZone(
     widgets: Signal<Vec<Widget>>,
     empty_hint: String,
 ) -> Element {
-    let owner = use_context::<Rc<ModelOwner>>();
+    let model = use_context::<Model>();
     rsx! {
         DropZone::<Widget> {
             id: zone,
             label: label.clone(),
             class: "zone",
-            on_drop: move |o: DropOutcome<Widget>| owner.deliver(o.payload, o.to, o.effect),
+            on_drop: move |o: DropOutcome<Widget>| model.deliver(o.payload, o.to, o.effect),
             for widget in widgets() {
                 Draggable::<Widget> {
                     key: "{widget.id}",

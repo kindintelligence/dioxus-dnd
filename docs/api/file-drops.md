@@ -1,9 +1,9 @@
 # File drops API reference
 
-OS file drops - the one drop type where the payload arrives *in the native
-event* (`evt.files()`) rather than through the shared context: `FileDropZone`,
-the declarative `FileFilter`, its `FileRejection` reasons, and the `FileDrop`
-batch delivered on success.
+OS file drops and click-to-choose uploads - native boundary payloads that
+arrive *in their event* (`evt.files()`) rather than through the shared
+context: `FileDropZone`, the declarative `FileFilter`, its `FileRejection`
+reasons, and the `FileDrop` batch delivered on success.
 
 Concept guide: [docs/concepts/file-drops.md](../concepts/file-drops.md).
 Works on web and desktop; on desktop `FileData::path` gives you the real
@@ -20,23 +20,24 @@ rsx! {
                 // ...
             }
         },
-        "Drop images here"
+        "Click to choose images or drop them here"
     }
 }
 ```
 
 ## `FileDropZone`
 
-A zone that accepts files dragged in from the operating system. Independent
-of `DndContext` - file drops don't come from inside your app, so no provider
-is required. Renders a wrapper `div` and forwards arbitrary attributes
-(`class`, `style`, `id`, ...) to it.
+A zone that accepts files dragged in from the operating system or selected
+from the native file picker opened by clicking it. Independent of
+`DndContext` - these files don't come from inside your app, so no provider is
+required. Renders a wrapper `div`, forwards arbitrary attributes (`class`,
+`style`, `id`, ...) to it, and adds no visual styles of its own.
 
 | Prop | Type | Default | What it does |
 |---|---|---|---|
-| `filter` | `Option<FileFilter>` | `None` | Acceptance rules applied to each drop; everything is accepted when omitted. |
-| `on_files` | `EventHandler<FileDrop>` | required | Fired with the accepted files of a drop, only if at least one passed. |
-| `on_rejected` | `Option<EventHandler<Vec<(FileData, FileRejection)>>>` | `None` | Fired with the rejected files of a drop paired with their reasons, only if at least one failed. |
+| `filter` | `Option<FileFilter>` | `None` | Acceptance rules applied to dropped and selected files; everything is accepted when omitted. |
+| `on_files` | `EventHandler<FileDrop>` | required | Fired with accepted dropped or selected files, only if at least one passed. |
+| `on_rejected` | `Option<EventHandler<Vec<(FileData, FileRejection)>>>` | `None` | Fired with rejected dropped or selected files paired with their reasons, only if at least one failed. |
 | `on_hover` | `Option<EventHandler<bool>>` | `None` | Fired with `true` when a drag enters the zone, `false` when it leaves or the drop lands. |
 
 Data attributes:
@@ -52,6 +53,13 @@ drag crosses the zone's children.
 
 Behavior notes:
 
+- Clicking the wrapper opens a native multi-file picker. A hidden file input
+  provides this behavior without adding layout or visual styling.
+- Extension rules plus exact and top-level-wildcard MIME rules are mirrored
+  to the input's advisory `accept` value. The complete `FileFilter` always
+  runs after selection because native pickers cannot express every rule.
+- Picker selection uses the same callbacks as dropping. It supplies `(0, 0)`
+  for both points because no drop location exists. Cancelling is silent.
 - The zone calls `prevent_default()` on `dragover`; without that the
   browser never delivers the drop and opens the file instead. You write no
   ceremony yourself.
@@ -62,7 +70,7 @@ Behavior notes:
 
 ## `FileFilter`
 
-Declarative acceptance rules for dropped files. A builder: start from
+Declarative acceptance rules for dropped or picker-selected files. A builder: start from
 `FileFilter::new()` (or `Default`), chain rules; a file must pass every
 rule you set, and an empty filter accepts everything. `Clone`, `Debug`,
 `PartialEq`.
@@ -72,7 +80,7 @@ rule you set, and an empty filter accepts everything. `Clone`, `Debug`,
 | `extensions(iter)` | The file name must end in one of these extensions. Case-insensitive (ASCII), leading dot optional, whitespace trimmed; entries that normalize to empty are dropped. The extension must terminate the name: `png.txt` does not pass `["png"]`. | `Extension` |
 | `content_types(iter)` | The reported MIME type must match one of these patterns (forms below). | `ContentType` |
 | `max_size(bytes)` | Reject files larger than this many bytes; a file of exactly `bytes` passes. | `TooLarge` |
-| `max_files(n)` | Accept at most `n` files per drop; applied by `partition`, ignored by `check`. | `TooMany` |
+| `max_files(n)` | Accept at most `n` files per incoming batch; applied by `partition`, ignored by `check`. | `TooMany` |
 
 `content_types` pattern forms:
 
@@ -111,13 +119,13 @@ bytes server-side or via content sniffing before trusting a file.
 
 ## `FileDrop`
 
-A batch of dropped files plus where they landed, delivered to `on_files`:
+A batch of dropped or selected files delivered to `on_files`:
 
 | Field | Type | Meaning |
 |---|---|---|
 | `files` | `Vec<FileData>` | The accepted files. `FileData` is Dioxus's platform file handle (`dioxus::html::FileData`), not a type of this crate. |
-| `client` | `Point` | Pointer position in client (viewport) coordinates at drop time. |
-| `element` | `Point` | Pointer position relative to the drop zone element. |
+| `client` | `Point` | Pointer position in client (viewport) coordinates at drop time; `(0, 0)` for picker selections. |
+| `element` | `Point` | Pointer position relative to the drop zone element; `(0, 0)` for picker selections. |
 
 On every renderer `FileData` exposes `name()`, `size()`, `content_type()`
 and `last_modified()`. Contents differ: web reads them with
@@ -146,10 +154,11 @@ wildcard arm with a generic "not accepted" message.
 - **Desktop** exposes `path()`; hand it to `std::fs` or another process
   without copying bytes through the webview.
 - **Windows desktop file drops** have a history of platform quirks in
-  wry-based webviews. Test on your target and consider a file input
-  fallback. wry also makes its drop handler and HTML5 drag-and-drop
-  mutually exclusive per window, so a Windows window using the typed
-  `DataTransfer` transport gives up native file drops.
+  wry-based webviews. Test on your target and use the same zone's picker when
+  OS drops are unreliable. wry also makes its drop handler and HTML5
+  drag-and-drop mutually exclusive per window, so a Windows window using the
+  typed `DataTransfer` transport gives up native file drops but can still use
+  click-to-choose.
 
 ## Where the rest lives
 
