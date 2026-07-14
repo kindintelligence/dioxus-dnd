@@ -16,6 +16,10 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
   build:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
@@ -32,9 +36,14 @@ jobs:
           rustup target add wasm32-unknown-unknown --toolchain stable
 
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: web-gallery
+          save-if: "false"
 
       - name: Install Dioxus CLI
-        run: cargo install dioxus-cli --version 0.7.9 --locked
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: dioxus-cli@0.7.9
 
       - name: Build gallery
         run: dx build --example gallery --platform web --features web --release --base-path /dioxus-dnd/
@@ -46,7 +55,7 @@ jobs:
 
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: target/dx/gallery/release/web/public
 
