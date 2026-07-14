@@ -57,6 +57,8 @@ jobs:
           rustup target add wasm32-unknown-unknown --toolchain stable
 
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Test the minimal feature set
         run: cargo +stable test --locked --no-default-features --lib --tests
@@ -93,6 +95,11 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: desktop-linux
+          workspaces: |
+            . -> target
+            examples/desktop-multiwindow -> target
+            examples/desktop-showcase -> target
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Test every library feature
         run: cargo +stable test --locked --all-features
@@ -145,6 +152,11 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: desktop-${{ matrix.platform }}
+          workspaces: |
+            . -> target
+            examples/desktop-multiwindow -> target
+            examples/desktop-showcase -> target
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Test platform-specific desktop code
         run: cargo +stable test --locked --features "serde desktop" --lib --tests
@@ -171,7 +183,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          key: web
+          shared-key: web-gallery
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -184,7 +197,9 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Install the Dioxus CLI
-        run: cargo +stable install dioxus-cli --version 0.7.9 --locked
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: dioxus-cli@0.7.9
 
       - name: Run browser regressions
         run: npm run test:web
@@ -216,6 +231,7 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: msrv-core-1.85
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Check the renderer-neutral library on the MSRV
         run: cargo +1.85.0 check --locked --no-default-features --lib
@@ -233,6 +249,7 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: package
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Verify the crates.io payload
         run: cargo +stable publish --dry-run --locked
@@ -313,6 +330,7 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: dioxus-0.8-alpha
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Select published Dioxus 0.8 alpha packages
         run: |
