@@ -64,7 +64,7 @@ tracing = "0.1"
 # but that re-export is not a semver promise - it can vanish in a tao minor
 # without a breaking release - so the leg must not lean on it. Pure-Rust
 # RustConnection, no extension features, no unsafe.
-x11rb = { version = "0.13", optional = true }
+x11rb = { version = "0.14", optional = true }
 
 [features]
 default = []
