@@ -131,6 +131,9 @@
 - **Selection constructor compatibility.** `Selection::from_signal` remains a
   non-hook wrapper for existing callers; persistent range-anchor state is
   opt-in through `use_selection_from_signal` or `from_signals`.
+- **Clean release publishing.** The crates.io existence probe writes its
+  response outside the checkout, so Cargo receives the clean tagged payload
+  required by `cargo publish`.
 - **Owner restoration and lifetime precision.** `DndScope::with` now restores
   both Dioxus owner overrides before resuming an initializer panic, and
   process-owned model/world scopes remain deliberately non-dropping even if
