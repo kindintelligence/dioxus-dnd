@@ -121,6 +121,8 @@ pub fn ExternalDragSource(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(&mut attributes, &["draggable", "ondragstart"]);
     rsx! {
         div {
             draggable: !disabled,
@@ -175,6 +177,8 @@ pub fn TypedDragSource<T: serde::Serialize + Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(&mut attributes, &["draggable", "ondragstart"]);
     rsx! {
         div {
             draggable: !disabled,

@@ -1,6 +1,7 @@
 #![doc = include_str!("../docs/api/sortable-lists.md")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::rc::Rc;
 
 use dioxus::html::MountedData;
@@ -14,9 +15,75 @@ use crate::core::{
     TouchSense,
 };
 
+pub use crate::sortable_kernel::{
+    apply_reorder, project_layout, DropPlacement, ItemTransform, Placement, ReorderEvent,
+    SortStrategy, SortableCollection, SortableGroup, SortableGroupId, SortableHandle, SortableItem,
+    SortablePayload, SortableProvider,
+};
+
 fn pointer_client(evt: &PointerEvent) -> Point {
     let c = evt.client_coordinates();
     Point::new(c.x, c.y)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct RenderKey(String);
+
+impl fmt::Display for RenderKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+pub(crate) fn build_render_keys(
+    len: usize,
+    item_key: Option<Callback<usize, String>>,
+) -> Vec<RenderKey> {
+    let keys: Vec<_> = (0..len)
+        .map(|index| {
+            RenderKey(
+                item_key
+                    .map(|key| key.call(index))
+                    .unwrap_or_else(|| index.to_string()),
+            )
+        })
+        .collect();
+    if item_key.is_some() {
+        let mut unique = HashSet::with_capacity(keys.len());
+        for key in &keys {
+            assert!(
+                unique.insert(key.clone()),
+                "SortableList/Grid item_key returned the duplicate key `{key}`"
+            );
+        }
+    }
+    keys
+}
+
+pub(crate) fn project_rects(
+    keys: &[RenderKey],
+    rects: &HashMap<RenderKey, Rect>,
+) -> HashMap<usize, Rect> {
+    keys.iter()
+        .enumerate()
+        .filter_map(|(index, key)| rects.get(key).copied().map(|rect| (index, rect)))
+        .collect()
+}
+
+pub(crate) fn current_rects(
+    keys: Signal<Vec<RenderKey>>,
+    rects: Signal<HashMap<RenderKey, Rect>>,
+) -> HashMap<usize, Rect> {
+    project_rects(&keys.peek(), &rects.peek())
+}
+
+pub(crate) fn mounted_at(
+    index: usize,
+    keys: Signal<Vec<RenderKey>>,
+    mounteds: Signal<HashMap<RenderKey, Rc<MountedData>>>,
+) -> Option<Rc<MountedData>> {
+    let key = keys.peek().get(index)?.clone();
+    mounteds.peek().get(&key).cloned()
 }
 
 /// "Move the item at `from` so it ends up at index `to`."
@@ -96,24 +163,68 @@ fn slot_pitch(rects: &HashMap<usize, Rect>, ix: usize, axis: Axis) -> Option<f64
 }
 
 pub(crate) fn refresh_rects(
-    mounteds: Signal<HashMap<usize, Rc<MountedData>>>,
-    rects: Signal<HashMap<usize, Rect>>,
+    mounteds: Signal<HashMap<RenderKey, Rc<MountedData>>>,
+    rects: Signal<HashMap<RenderKey, Rect>>,
+    generations: Signal<HashMap<RenderKey, u64>>,
 ) {
-    for (i, m) in mounteds.peek().clone() {
-        let mut rects = rects;
-        spawn(async move {
-            if let Ok(r) = m.get_client_rect().await {
-                rects.write().insert(
-                    i,
-                    Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
-                );
-            }
-        });
+    for (key, mounted) in mounteds.peek().clone() {
+        measure_rect(key, mounted, mounteds, rects, generations);
     }
 }
 
+pub(crate) fn measure_rect(
+    key: RenderKey,
+    mounted: Rc<MountedData>,
+    mounteds: Signal<HashMap<RenderKey, Rc<MountedData>>>,
+    mut rects: Signal<HashMap<RenderKey, Rect>>,
+    mut generations: Signal<HashMap<RenderKey, u64>>,
+) {
+    let generation = {
+        let mut current = generations.write();
+        let next = current.get(&key).copied().unwrap_or(0).wrapping_add(1);
+        current.insert(key.clone(), next);
+        next
+    };
+    spawn(async move {
+        let Ok(measured) = mounted.get_client_rect().await else {
+            return;
+        };
+        let still_current = measurement_is_current(
+            &mounteds.peek(),
+            &generations.peek(),
+            &key,
+            &mounted,
+            generation,
+        );
+        if still_current {
+            rects.write().insert(
+                key,
+                Rect::new(
+                    measured.origin.x,
+                    measured.origin.y,
+                    measured.size.width,
+                    measured.size.height,
+                ),
+            );
+        }
+    });
+}
+
+fn measurement_is_current<K: Eq + std::hash::Hash, T>(
+    mounteds: &HashMap<K, Rc<T>>,
+    generations: &HashMap<K, u64>,
+    key: &K,
+    mounted: &Rc<T>,
+    generation: u64,
+) -> bool {
+    mounteds
+        .get(key)
+        .is_some_and(|current| Rc::ptr_eq(current, mounted))
+        && generations.get(key) == Some(&generation)
+}
+
 /// Shift every cached rect by `(dx, dy)`. Pure, for testability.
-fn shift_rects(rects: &mut HashMap<usize, Rect>, dx: f64, dy: f64) {
+fn shift_rects<K>(rects: &mut HashMap<K, Rect>, dx: f64, dy: f64) {
     for rect in rects.values_mut() {
         rect.x += dx;
         rect.y += dy;
@@ -135,7 +246,7 @@ fn shift_rects(rects: &mut HashMap<usize, Rect>, dx: f64, dy: f64) {
 fn reanchor_rects(
     container: Signal<Option<Rc<MountedData>>>,
     anchor: Signal<Option<Point>>,
-    rects: Signal<HashMap<usize, Rect>>,
+    rects: Signal<HashMap<RenderKey, Rect>>,
     busy: Signal<bool>,
     pending: Signal<bool>,
 ) {
@@ -314,8 +425,15 @@ pub fn SortableList(
     /// braille-dots glyph when unset.
     #[props(default)]
     handle: Option<Callback<usize, Element>>,
+    /// Stable render identity for each item. Supply this whenever rows own
+    /// hook state or focus and the backing collection can reorder.
+    #[props(default)]
+    item_key: Option<Callback<usize, String>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
 ) -> Element {
+    let render_keys = build_render_keys(len, item_key);
+    let initial_render_keys = render_keys.clone();
+    let mut index_keys = use_signal(move || initial_render_keys);
     let mut drag_from = use_signal(|| None::<usize>);
     let mut over = use_signal(|| None::<usize>);
     let mut press_from = use_signal(|| None::<usize>);
@@ -323,17 +441,25 @@ pub fn SortableList(
     let mut pointer_at = use_signal(|| None::<Point>);
     // Per-row client rects (measured on mount, re-measured at pointer-drag
     // start) drive both the displacement step and hit-testing.
-    let rects = use_signal(HashMap::<usize, Rect>::new);
-    let mounteds = use_signal(HashMap::<usize, Rc<MountedData>>::new);
-    let mut rects_for_len = rects;
-    let mut mounteds_for_len = mounteds;
-    use_effect(use_reactive!(|len| {
-        rects_for_len.write().retain(|ix, _| *ix < len);
-        mounteds_for_len.write().retain(|ix, _| *ix < len);
+    let rects = use_signal(HashMap::<RenderKey, Rect>::new);
+    let mounteds = use_signal(HashMap::<RenderKey, Rc<MountedData>>::new);
+    let generations = use_signal(HashMap::<RenderKey, u64>::new);
+    let mut rects_for_keys = rects;
+    let mut mounteds_for_keys = mounteds;
+    let mut generations_for_keys = generations;
+    use_effect(use_reactive!(|(render_keys)| {
+        let active: HashSet<_> = render_keys.iter().cloned().collect();
+        index_keys.set(render_keys);
+        rects_for_keys.write().retain(|key, _| active.contains(key));
+        mounteds_for_keys
+            .write()
+            .retain(|key, _| active.contains(key));
+        generations_for_keys
+            .write()
+            .retain(|key, _| active.contains(key));
     }));
     let size_of = move |ix: usize| {
-        rects
-            .peek()
+        current_rects(index_keys, rects)
             .get(&ix)
             .map(|r| match axis {
                 Axis::Vertical => r.height,
@@ -389,12 +515,18 @@ pub fn SortableList(
                 };
                 drag_from.set(Some(ix));
                 pointer_at.set(Some(at));
-                over.set(pointer_target(&rects.peek(), ix, None, at, axis));
+                over.set(pointer_target(
+                    &current_rects(index_keys, rects),
+                    ix,
+                    None,
+                    at,
+                    axis,
+                ));
                 // Client rects go stale when the list scrolls or layout shifts;
                 // re-measure every row at drag start so hit-testing runs against
                 // the current (pre-displacement) slots, and re-baseline the
                 // wrapper anchor the scroll-tracking shifts run from.
-                refresh_rects(mounteds, rects);
+                refresh_rects(mounteds, rects, generations);
                 capture_anchor(container, anchor);
             }
             GestureEffect::Track { at } => {
@@ -402,7 +534,13 @@ pub fn SortableList(
                     return;
                 };
                 pointer_at.set(Some(at));
-                let next = pointer_target(&rects.peek(), from, *over.peek(), at, axis);
+                let next = pointer_target(
+                    &current_rects(index_keys, rects),
+                    from,
+                    *over.peek(),
+                    at,
+                    axis,
+                );
                 if next != *over.peek() {
                     over.set(next);
                 }
@@ -413,7 +551,7 @@ pub fn SortableList(
                 // committing a reorder - dropping a row "nowhere" shouldn't
                 // move it. Inside the bounds, snap to the hovered target.
                 let to = {
-                    let rects_ref = rects.peek();
+                    let rects_ref = current_rects(index_keys, rects);
                     if list_bounds(&rects_ref)
                         .map(|b| b.contains(at))
                         .unwrap_or(false)
@@ -481,7 +619,7 @@ pub fn SortableList(
     // render below needs nothing else.
     let overlay_ghost: Option<(Callback<usize, Element>, usize, Point, Rect)> =
         overlay.zip(drag_from()).and_then(|(cb, from)| {
-            let r = rects.peek().get(&from).copied()?;
+            let r = current_rects(index_keys, rects).get(&from).copied()?;
             let p0 = press_at()?;
             let p1 = pointer_at()?;
             Some((
@@ -492,6 +630,19 @@ pub fn SortableList(
             ))
         });
     let ghost_from = overlay_ghost.map(|(_, f, _, _)| f);
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &[
+            "onmounted",
+            "onpointermove",
+            "onpointerup",
+            "onpointercancel",
+            "onlostpointercapture",
+            "ontouchmove",
+            "oncontextmenu",
+        ],
+    );
 
     rsx! {
         div {
@@ -516,7 +667,7 @@ pub fn SortableList(
                     empty_held_moves.set(streak);
                     if streak >= crate::core::components::RELEASE_RECOVERY_MOVES {
                         if let Some(from) = *drag_from.peek() {
-                            if let Some(n) = mounteds.peek().get(&from).cloned() {
+                            if let Some(n) = mounted_at(from, index_keys, mounteds) {
                                 platform::release_pointer(&n, evt.pointer_id());
                             }
                         }
@@ -530,7 +681,7 @@ pub fn SortableList(
             },
             onpointerup: move |evt: PointerEvent| {
                 if let Some(from) = *drag_from.peek() {
-                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                    if let Some(n) = mounted_at(from, index_keys, mounteds) {
                         platform::release_pointer(&n, evt.pointer_id());
                     }
                 }
@@ -542,7 +693,7 @@ pub fn SortableList(
             // strays a pixel past an edge.
             onpointercancel: move |evt: PointerEvent| {
                 if let Some(from) = *drag_from.peek() {
-                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                    if let Some(n) = mounted_at(from, index_keys, mounteds) {
                         platform::release_pointer(&n, evt.pointer_id());
                     }
                 }
@@ -586,9 +737,9 @@ pub fn SortableList(
                     on_hold: move |pid| feed(GestureEvent::Hold { pointer_id: pid }),
                 }
             }
-            for ix in 0..len {
+            for (ix, render_key) in (0..len).zip(render_keys) {
                 div {
-                    key: "{ix}",
+                    key: "{render_key}",
                     "data-dnd-motion": true,
                     "data-dragging": if drag_from() == Some(ix) { "true" },
                     "data-drop-target": if over() == Some(ix) && drag_from() != Some(ix) { "true" },
@@ -602,7 +753,11 @@ pub fn SortableList(
                         // visible and slides.
                         let base = match (live_preview, drag_from()) {
                             (true, Some(from)) => {
-                                let step = slot_pitch(&rects.peek(), from, axis)
+                                let step = slot_pitch(
+                                    &current_rects(index_keys, rects),
+                                    from,
+                                    axis,
+                                )
                                     .unwrap_or_else(|| size_of(from));
                                 let o = over().unwrap_or(from);
                                 let d = displacement(ix, from, o, step);
@@ -635,7 +790,7 @@ pub fn SortableList(
                         }
                         evt.prevent_default();
                         evt.stop_propagation();
-                        refresh_rects(mounteds, rects);
+                        refresh_rects(mounteds, rects, generations);
                         capture_anchor(container, anchor);
                         press_from.set(Some(ix));
                         press_at.set(Some(pointer_client(&evt)));
@@ -643,7 +798,7 @@ pub fn SortableList(
                         // survives the cursor leaving the list (real capture with
                         // the `web` feature; the capture-substitute layer covers
                         // the rest). Move/up still bubble to the container.
-                        captured.set(match mounteds.peek().get(&ix).cloned() {
+                        captured.set(match mounted_at(ix, index_keys, mounteds) {
                             Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
                             None => false,
                         });
@@ -661,16 +816,8 @@ pub fn SortableList(
                     onmounted: move |evt: Event<MountedData>| {
                         let m: Rc<MountedData> = evt.data();
                         let mut mounteds = mounteds;
-                        let mut rects = rects;
-                        mounteds.write().insert(ix, m.clone());
-                        spawn(async move {
-                            if let Ok(r) = m.get_client_rect().await {
-                                rects.write().insert(
-                                    ix,
-                                    Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
-                                );
-                            }
-                        });
+                        mounteds.write().insert(render_key.clone(), m.clone());
+                        measure_rect(render_key.clone(), m, mounteds, rects, generations);
                     },
                     if touch_handle {
                         span {
@@ -683,14 +830,14 @@ pub fn SortableList(
                                 }
                                 evt.prevent_default();
                                 evt.stop_propagation();
-                                refresh_rects(mounteds, rects);
+                                refresh_rects(mounteds, rects, generations);
                                 capture_anchor(container, anchor);
                                 press_from.set(Some(ix));
                                 press_at.set(Some(pointer_client(&evt)));
                                 // Capture on the row wrapper (not the grip): it is
                                 // stable across live-preview re-renders, and
                                 // captured events still bubble to the container.
-                                captured.set(match mounteds.peek().get(&ix).cloned() {
+                                captured.set(match mounted_at(ix, index_keys, mounteds) {
                                     Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
                                     None => false,
                                 });
@@ -747,6 +894,57 @@ mod tests {
         apply_sort(&mut v, SortEvent { from: 9, to: 0 });
         apply_sort(&mut v, SortEvent { from: 0, to: 9 });
         assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn async_measurements_require_the_current_node_and_generation() {
+        let old = Rc::new(());
+        let replacement = Rc::new(());
+        let mut mounteds = HashMap::from([(2, old.clone())]);
+        let mut generations = HashMap::from([(2, 4)]);
+
+        assert!(measurement_is_current(&mounteds, &generations, &2, &old, 4));
+        assert!(!measurement_is_current(
+            &mounteds,
+            &generations,
+            &2,
+            &old,
+            3
+        ));
+
+        mounteds.insert(2, replacement);
+        generations.insert(2, 5);
+        assert!(!measurement_is_current(
+            &mounteds,
+            &generations,
+            &2,
+            &old,
+            4
+        ));
+
+        mounteds.remove(&2);
+        generations.remove(&2);
+        assert!(!measurement_is_current(
+            &mounteds,
+            &generations,
+            &2,
+            &old,
+            4
+        ));
+    }
+
+    #[test]
+    fn stable_keys_project_mounted_geometry_to_current_indices() {
+        let a = RenderKey("a".to_string());
+        let b = RenderKey("b".to_string());
+        let rects = HashMap::from([
+            (a.clone(), Rect::new(0.0, 0.0, 100.0, 20.0)),
+            (b.clone(), Rect::new(0.0, 20.0, 100.0, 20.0)),
+        ]);
+
+        let projected = project_rects(&[b, a], &rects);
+        assert_eq!(projected[&0], Rect::new(0.0, 20.0, 100.0, 20.0));
+        assert_eq!(projected[&1], Rect::new(0.0, 0.0, 100.0, 20.0));
     }
 }
 

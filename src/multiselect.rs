@@ -2,11 +2,16 @@
 
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, Draggable, DropEffect, ZoneId};
+use crate::core::{use_dnd, DragMode, Draggable, DropEffect, ZoneId};
+
+fn suppress_click_for_mode(mode: DragMode) -> bool {
+    mode == DragMode::Pointer
+}
 
 /// Selection state for keys of type `K`. Cheap to copy.
 pub struct Selection<K: Clone + PartialEq + 'static> {
     items: Signal<Vec<K>>,
+    anchor: Option<Signal<Option<K>>>,
 }
 
 impl<K: Clone + PartialEq + 'static> Copy for Selection<K> {}
@@ -17,14 +22,34 @@ impl<K: Clone + PartialEq + 'static> Clone for Selection<K> {
 }
 impl<K: Clone + PartialEq + 'static> PartialEq for Selection<K> {
     fn eq(&self, other: &Self) -> bool {
-        self.items == other.items
+        self.items == other.items && self.anchor == other.anchor
     }
 }
 
 impl<K: Clone + PartialEq + 'static> Selection<K> {
-    /// Wrap an existing signal. Prefer [`use_selection`].
+    /// Wrap an existing item signal without allocating hook state.
+    ///
+    /// This retains the pre-range-selection constructor contract and is safe
+    /// outside component renders. Range operations derive their anchor from
+    /// the first selected item; use [`use_selection_from_signal`] or
+    /// [`Self::from_signals`] when the anchor must persist independently.
     pub fn from_signal(items: Signal<Vec<K>>) -> Self {
-        Self { items }
+        Self {
+            items,
+            anchor: None,
+        }
+    }
+
+    /// Wrap existing item and anchor signals.
+    ///
+    /// This is the non-hook constructor for state owned outside the current
+    /// component. Supplying both signals makes range-anchor lifetime
+    /// explicit and prevents it from being reset by reconstruction.
+    pub fn from_signals(items: Signal<Vec<K>>, anchor: Signal<Option<K>>) -> Self {
+        Self {
+            items,
+            anchor: Some(anchor),
+        }
     }
 
     /// Is `key` currently selected?
@@ -34,7 +59,10 @@ impl<K: Clone + PartialEq + 'static> Selection<K> {
 
     /// Replace the selection with just `key`.
     pub fn select_only(&mut self, key: K) {
-        self.items.set(vec![key]);
+        self.items.set(vec![key.clone()]);
+        if let Some(mut anchor) = self.anchor {
+            anchor.set(Some(key));
+        }
     }
 
     /// Add or remove `key` (Ctrl/Cmd+click semantics).
@@ -50,6 +78,9 @@ impl<K: Clone + PartialEq + 'static> Selection<K> {
     /// Clear the selection.
     pub fn clear(&mut self) {
         self.items.write().clear();
+        if let Some(mut anchor) = self.anchor {
+            anchor.set(None);
+        }
     }
 
     /// Snapshot of the selected keys, in selection order.
@@ -76,12 +107,101 @@ impl<K: Clone + PartialEq + 'static> Selection<K> {
             self.select_only(key);
         }
     }
+
+    /// Select the inclusive range from the current anchor to `to` in the
+    /// caller's stable visual order. Returns false when either endpoint is
+    /// absent from `ordered`.
+    pub fn select_range(&mut self, ordered: &[K], to: &K, additive: bool) -> bool {
+        let anchor = self
+            .anchor
+            .and_then(|anchor| anchor.peek().clone())
+            .or_else(|| self.items.peek().first().cloned())
+            .unwrap_or_else(|| to.clone());
+        let Some(from_index) = ordered.iter().position(|item| item == &anchor) else {
+            return false;
+        };
+        let Some(to_index) = ordered.iter().position(|item| item == to) else {
+            return false;
+        };
+        let (start, end) = if from_index <= to_index {
+            (from_index, to_index)
+        } else {
+            (to_index, from_index)
+        };
+        let range = &ordered[start..=end];
+        if additive {
+            let mut selected = self.items.write();
+            for item in range {
+                if !selected.contains(item) {
+                    selected.push(item.clone());
+                }
+            }
+        } else {
+            self.items.set(range.to_vec());
+        }
+        if let Some(mut anchor_state) = self.anchor {
+            anchor_state.set(Some(anchor));
+        }
+        true
+    }
+
+    /// Standard click behavior plus Shift-range selection.
+    pub fn click_in_order(&mut self, key: K, modifiers: Modifiers, ordered: &[K]) {
+        if modifiers.contains(Modifiers::SHIFT) {
+            let additive =
+                modifiers.contains(Modifiers::CONTROL) || modifiers.contains(Modifiers::META);
+            if self.select_range(ordered, &key, additive) {
+                return;
+            }
+        }
+        self.click(key, modifiers);
+    }
+
+    /// Move a keyboard focus index and optionally extend selection from the
+    /// anchor. Returns the new index, clamped to the collection.
+    pub fn keyboard_range(
+        &mut self,
+        ordered: &[K],
+        current: usize,
+        step: isize,
+        extend: bool,
+    ) -> Option<usize> {
+        if ordered.is_empty() {
+            return None;
+        }
+        let current = current.min(ordered.len() - 1);
+        let next = current.saturating_add_signed(step).min(ordered.len() - 1);
+        if extend {
+            if let Some(mut anchor) = self.anchor {
+                if anchor.peek().is_none() {
+                    anchor.set(Some(ordered[current].clone()));
+                }
+            } else if self.items.peek().is_empty() {
+                // Give the stateless compatibility wrapper an anchor its
+                // ordinary first-selected fallback can derive.
+                self.items.set(vec![ordered[current].clone()]);
+            }
+            self.select_range(ordered, &ordered[next], false);
+        } else {
+            self.select_only(ordered[next].clone());
+        }
+        Some(next)
+    }
+}
+
+/// Wrap an existing item signal with a range anchor owned by this component.
+/// Call this unconditionally during render, like [`use_selection`].
+pub fn use_selection_from_signal<K: Clone + PartialEq + 'static>(
+    items: Signal<Vec<K>>,
+) -> Selection<K> {
+    Selection::from_signals(items, use_signal(|| None))
 }
 
 /// Create selection state owned by this component.
 pub fn use_selection<K: Clone + PartialEq + 'static>() -> Selection<K> {
     Selection {
         items: use_signal(Vec::new),
+        anchor: Some(use_signal(|| None)),
     }
 }
 
@@ -114,7 +234,7 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
-    let _ = use_dnd::<Vec<K>>(); // fail fast with a clear panic if unprovided
+    let dnd = use_dnd::<Vec<K>>(); // fail fast with a clear panic if unprovided
     let selected = selection.is_selected(&item);
     // Payload resolved from *current* selection each render: a selected item
     // drags the group, an unselected one drags itself.
@@ -129,14 +249,19 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     // pointer drag; letting it through would collapse the just-dragged
     // multi-selection to this one item. Drag start arms the flag, the next
     // click consumes it - exactly one trailing click is swallowed.
-    let mut dragged = use_signal(|| false);
+    let mut suppress_pointer_click = use_signal(|| false);
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &["data-selected", "onclick", "onpointerdown"],
+    );
 
     rsx! {
         div {
             "data-selected": if selected { "true" },
             onclick: move |evt: MouseEvent| {
-                if *dragged.peek() {
-                    dragged.set(false);
+                if *suppress_pointer_click.peek() {
+                    suppress_pointer_click.set(false);
                     return;
                 }
                 selection.click(click_key.clone(), evt.modifiers());
@@ -147,8 +272,28 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
                 zone,
                 effect,
                 label,
-                on_drag_start: move |_| dragged.set(true),
-                {children}
+                on_drag_start: move |_| {
+                    if suppress_click_for_mode(dnd.mode()) {
+                        suppress_pointer_click.set(true);
+                    }
+                },
+                on_drag_end: move |dropped: bool| {
+                    if !dropped {
+                        suppress_pointer_click.set(false);
+                    }
+                },
+                div {
+                    onpointerdown: move |_| {
+                        // This surface runs before Draggable's root stops
+                        // pointerdown propagation. The outer selection
+                        // surface owns click because pointer capture retargets
+                        // pointerup (and therefore click) to that root.
+                        if !dnd.dragging() && *suppress_pointer_click.peek() {
+                            suppress_pointer_click.set(false);
+                        }
+                    },
+                    {children}
+                }
             }
         }
     }
@@ -169,5 +314,16 @@ pub fn SelectionCount<K: Clone + PartialEq + 'static>(
     let text = (strings.selection_count)(n);
     rsx! {
         span { "{text}" }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_pointer_drags_arm_browser_click_suppression() {
+        assert!(suppress_click_for_mode(DragMode::Pointer));
+        assert!(!suppress_click_for_mode(DragMode::Keyboard));
     }
 }

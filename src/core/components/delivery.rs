@@ -3,9 +3,13 @@
 
 use crate::core::hooks::SettleFlag;
 use crate::core::registry::ZoneRegistry;
+use crate::core::session::DragCompletion;
 use crate::core::state::DndContext;
-use crate::core::types::{DragMode, DragSessionId, DropEffect, DropOutcome, Point, ZoneId};
+use crate::core::types::{
+    edge_of, DragMode, DragSessionId, DropEffect, DropOutcome, Point, Rect, ZoneId,
+};
 use crate::core::world::{DndWorld, WindowKey};
+use crate::core::{DropQuery, DropReceipt};
 
 /// How many CONSECUTIVE moves must report no held buttons before the
 /// lost-release recovery synthesizes a pointer-up. Move events carry the
@@ -71,7 +75,7 @@ impl<T: Clone + 'static> DropCompletion<'_, T> {
             Self::World {
                 world,
                 session: None,
-            } => world.finish_untracked(true),
+            } => world.finish_untracked(DragCompletion::Dropped),
         }
     }
 }
@@ -83,16 +87,59 @@ pub(crate) struct SettleRoute<'a, T: Clone + 'static> {
     pub(crate) owner: Option<(&'a DndWorld<T>, WindowKey)>,
 }
 
-/// Acceptance-aware release selection shared by the live pointer path, host
-/// delivery, and `DragSim`, so overlap fall-through cannot diverge between
-/// production and the headless driver.
-pub(crate) fn resolve_release_target<T: Clone + 'static>(
+pub(crate) fn drop_query<T: Clone + 'static>(
+    dnd: &DndContext<T>,
+    payload: T,
+    proposed_effect: DropEffect,
+) -> DropQuery<T> {
+    DropQuery {
+        payload,
+        source: dnd.source(),
+        proposed_effect,
+        mode: dnd.mode(),
+        pointer_kind: dnd.pointer_kind(),
+        drag_id: dnd.drag_id(),
+    }
+}
+
+fn active_rect<T: Clone + 'static>(dnd: &DndContext<T>, point: Point) -> Option<Rect> {
+    let source = dnd.source_rect()?;
+    let grab = dnd.grab();
+    Some(Rect::new(
+        point.x - grab.x,
+        point.y - grab.y,
+        source.width,
+        source.height,
+    ))
+}
+
+/// Resolve a live drag through the registry's configured collision and
+/// acceptance policies.
+pub(crate) fn resolve_drag_target<T: Clone + 'static>(
     registry: ZoneRegistry<T>,
-    payload: &T,
+    dnd: &DndContext<T>,
     point: Point,
+    proposed_effect: DropEffect,
     max_distance: f64,
 ) -> Option<ZoneId> {
-    registry.hit_test_closest(point, payload, max_distance)
+    let payload = dnd.payload()?;
+    let query = drop_query(dnd, payload, proposed_effect);
+    registry
+        .resolve(&query, point, active_rect(dnd, point), max_distance)
+        .map(|(zone, _)| zone)
+}
+
+pub(crate) fn resolve_drag_hover<T: Clone + 'static>(
+    registry: ZoneRegistry<T>,
+    dnd: &DndContext<T>,
+    point: Point,
+    proposed_effect: DropEffect,
+) -> Option<ZoneId> {
+    let payload = dnd.payload()?;
+    let query = drop_query(dnd, payload, proposed_effect);
+    registry
+        .resolve_hover(&query, point, active_rect(dnd, point), dnd.over())
+        .map(|(zone, _)| zone)
 }
 
 /// Deliver the in-flight payload to `target`: acceptance check, settle
@@ -108,15 +155,18 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     point: Point,
     effect: DropEffect,
 ) -> bool {
-    let Some(record) = registry.get(target) else {
-        return false;
-    };
     let Some(p) = dnd.payload() else {
         return false;
     };
-    if !record.accepts_payload(&p) {
+    let query = drop_query(dnd, p.clone(), effect);
+    let Some(negotiated) = registry.negotiate_zone(target, &query) else {
         return false;
-    }
+    };
+    let effect = negotiated.effect;
+    let drag = dnd
+        .monitor_has_listeners()
+        .then(|| dnd.snapshot())
+        .flatten();
     let target_rect = registry.cached_rect(target);
     let origin = target_rect.map(|r| r.origin()).unwrap_or_default();
     let mode = dnd.mode();
@@ -140,7 +190,7 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
     };
     if let Some((p, from)) = taken {
         completion.commit(dnd);
-        record.on_drop.call(DropOutcome {
+        let outcome = DropOutcome {
             payload: p,
             from,
             to: target,
@@ -149,9 +199,18 @@ pub(crate) fn deliver_drop<T: Clone + PartialEq + 'static>(
             client: point,
             element: point - origin,
             grab,
-            // The receiving zone fills this in when it opted in.
-            edge: None,
-        });
+            edge: match (mode, negotiated.edge, target_rect) {
+                (DragMode::Pointer, Some(edges), Some(rect)) => Some(edge_of(point, rect, edges)),
+                _ => None,
+            },
+        };
+        if let Some(drag) = drag {
+            dnd.emit_dropped(DropReceipt {
+                drag,
+                outcome: outcome.clone(),
+            });
+        }
+        negotiated.record.on_drop.call(outcome);
         completion.finalize(dnd);
         return true;
     }

@@ -6,12 +6,15 @@ use std::collections::HashMap;
 
 use dioxus::prelude::*;
 
-use crate::core::components::{deliver_drop, resolve_release_target, DropCompletion, SettleRoute};
+use crate::core::components::{
+    deliver_drop, drop_query, resolve_drag_hover, resolve_drag_target, DropCompletion, SettleRoute,
+};
 use crate::core::hooks::SettleFlag;
+use crate::core::monitor::CancelReason;
 use crate::core::world::{JoinedWindow, WorldHit, WorldMembership};
 use crate::core::{
-    use_dnd, use_zone_registry, DndContext, DropEffect, Point, Rect, WindowKey, ZoneId,
-    ZoneRegistry,
+    use_dnd, use_zone_registry, DndContext, DragCompletion, DropEffect, Point, Rect, WindowKey,
+    ZoneId, ZoneRegistry,
 };
 
 thread_local! {
@@ -146,7 +149,7 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
         let mut dnd = self.dnd;
         let membership = self.membership;
         dom.in_runtime(|| {
-            dnd.start_tracked(
+            let session = dnd.start_tracked(
                 payload,
                 from,
                 Point::default(),
@@ -155,8 +158,10 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                 self.completion,
             );
             // Like the gesture: a world drag anchors to this window.
-            if let Some(j) = membership {
-                j.world.begin_from(j.key);
+            if dnd.is_session(session) {
+                if let Some(j) = membership {
+                    j.world.begin_from(j.key);
+                }
             }
         });
     }
@@ -169,20 +174,33 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
         let registry = self.registry;
         let membership = self.membership;
         dom.in_runtime(|| {
+            let session = dnd.active_session();
             dnd.update_pointer(point);
+            if session.is_some_and(|session| !dnd.is_session(session)) {
+                return;
+            }
+            let query = dnd
+                .payload()
+                .map(|payload| drop_query(&dnd, payload, dnd.effect()));
             // Same resolution order as the gesture: world hits (any
             // window) are authoritative, unresolved points fall back to
             // the local registry.
             match membership {
-                Some(joined) => match joined.zone_under(point) {
+                Some(joined) => match query
+                    .as_ref()
+                    .map(|query| joined.zone_under_query(point, query))
+                    .unwrap_or(WorldHit::Unresolved)
+                {
                     WorldHit::Zone(location) => joined.enter(location),
                     WorldHit::Window => joined.clear_hover(),
-                    WorldHit::Unresolved => match registry.hit_test(point) {
-                        Some(zone) => joined.enter(joined.location(zone)),
-                        None => joined.clear_hover(),
-                    },
+                    WorldHit::Unresolved => {
+                        match resolve_drag_hover(registry, &dnd, point, dnd.effect()) {
+                            Some(zone) => joined.enter(joined.location(zone)),
+                            None => joined.clear_hover(),
+                        }
+                    }
                 },
-                None => match registry.hit_test(point) {
+                None => match resolve_drag_hover(registry, &dnd, point, dnd.effect()) {
                     Some(zone) => dnd.enter(zone),
                     None => {
                         if let Some(over) = dnd.over() {
@@ -196,8 +214,8 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
 
     /// Release at the current pointer position. Returns the zone that
     /// received the drop, or `None` when the drag cancelled (no acceptable
-    /// zone under the pointer, and none with an edge within the 48px
-    /// snap).
+    /// zone under the pointer or within the provider's configured recovery
+    /// radius).
     pub fn release(&mut self, dom: &VirtualDom) -> Option<ZoneId> {
         self.release_as(dom, DropEffect::Move)
     }
@@ -219,9 +237,17 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
             if let Some(j) = membership {
                 let _ = j.zone_under(point);
                 if let Some((rec, local)) = j.foreign_window_under(point) {
-                    let target = dnd
-                        .payload()
-                        .and_then(|p| resolve_release_target(rec.registry, &p, local, 48.0));
+                    let target = dnd.payload().and_then(|payload| {
+                        let query = drop_query(&dnd, payload, effect);
+                        rec.registry
+                            .resolve(
+                                &query,
+                                local,
+                                j.world.active_rect_in(rec, local),
+                                rec.registry.release_policy().recovery_radius,
+                            )
+                            .map(|(zone, _)| zone)
+                    });
                     let delivered = target
                         .filter(|t| {
                             deliver_drop(
@@ -244,18 +270,27 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                     if !delivered {
                         match session {
                             Some(session) => {
-                                j.world.finish_session(session, false);
+                                j.world.finish_session(
+                                    session,
+                                    DragCompletion::Cancelled(CancelReason::NoTarget),
+                                );
                             }
-                            None => j.world.finish_untracked(false),
+                            None => j.world.finish_untracked(DragCompletion::Cancelled(
+                                CancelReason::NoTarget,
+                            )),
                         }
                         return None;
                     }
                     return target;
                 }
             }
-            let target = dnd
-                .payload()
-                .and_then(|p| resolve_release_target(registry, &p, point, 48.0));
+            let target = resolve_drag_target(
+                registry,
+                &dnd,
+                point,
+                effect,
+                registry.release_policy().recovery_radius,
+            );
             let delivered = target
                 .filter(|t| match membership {
                     Some(j) => deliver_drop(
@@ -294,15 +329,20 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
                 match membership {
                     Some(j) => match session {
                         Some(session) => {
-                            j.world.finish_session(session, false);
+                            j.world.finish_session(
+                                session,
+                                DragCompletion::Cancelled(CancelReason::NoTarget),
+                            );
                         }
-                        None => j.world.finish_untracked(false),
+                        None => j
+                            .world
+                            .finish_untracked(DragCompletion::Cancelled(CancelReason::NoTarget)),
                     },
                     None => match session {
                         Some(session) => {
-                            dnd.cancel_session(session);
+                            dnd.cancel_session(session, CancelReason::NoTarget);
                         }
-                        None => dnd.cancel(),
+                        None => dnd.cancel_with_reason(CancelReason::NoTarget),
                     },
                 }
                 return None;
@@ -320,13 +360,17 @@ impl<T: Clone + PartialEq + 'static> DragSim<T> {
             match membership {
                 Some(j) => match session {
                     Some(session) => {
-                        j.world.finish_session(session, false);
+                        j.world
+                            .finish_session(session, DragCompletion::Cancelled(CancelReason::User));
                     }
-                    None => j.world.finish_untracked(false),
+                    None => {
+                        j.world
+                            .finish_untracked(DragCompletion::Cancelled(CancelReason::User));
+                    }
                 },
                 None => match session {
                     Some(session) => {
-                        dnd.cancel_session(session);
+                        dnd.cancel_session(session, CancelReason::User);
                     }
                     None => dnd.cancel(),
                 },

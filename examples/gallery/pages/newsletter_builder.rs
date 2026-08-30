@@ -139,7 +139,7 @@ fn NewsletterDemo() -> Element {
     let mut next_id = use_signal(|| 100u32);
     let on_drop = move |o: DropOutcome<Card>| {
         // Ctrl/Cmd forces a copy (new id, source kept); a plain drag moves.
-        apply_clone_or_move(
+        try_apply_clone_or_move(
             &mut zones.write(),
             o,
             |c| c.id,
@@ -148,7 +148,8 @@ fn NewsletterDemo() -> Element {
                 next_id += 1;
                 c
             },
-        );
+        )
+        .expect("the demo accepts Move and Copy effects");
     };
     rsx! {
         Section {
@@ -162,6 +163,7 @@ fn NewsletterDemo() -> Element {
                         DropZone::<Card> {
                             id: zone,
                             label: name,
+                            allowed_effects: DropEffects::MOVE | DropEffects::COPY,
                             on_drop,
                             class: ZONE,
                             p { class: "mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7A776C]",

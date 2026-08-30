@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dioxus::prelude::*;
 
-use crate::core::types::{DragSessionId, Point};
+use crate::core::monitor::CancelReason;
+use crate::core::session::DragCompletion;
+use crate::core::types::{DragSessionId, Point, Rect};
 
 use super::geometry::WindowKey;
 use super::state::{DndWorld, WindowRecord, ZoneLocation};
@@ -158,22 +160,36 @@ impl<T: Clone + 'static> DndWorld<T> {
         let Some(result) = self.ctx.session_result(session) else {
             return false;
         };
-        self.finish_session(session, result)
+        let completion = if result {
+            DragCompletion::Dropped
+        } else {
+            DragCompletion::Cancelled(CancelReason::User)
+        };
+        self.finish_session(session, completion)
     }
 
-    pub(crate) fn finish_session(&self, session: DragSessionId, dropped: bool) -> bool {
+    pub(crate) fn finish_session(
+        &self,
+        session: DragSessionId,
+        completion: DragCompletion,
+    ) -> bool {
         let mut ctx = self.ctx;
         if !ctx.is_session(session) {
             return false;
         }
         let owns_metadata = self.drag_session() == Some(session);
-        let result = ctx.session_result(session).unwrap_or(dropped);
+        let result = ctx
+            .session_result(session)
+            .unwrap_or_else(|| completion.dropped());
         let finished = if ctx.session_result(session).is_some() {
             ctx.finalize_source(session)
-        } else if dropped {
+        } else if completion.dropped() {
             ctx.finish_source(session, true)
         } else {
-            ctx.cancel_session(session)
+            let DragCompletion::Cancelled(reason) = completion else {
+                unreachable!("dropped completion handled above")
+            };
+            ctx.cancel_session(session, reason)
         };
         if !finished {
             return false;
@@ -200,19 +216,43 @@ impl<T: Clone + 'static> DndWorld<T> {
         true
     }
 
-    pub(crate) fn finish_untracked(&self, dropped: bool) {
+    pub(crate) fn finish_untracked(&self, completion: DragCompletion) {
         let mut ctx = self.ctx;
-        if !dropped && ctx.dragging() {
-            ctx.cancel();
+        if let DragCompletion::Cancelled(reason) = completion {
+            if ctx.dragging() {
+                ctx.cancel_with_reason(reason);
+            }
         }
         if ctx.dragging() {
             return;
         }
-        if dropped && ctx.settling().is_some() {
+        if completion.dropped() && ctx.settling().is_some() {
             self.clear_hover();
         } else {
             self.clear_world_state();
         }
+    }
+
+    pub(crate) fn active_rect_in(
+        &self,
+        destination: WindowRecord<T>,
+        pointer: Point,
+    ) -> Option<Rect> {
+        let source = self.ctx.source_rect()?;
+        let active = self.active_drag()?;
+        let destination_scale = destination.geometry.scale();
+        let scale = if active.origin_scale > 0.0 && destination_scale > 0.0 {
+            active.origin_scale / destination_scale
+        } else {
+            1.0
+        };
+        let grab = self.ctx.grab();
+        Some(Rect::new(
+            pointer.x - grab.x * scale,
+            pointer.y - grab.y * scale,
+            source.width * scale,
+            source.height * scale,
+        ))
     }
 
     pub(super) fn clear_world_state(&self) {
@@ -305,7 +345,7 @@ mod tests {
             assert_eq!(world.drag_session(), Some(session));
 
             assert!(ctx.take().is_some());
-            assert!(world.finish_session(session, true));
+            assert!(world.finish_session(session, DragCompletion::Dropped));
 
             assert!(ctx.dragging());
             assert_eq!(ctx.payload().as_deref(), Some("replacement"));
@@ -314,7 +354,7 @@ mod tests {
                 Some(replacement)
             );
             assert_eq!(world.drag_session(), None);
-            world.finish_untracked(false);
+            world.finish_untracked(DragCompletion::Cancelled(CancelReason::User));
         });
     }
 }

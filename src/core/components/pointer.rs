@@ -37,7 +37,11 @@ pub(crate) fn touch_style(touch: TouchSense) -> &'static str {
 /// renderer with CSS animations; where there are none, `Auto` quietly loses
 /// only its long-press path (sideways pulls still drag).
 #[component]
-pub(crate) fn HoldTimer(pointer_id: i32, on_hold: EventHandler<i32>) -> Element {
+pub(crate) fn HoldTimer(
+    pointer_id: i32,
+    #[props(default = HOLD_DELAY_MS)] delay_ms: f64,
+    on_hold: EventHandler<i32>,
+) -> Element {
     rsx! {
         // The inline `display: none` matters: dioxus-web renders a bare
         // `style {}` element visibly, so without it the keyframes rule
@@ -48,7 +52,7 @@ pub(crate) fn HoldTimer(pointer_id: i32, on_hold: EventHandler<i32>) -> Element 
         }
         div {
             style: "position: absolute; width: 0; height: 0; overflow: hidden; \
-                    animation: dnd-hold-timer {HOLD_DELAY_MS}ms linear forwards;",
+                    animation: dnd-hold-timer {delay_ms.max(0.0)}ms linear forwards;",
             aria_hidden: true,
             onanimationend: move |_| on_hold.call(pointer_id),
         }

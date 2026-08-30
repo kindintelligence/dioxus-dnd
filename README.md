@@ -8,7 +8,7 @@
 [![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
 [![CI](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml/badge.svg)](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml)
 
-![Two desktop windows sharing one live drag world: a streaming telemetry chart dragged from Mission Control into a satellite window, still streaming inside the drag ghost mid-flight](assets/showcase.gif)
+![Two desktop windows sharing one live drag world: Mission Clock crosses the orange desktop gap, lands beside Channel Load in Satellite, then returns to Mission Control while updating inside the drag ghost](assets/showcase.gif)
 
 **The chart never stops streaming - even inside the drag ghost, mid-flight
 between windows.** [Multi-window desktop drags](#multi-window-desktop-drags)
@@ -57,8 +57,7 @@ walkthroughs and API references, and it is built with this crate.
 [Examples and website](#examples-and-website)
 
 **Reference:** [Feature flags](#feature-flags) ·
-[Platform notes](#platform-notes) · [Prior art](#prior-art) ·
-[Release process](RELEASING.md)
+[Platform notes](#platform-notes) · [Prior art](#prior-art)
 
 Every concept above also has a full guide and API reference in
 [`docs/`](docs/README.md), paired by name; the API references double as
@@ -93,14 +92,14 @@ cargo add dioxus-dnd
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 2.1 - 3.1 | **0.7** (verified against `0.7.9`) | 1.85+ |
+| 2.1 - 3.1 | **0.7** (verified against `0.7.10`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
 
 The inversion is deliberate: 2.0 was an early spike against the Dioxus
 0.8 alpha, the 2.1+ line tracks stable 0.7, and an 0.8 line will follow
 when 0.8 stabilizes. CI also compiles and runs the 3.1 Rust suite against
-published `0.8.0-alpha.0` as a source-compatibility signal. The published 3.1
-dependency remains on Dioxus 0.7 so existing `0.7.9` applications keep one
+published `0.8.0-alpha.1` as a source-compatibility signal. The published 3.1
+dependency remains on Dioxus 0.7 so existing 0.7 applications keep one
 coherent set of Dioxus public types.
 
 Rust 1.85 is tested for the renderer-neutral library. The optional desktop
@@ -108,9 +107,11 @@ dependency graph follows Dioxus Desktop's transitive MSRV and currently needs
 Rust 1.88 for the security-patched `time` release.
 
 The crate depends on `dioxus` with `default-features = false, features =
-["minimal"]`, so it adds no renderer and no extra dependencies of its own.
-The optional `web` feature is the only exception: it pulls in `web-sys` for
-native pointer capture (see [Feature flags](#feature-flags)).
+["minimal", "document", "mounted"]`. It still selects no renderer:
+`document` provides the cross-renderer file-picker bridge and `mounted`
+enables the element handles/geometry every drag target requires. The optional
+`web` feature additionally pulls in `web-sys` for native pointer capture (see
+[Feature flags](#feature-flags)).
 
 ## Quick start
 
@@ -291,12 +292,13 @@ with no wrapper class at all: `in-data-dragging:italic` inside your
 
 ### How styles merge
 
-One mechanic worth knowing: a forwarded `style` is *merged after* any
-functional inline style (`touch-action` on `Draggable`, positioning on
-`DragOverlay`, the `display: grid` layout on `SortableGrid`) rather than
-replacing it; your declarations win per property, the functional ones
-survive. So grid spacing is just `class: "gap-2"`, and custom column tracks
-are `style: "grid-template-columns: 2fr 1fr 1fr;"`.
+One mechanic worth knowing: every forwarded `style` is merged rather than
+replacing the component's style wholesale. Configurable defaults such as
+`SortableGrid` column tracks come first, so your declarations can override
+them. Behavior-critical declarations such as drag `touch-action`, overlay and
+FLIP transforms, and settle visibility come last so styling cannot disable
+the interaction. Grid spacing is still just `class: "gap-2"`, and custom
+column tracks are `style: "grid-template-columns: 2fr 1fr 1fr;"`.
 
 Not using Tailwind? The same contract serves plain CSS: `[data-over]`,
 `[data-intent="into"]`, `[data-sort-handle]`, and so on.
@@ -501,11 +503,13 @@ SortableList { len, render, on_sort, touch_handle: true,
 ## Auto-scroll
 
 Wrap any scrollable container in `AutoScroll` and drags hovering within
-`threshold` px of an edge (default 48) scroll it by up to `speed` px per
-event (default 24), ramped by proximity. Works for in-app pointer drags and
-native boundary drags alike. Pass `active: Some(false)` when a parent
-tracks drag state and wants to suppress scrolling. Pure `MountedData`, no
-JavaScript eval.
+`threshold` px of an edge (default 48) scroll it continuously, ramped by
+proximity. New code should set `speed_px_per_second` for exact,
+frame-rate-independent velocity. The 3.x `speed` prop remains available with
+its default of 24 nominal pixels per 60 Hz frame. Works for in-app pointer
+drags and native boundary drags alike. Pass `active: Some(false)` when a
+parent tracks drag state and wants to suppress scrolling. Pure `MountedData`,
+no JavaScript eval.
 
 ```rust,ignore
 AutoScroll { style: "max-height: 300px; overflow-y: auto;",
@@ -1089,6 +1093,10 @@ npm ci && npm run test:web
   best-effort paths (see [Platform notes](#platform-notes)). Enable it for
   web builds: `features = ["web"]` in your `Cargo.toml`. Touch and pen
   never need pointer capture.
+- `desktop`: enables `MultiWindowProvider`, desktop window geometry feeds,
+  and the cross-window pointer bridge. It pulls `dioxus-desktop`, Tokio time,
+  and the Linux X11 pointer sampler; ordinary single-window desktop apps do
+  not need it.
 
 ## Platform notes
 

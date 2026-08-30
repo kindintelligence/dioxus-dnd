@@ -1,9 +1,9 @@
 # Drag-and-drop API reference
 
 Ready-made components over the shared drag context: `DndProvider`,
-`Draggable`, `DropZone` and `DragOverlay`, plus `SettleSlot` for seamless
-drop-settle handoffs and `ParentZone`, the context marker behind automatic
-nesting.
+`Draggable`, `DropZone` and `DragOverlay`, plus `DragHandle`, `NoDrag`,
+`SettleSlot` for seamless drop-settle handoffs, and `ParentZone`, the
+context marker behind automatic nesting.
 
 Concept guide: [docs/concepts/drag-and-drop.md](../concepts/drag-and-drop.md).
 The two-world `BridgeDropZone` and the N-world `bridge_drop_zone!` macro
@@ -24,9 +24,14 @@ rsx! {
 
 All components are generic over the payload type `T: Clone + PartialEq +
 'static`. Except for `DndProvider`, each renders a wrapper `div` and
-forwards arbitrary attributes (`class`, `style`, `id`, ...) to it. A
-forwarded `style` is merged after any functional inline style, so your
-declarations win per property and the functional ones survive.
+forwards arbitrary attributes (`class`, `style`, `id`, ...) to it. Every
+forwarded style fragment is merged: configurable defaults are user-overridable,
+while behavior-critical declarations such as touch ownership and drag
+transforms are emitted last. Attributes
+that implement the component's contract—its event listeners, ARIA role,
+focusability, mounted hook, and `data-*` state—remain component-owned and
+cannot be replaced through the forwarded attribute list; use the component's
+typed callbacks for supported user events.
 
 ## `DndProvider`
 
@@ -35,7 +40,8 @@ of its own.
 
 | Prop | Type | Default | What it does |
 |---|---|---|---|
-| `dir` | `Direction` | `Ltr` | `Rtl` mirrors keyboard navigation and spatial zone ordering to follow a right-to-left layout. Synced every render, so a live switch propagates. |
+| `dir` | `Direction` | `Ltr` | `Rtl` mirrors keyboard navigation and spatial zone ordering to follow a right-to-left layout. Live prop changes propagate reactively. |
+| `release` | `ReleasePolicy<T>` | pointer-within, 48px recovery, not sticky | Collision detector, release recovery radius, and sticky-hover behavior for this provider. See [core.md](core.md#collision-and-release-policy). |
 
 ## `Draggable`
 
@@ -45,10 +51,12 @@ A focusable pointer and keyboard drag source. On drag start it pushes
 | Prop | Type | Default | What it does |
 |---|---|---|---|
 | `payload` | `T` | required | The value delivered to whichever zone receives this drag. |
+| `drag_id` | `Option<DragId>` | stable auto id | Stable source identity. Set it when a domain id should survive remounts; otherwise one is generated per mounted draggable. The ordinary HTML `id` remains available through forwarded attributes. |
 | `zone` | `Option<ZoneId>` | `None` | The zone this item currently lives in, reported in `DropOutcome::from`. |
 | `effect` | `DropEffect` | `Move` | Base drop effect; modifier keys can override it at release. |
 | `disabled` | `bool` | `false` | Disable dragging without unmounting. Renders `data-disabled`. |
 | `threshold` | `f64` | `8.0` | Movement in CSS px before a pointer press becomes a drag. |
+| `activation` | `Option<ActivationPolicy>` | `None` | Composable surface, handle, delay, distance, either, or manual activation. When omitted, `threshold` preserves the 3.x behavior. |
 | `touch` | `TouchSense` | `Auto` | How a finger shares the element with native scrolling. `Auto` keeps vertical swipes scrolling and picks up on a short hold or sideways pull; `Immediate` owns every touch from the first pixel. A mouse is identical under both; pens follow the finger rules. |
 | `label` | `Option<String>` | `None` | Human name used in screen-reader announcements ("Picked up {label}"). |
 | `on_drag_start` | `Option<EventHandler<()>>` | `None` | Fired when a drag begins. |
@@ -66,6 +74,36 @@ Down cycle zones in spatial order, Right descends into nested zones and Left
 ascends (mirrored under `Direction::Rtl`), Escape cancels. Keyboard drops
 deliver the same `DropOutcome` with `mode: DragMode::Keyboard`.
 
+### Activation policies and handles
+
+`ActivationPolicy` combines an `Activator` (`Surface`, `Handle`, or
+`Manual`) with an `ActivationConstraint`:
+
+- `Distance(px)` promotes after pointer travel.
+- `Delay { duration_ms, tolerance }` promotes after a hold while movement
+  remains within the tolerance.
+- `Either(vec![...])` promotes when any contained constraint succeeds.
+- `Manual` leaves pickup to a custom `DndContext` source.
+
+Use `DragHandle` for editable cards and other mixed-interaction surfaces.
+It renders an accessible `button`, is keyboard-operable, and activates only
+the nearest handle-configured draggable. Its functional style claims touch
+on the handle while the rest of the card remains available for native
+scrolling:
+
+```rust,ignore
+Draggable::<Card> {
+    payload: card,
+    activation: ActivationPolicy::handle(ActivationConstraint::Distance(6.0)),
+    DragHandle { label: "Move card", "Move" }
+    CardEditor {}
+}
+```
+
+For a surface-configured draggable, wrap controls that must never start a
+drag in `NoDrag`. It stops pointer and keyboard activation while preserving
+the control's normal behavior and exposes `data-no-drag` for inspection.
+
 ## `DropZone`
 
 A region that accepts drags carrying `T`. Registers itself (id, label,
@@ -78,7 +116,9 @@ hit-testable.
 |---|---|---|---|
 | `id` | `Option<ZoneId>` | auto | Stable identity. Auto-generated ids start at 2^32; explicit ids in `u32` range never collide with them. |
 | `label` | `Option<String>` | `None` | Human name for announcements ("Over {label}"). Kept in sync if the prop changes. |
-| `accepts` | `Option<Callback<T, bool>>` | accept all | Return `false` to reject a payload: the zone will not highlight, keyboard navigation skips it, and drops fall through it. Keep it cheap and do not mutate this zone registry from the predicate; registry queries invoke it under their read guard. |
+| `accepts` | `Option<Callback<T, bool>>` | accept all | Return `false` to reject a payload: the zone will not highlight, keyboard navigation skips it, and drops fall through it. Keep it cheap; registry queries snapshot candidates before invoking application callbacks. |
+| `accepts_query` | `Option<Callback<DropQuery<T>, bool>>` | accept all | Rich acceptance using payload, source, proposed effect, input mode, pointer kind, and drag id. Evaluated after `accepts`. |
+| `allowed_effects` | `DropEffects` | `DropEffects::ALL` | Effects this target supports. An unsupported proposal falls back deterministically to Move, Copy, then Link; an empty set rejects the drag. |
 | `edge` | `Option<EdgeSet>` | `None` | Opt into the closest-edge signal: renders `data-edge` live while an acceptable pointer drag hovers, and fills `DropOutcome::edge` at release. |
 | `on_drop` | `EventHandler<DropOutcome<T>>` | required | Fired on a successful drop. |
 
@@ -102,6 +142,25 @@ overlapping acceptable zones, the later record receives the drop; a rejecting
 one is skipped at release. CSS `z-index`, stacking contexts and portals are
 not inspected, so keep registry and visual order aligned when targets overlap,
 or avoid the overlap. Replacing a same-id record retains its slot.
+
+## Drag monitor
+
+`use_dnd_monitor::<T>` subscribes to the nearest provider's complete
+lifecycle without placing callbacks on every source or target:
+
+```rust,ignore
+use_dnd_monitor::<Card>(move |event| match event {
+    DndEvent::Dropped(receipt) => save_undo(receipt),
+    DndEvent::Cancelled { reason, .. } => log_cancel(reason),
+    _ => {}
+});
+```
+
+Events are `Started`, `Moved`, `TargetChanged`, `Dropped`, and `Cancelled`.
+Each carries a `DragSnapshot<T>` with the stable `DragId`; dropped events
+carry a parallel `DropReceipt<T>` containing both snapshot and the unchanged
+3.x `DropOutcome<T>`. This adds metadata without extending the constructible,
+exhaustive `DropOutcome` field set.
 
 ## `DragOverlay`
 

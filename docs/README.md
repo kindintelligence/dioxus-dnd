@@ -63,9 +63,6 @@ Every pattern also runs live in the
 [gallery](https://kindintelligence.github.io/dioxus-dnd/); each guide names
 its demo page.
 
-Maintainers preparing a crate release should follow the checked and automated
-[release process](../RELEASING.md).
-
 ## Linting the documentation
 
 CI checks the public documentation with
@@ -76,9 +73,6 @@ run it from the repository root before opening a pull request:
 cargo install rumdl --locked --version 0.2.30
 rumdl check .
 ```
-
-The repository configuration excludes `docs/superpowers/`, whose internal
-plans and specifications follow their own formatting conventions.
 
 ## How the API references stay honest
 

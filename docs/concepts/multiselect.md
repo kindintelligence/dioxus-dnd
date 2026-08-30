@@ -74,7 +74,9 @@ payload carry all of it.
   one-element `Vec<K>`.
 - The browser fires a trailing `click` on the source after a completed
   pointer drag; letting it through would collapse the just-dragged stack
-  to that one item. The component swallows exactly that one click.
+  to that one item. The component swallows exactly that one click; keyboard
+  drags never arm suppression, and cancellation or the next real pointerdown
+  retires a stale token.
 
 The conventions come from `Selection::click`; the rest of the `Selection`
 API (`select_only`, `toggle`, `clear`, `items`) is public for custom

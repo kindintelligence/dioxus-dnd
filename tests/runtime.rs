@@ -6,6 +6,7 @@
 use dioxus::prelude::*;
 use dioxus_dnd::prelude::*;
 use dioxus_dnd::test::{drag_sim, rerender, simulate_drag, DragSimProbe};
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
 type Shared<T> = Arc<Mutex<T>>;
@@ -18,6 +19,76 @@ fn run(app: fn() -> Element) -> String {
 }
 
 // --- DndContext state machine ------------------------------------------
+
+thread_local! {
+    static FROM_PARTS_STATE: RefCell<Option<Store<DragState<u8>>>> = const { RefCell::new(None) };
+    static FROM_PARTS_CONTEXTS: RefCell<Option<(DndContext<u8>, DndContext<u8>)>> =
+        const { RefCell::new(None) };
+}
+
+fn from_parts_app() -> Element {
+    let state = use_store(DragState::<u8>::default);
+    let announcement = use_signal(String::new);
+    let first = use_hook(|| DndContext::from_parts(state, announcement));
+    let second = use_hook(|| DndContext::from_parts(state, announcement));
+    use_hook(move || {
+        FROM_PARTS_STATE.with_borrow_mut(|slot| *slot = Some(state));
+        FROM_PARTS_CONTEXTS.with_borrow_mut(|slot| *slot = Some((first, second)));
+    });
+    rsx! {}
+}
+
+#[test]
+fn from_parts_preserves_shared_store_behavior() {
+    let mut dom = VirtualDom::new(from_parts_app);
+    dom.rebuild_in_place();
+
+    dom.in_runtime(|| {
+        let mut state = FROM_PARTS_STATE.with_borrow(|slot| slot.expect("state mounted"));
+        let (mut first, mut second) =
+            FROM_PARTS_CONTEXTS.with_borrow(|slot| slot.expect("contexts mounted"));
+
+        assert!(first == second, "legacy wrappers share handle identity");
+        state.set(DragState {
+            payload: Some(7),
+            effect: DropEffect::Copy,
+            ..DragState::default()
+        });
+        assert!(first.dragging());
+        assert!(second.dragging());
+        assert_eq!(first.payload(), Some(7));
+
+        second.cancel();
+        assert!(!first.dragging());
+        assert_eq!(state.read().payload, None);
+
+        first.start(
+            9,
+            Some(ZoneId(4)),
+            Point::new(2.0, 3.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        assert!(second.dragging(), "the sibling wrapper observes the start");
+        second.cancel();
+        assert!(
+            !first.dragging(),
+            "the sibling wrapper can cancel shared state"
+        );
+
+        let destination = Rect::new(10.0, 20.0, 30.0, 40.0);
+        state.set(DragState {
+            payload: Some(11),
+            settle: Some(destination),
+            ..DragState::default()
+        });
+        assert!(!first.dragging());
+        assert_eq!(second.settling(), Some(destination));
+        first.finish_settle();
+        assert_eq!(state.read().payload, None);
+    });
+}
 
 #[test]
 fn dnd_context_lifecycle() {
@@ -92,14 +163,10 @@ fn registry_register_replace_unregister_and_labels() {
         use_dnd_provider::<u32>();
         let mut reg = use_zone_registry::<u32>();
 
-        let record = |id: u64, label: &str| ZoneRecord::<u32> {
-            id: ZoneId(id),
-            parent: None,
-            label: Some(label.to_string()),
-            on_drop: Callback::new(|_| {}),
-            accepts: None,
-            mounted: None,
-            rect: None,
+        let record = |id: u64, label: &str| {
+            let mut record = ZoneRecord::<u32>::new(ZoneId(id), Callback::new(|_| {}));
+            record.label = Some(label.to_string());
+            record
         };
 
         let first_registration = reg.register(record(1, "one"));
@@ -160,16 +227,12 @@ fn registry_spatial_step_accepts_and_hit_test() {
         use_dnd_provider::<u32>();
         let mut reg = use_zone_registry::<u32>();
 
-        let record =
-            |id: u64, rect: Option<Rect>, accepts: Option<Callback<u32, bool>>| ZoneRecord::<u32> {
-                id: ZoneId(id),
-                parent: None,
-                label: None,
-                on_drop: Callback::new(|_| {}),
-                accepts,
-                mounted: None,
-                rect,
-            };
+        let record = |id: u64, rect: Option<Rect>, accepts: Option<Callback<u32, bool>>| {
+            let mut record = ZoneRecord::<u32>::new(ZoneId(id), Callback::new(|_| {}));
+            record.accepts = accepts;
+            record.rect = rect;
+            record
+        };
 
         // Registered in one order, laid out in another:
         //   A(id 1) at y=100        (visually last)
@@ -254,17 +317,15 @@ fn registry_closest_miss_evaluates_once_and_preserves_ties() {
         use_dnd_provider::<u32>();
         let mut reg = use_zone_registry::<u32>();
         let calls = Rc::new(Cell::new(0));
-        let record = |id: u64, x: f64, calls: Rc<Cell<usize>>| ZoneRecord::<u32> {
-            id: ZoneId(id),
-            parent: None,
-            label: Some(format!("zone-{id}")),
-            on_drop: Callback::new(|_| {}),
-            accepts: Some(Callback::new(move |_: u32| {
+        let record = |id: u64, x: f64, calls: Rc<Cell<usize>>| {
+            let mut record = ZoneRecord::<u32>::new(ZoneId(id), Callback::new(|_| {}));
+            record.label = Some(format!("zone-{id}"));
+            record.accepts = Some(Callback::new(move |_: u32| {
                 calls.set(calls.get() + 1);
                 true
-            })),
-            mounted: None,
-            rect: Some(Rect::new(x, 0.0, 40.0, 40.0)),
+            }));
+            record.rect = Some(Rect::new(x, 0.0, 40.0, 40.0));
+            record
         };
         reg.register(record(81, 0.0, calls.clone()));
         reg.register(record(82, 60.0, calls.clone()));
@@ -289,14 +350,10 @@ fn registry_spatial_rows_tolerate_subpixel_jitter() {
     fn app() -> Element {
         use_dnd_provider::<u32>();
         let mut reg = use_zone_registry::<u32>();
-        let record = |id: u64, x: f64, y: f64| ZoneRecord::<u32> {
-            id: ZoneId(id),
-            parent: None,
-            label: None,
-            on_drop: Callback::new(|_| {}),
-            accepts: None,
-            mounted: None,
-            rect: Some(Rect::new(x, y, 40.0, 40.0)),
+        let record = |id: u64, x: f64, y: f64| {
+            let mut record = ZoneRecord::<u32>::new(ZoneId(id), Callback::new(|_| {}));
+            record.rect = Some(Rect::new(x, y, 40.0, 40.0));
+            record
         };
 
         // Raw (y, x) sorting would visit 2 before 1 and 3 before 4.
@@ -323,6 +380,10 @@ fn registry_spatial_rows_tolerate_subpixel_jitter() {
 
 // --- Selection (multiselect) ---------------------------------------------
 
+thread_local! {
+    static EXTERNAL_SELECTION: RefCell<Option<Selection<u32>>> = const { RefCell::new(None) };
+}
+
 #[test]
 fn selection_click_semantics() {
     fn app() -> Element {
@@ -345,9 +406,50 @@ fn selection_click_semantics() {
         sel.clear();
         assert!(sel.is_empty());
 
+        let ordered = [1, 2, 3, 4, 5];
+        sel.select_only(2);
+        sel.click_in_order(5, Modifiers::SHIFT, &ordered);
+        assert_eq!(sel.items(), vec![2, 3, 4, 5]);
+        assert_eq!(sel.keyboard_range(&ordered, 4, -2, true), Some(2));
+        assert_eq!(sel.items(), vec![2, 3]);
+
+        sel.clear();
+        assert_eq!(sel.keyboard_range(&ordered, 1, 2, true), Some(3));
+        assert_eq!(sel.items(), vec![2, 3, 4]);
+
+        assert_eq!(sel.keyboard_range(&ordered, 1, isize::MAX, false), Some(4));
+        assert_eq!(sel.keyboard_range(&ordered, 3, isize::MIN, false), Some(0));
+
         rsx! { div {} }
     }
     run(app);
+}
+
+#[test]
+fn selection_hook_from_signal_retains_its_range_anchor_across_renders() {
+    fn app() -> Element {
+        let items = use_signal(Vec::<u32>::new);
+        let selection = use_selection_from_signal(items);
+        EXTERNAL_SELECTION.with_borrow_mut(|slot| *slot = Some(selection));
+        let count = selection.len();
+        rsx! { span { "{count}" } }
+    }
+
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    dom.in_runtime(|| {
+        let mut selection = EXTERNAL_SELECTION.with_borrow(|slot| slot.unwrap());
+        selection.select_only(2);
+        selection.toggle(2);
+        assert!(selection.is_empty());
+    });
+    rerender(&mut dom);
+
+    dom.in_runtime(|| {
+        let mut selection = EXTERNAL_SELECTION.with_borrow(|slot| slot.unwrap());
+        selection.click_in_order(5, Modifiers::SHIFT, &[1, 2, 3, 4, 5]);
+        assert_eq!(selection.items(), vec![2, 3, 4, 5]);
+    });
 }
 
 // --- Rendered accessibility attributes -----------------------------------
@@ -438,6 +540,362 @@ fn sortable_does_not_render_native_draggable_attrs() {
     );
 }
 
+thread_local! {
+    static STABLE_SORTABLE_REGISTRY: RefCell<Option<ZoneRegistry<SortablePayload<u32>>>> =
+        const { RefCell::new(None) };
+    static STABLE_SORTABLE_EVENTS: RefCell<Vec<ReorderEvent<u32>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn stable_sortable_app() -> Element {
+    let record = move |event: ReorderEvent<u32>| {
+        STABLE_SORTABLE_EVENTS.with_borrow_mut(|events| events.push(event));
+    };
+    rsx! {
+        SortableProvider::<u32> {
+            DragSimProbe::<SortablePayload<u32>> {}
+            SortableGroup::<u32> {
+                id: SortableGroupId::new(40),
+                on_reorder: record,
+                SortableItem::<u32> { id: 1, position: 0, "one" }
+                SortableItem::<u32> { id: 2, position: 1, "two" }
+                SortableItem::<u32> { id: 3, position: 2, "three" }
+            }
+            SortableGroup::<u32> {
+                id: SortableGroupId::new(41),
+                on_reorder: record,
+            }
+            StableSortableRegistryProbe {}
+        }
+    }
+}
+
+fn stable_sortable_swap_app() -> Element {
+    rsx! {
+        SortableProvider::<u32> {
+            SortableGroup::<u32> {
+                id: SortableGroupId::new(50),
+                strategy: SortStrategy::GridSwap,
+                on_reorder: move |event| {
+                    STABLE_SORTABLE_EVENTS.with_borrow_mut(|events| events.push(event));
+                },
+                SortableItem::<u32> { id: 10, position: 0, "ten" }
+                SortableItem::<u32> { id: 20, position: 1, "twenty" }
+            }
+            StableSortableRegistryProbe {}
+        }
+    }
+}
+
+fn stable_sortable_populated_groups_app() -> Element {
+    let record = move |event: ReorderEvent<u32>| {
+        STABLE_SORTABLE_EVENTS.with_borrow_mut(|events| events.push(event));
+    };
+    rsx! {
+        SortableProvider::<u32> {
+            SortableGroup::<u32> {
+                id: SortableGroupId::new(60),
+                on_reorder: record,
+                SortableItem::<u32> { id: 1, position: 0, "one" }
+            }
+            SortableGroup::<u32> {
+                id: SortableGroupId::new(61),
+                on_reorder: record,
+                SortableItem::<u32> { id: 2, position: 0, "two" }
+                SortableItem::<u32> { id: 3, position: 1, "three" }
+            }
+            StableSortableRegistryProbe {}
+        }
+    }
+}
+
+#[component]
+fn StableSortableRegistryProbe() -> Element {
+    let registry = use_zone_registry::<SortablePayload<u32>>();
+    use_hook(move || {
+        STABLE_SORTABLE_REGISTRY.with_borrow_mut(|slot| *slot = Some(registry));
+    });
+    rsx! {}
+}
+
+fn sortable_keyboard_query(payload: SortablePayload<u32>) -> DropQuery<SortablePayload<u32>> {
+    let mut query = DropQuery::new(payload);
+    query.mode = DragMode::Keyboard;
+    query
+}
+
+fn sortable_outcome(
+    payload: SortablePayload<u32>,
+    target: ZoneId,
+) -> DropOutcome<SortablePayload<u32>> {
+    DropOutcome {
+        payload,
+        from: None,
+        to: target,
+        effect: DropEffect::Move,
+        mode: DragMode::Keyboard,
+        client: Point::default(),
+        element: Point::default(),
+        grab: Point::default(),
+        edge: None,
+    }
+}
+
+#[test]
+fn stable_sortable_components_route_keyboard_positions_and_empty_groups() {
+    STABLE_SORTABLE_EVENTS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(stable_sortable_app);
+    dom.rebuild_in_place();
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::core::NoOpMutations);
+    }
+    let registry = STABLE_SORTABLE_REGISTRY
+        .with_borrow(|slot| slot.expect("stable sortable registry mounted"));
+
+    let first = SortablePayload::new(SortableGroupId::new(40), 1, 0);
+    let first_targets =
+        dom.in_runtime(|| registry.acceptable_query(&sortable_keyboard_query(first.clone())));
+    assert_eq!(
+        first_targets.len(),
+        4,
+        "the source append target, two later items, and empty group should be keyboard targets"
+    );
+    dom.in_runtime(|| {
+        for target in first_targets {
+            target
+                .on_drop
+                .call(sortable_outcome(first.clone(), target.id));
+        }
+    });
+    STABLE_SORTABLE_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events.as_slice(),
+            [
+                ReorderEvent::new(
+                    1,
+                    None,
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(40),
+                    Placement::After,
+                ),
+                ReorderEvent::new(
+                    1,
+                    Some(2),
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(40),
+                    Placement::After,
+                ),
+                ReorderEvent::new(
+                    1,
+                    Some(3),
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(40),
+                    Placement::After,
+                ),
+                ReorderEvent::new(
+                    1,
+                    None,
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(41),
+                    Placement::After,
+                ),
+            ]
+        )
+    });
+
+    STABLE_SORTABLE_EVENTS.with_borrow_mut(Vec::clear);
+    let last = SortablePayload::new(SortableGroupId::new(40), 3, 2);
+    let last_targets =
+        dom.in_runtime(|| registry.acceptable_query(&sortable_keyboard_query(last.clone())));
+    dom.in_runtime(|| {
+        for target in last_targets {
+            target
+                .on_drop
+                .call(sortable_outcome(last.clone(), target.id));
+        }
+    });
+    STABLE_SORTABLE_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events.as_slice(),
+            [
+                ReorderEvent::new(
+                    3,
+                    None,
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(40),
+                    Placement::After,
+                ),
+                ReorderEvent::new(
+                    3,
+                    Some(1),
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(40),
+                    Placement::Before,
+                ),
+                ReorderEvent::new(
+                    3,
+                    Some(2),
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(40),
+                    Placement::Before,
+                ),
+                ReorderEvent::new(
+                    3,
+                    None,
+                    SortableGroupId::new(40),
+                    SortableGroupId::new(41),
+                    Placement::After,
+                ),
+            ]
+        )
+    });
+}
+
+#[test]
+fn stable_sortable_keyboard_preserves_swap_intent() {
+    STABLE_SORTABLE_EVENTS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(stable_sortable_swap_app);
+    dom.rebuild_in_place();
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::core::NoOpMutations);
+    }
+    let registry = STABLE_SORTABLE_REGISTRY
+        .with_borrow(|slot| slot.expect("stable sortable registry mounted"));
+    let active = SortablePayload::new(SortableGroupId::new(50), 10, 0);
+    let targets =
+        dom.in_runtime(|| registry.acceptable_query(&sortable_keyboard_query(active.clone())));
+    assert_eq!(targets.len(), 2, "group background plus the other tile");
+
+    dom.in_runtime(|| {
+        targets[1]
+            .on_drop
+            .call(sortable_outcome(active, targets[1].id));
+    });
+    STABLE_SORTABLE_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events.as_slice(),
+            [ReorderEvent::new(
+                10,
+                Some(20),
+                SortableGroupId::new(50),
+                SortableGroupId::new(50),
+                Placement::On,
+            )]
+        );
+    });
+}
+
+#[test]
+fn stable_sortable_keyboard_can_append_to_populated_group() {
+    STABLE_SORTABLE_EVENTS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(stable_sortable_populated_groups_app);
+    dom.rebuild_in_place();
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::core::NoOpMutations);
+    }
+    let registry = STABLE_SORTABLE_REGISTRY
+        .with_borrow(|slot| slot.expect("stable sortable registry mounted"));
+    let records = dom.in_runtime(|| registry.records());
+    let destination_group_zone = records[2].id;
+    let active = SortablePayload::new(SortableGroupId::new(60), 1, 0);
+    let append_target = dom.in_runtime(|| {
+        registry
+            .acceptable_query(&sortable_keyboard_query(active.clone()))
+            .into_iter()
+            .find(|record| record.id == destination_group_zone)
+            .expect("populated destination append target")
+    });
+
+    dom.in_runtime(|| {
+        append_target
+            .on_drop
+            .call(sortable_outcome(active, append_target.id));
+    });
+    STABLE_SORTABLE_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events.as_slice(),
+            [ReorderEvent::new(
+                1,
+                None,
+                SortableGroupId::new(60),
+                SortableGroupId::new(61),
+                Placement::After,
+            )]
+        );
+    });
+}
+
+#[test]
+fn stable_sortable_pointer_delivery_uses_item_edges_and_empty_group_background() {
+    STABLE_SORTABLE_EVENTS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(stable_sortable_app);
+    dom.rebuild_in_place();
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::core::NoOpMutations);
+    }
+    let registry = STABLE_SORTABLE_REGISTRY
+        .with_borrow(|slot| slot.expect("stable sortable registry mounted"));
+    let records = dom.in_runtime(|| registry.records());
+    assert_eq!(
+        records.len(),
+        5,
+        "two group targets plus three item targets"
+    );
+
+    let mut sim = drag_sim::<SortablePayload<u32>>();
+    sim.place(&dom, records[0].id, Rect::new(0.0, 0.0, 100.0, 120.0));
+    sim.place(&dom, records[1].id, Rect::new(0.0, 0.0, 100.0, 40.0));
+    sim.place(&dom, records[2].id, Rect::new(0.0, 40.0, 100.0, 40.0));
+    sim.place(&dom, records[3].id, Rect::new(0.0, 80.0, 100.0, 40.0));
+    sim.place(&dom, records[4].id, Rect::new(200.0, 0.0, 100.0, 120.0));
+
+    sim.pick_up(&dom, SortablePayload::new(SortableGroupId::new(40), 1, 0));
+    sim.move_to(&dom, Point::new(50.0, 110.0));
+    assert_eq!(sim.release(&dom), Some(records[3].id));
+    STABLE_SORTABLE_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events.as_slice(),
+            [ReorderEvent::new(
+                1,
+                Some(3),
+                SortableGroupId::new(40),
+                SortableGroupId::new(40),
+                Placement::After,
+            )]
+        )
+    });
+
+    STABLE_SORTABLE_EVENTS.with_borrow_mut(Vec::clear);
+    sim.pick_up(&dom, SortablePayload::new(SortableGroupId::new(40), 2, 1));
+    sim.move_to(&dom, Point::new(50.0, 60.0));
+    assert_eq!(
+        sim.release(&dom),
+        Some(records[2].id),
+        "a pointer self-hit must not fall through to group append"
+    );
+    STABLE_SORTABLE_EVENTS.with_borrow(|events| assert!(events.is_empty()));
+
+    STABLE_SORTABLE_EVENTS.with_borrow_mut(Vec::clear);
+    sim.pick_up(&dom, SortablePayload::new(SortableGroupId::new(40), 2, 1));
+    sim.move_to(&dom, Point::new(250.0, 60.0));
+    assert_eq!(sim.release(&dom), Some(records[4].id));
+    STABLE_SORTABLE_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events.as_slice(),
+            [ReorderEvent::new(
+                2,
+                None,
+                SortableGroupId::new(40),
+                SortableGroupId::new(41),
+                Placement::After,
+            )]
+        )
+    });
+}
+
 #[test]
 fn sortable_touch_handle_keeps_wrapper_on_one_row() {
     fn app() -> Element {
@@ -484,14 +942,11 @@ fn nested_zone_traversal() {
         use_dnd_provider::<u32>();
         let mut reg = use_zone_registry::<u32>();
 
-        let record = |id: u64, parent: Option<u64>, y: f64| ZoneRecord::<u32> {
-            id: ZoneId(id),
-            parent: parent.map(ZoneId),
-            label: None,
-            on_drop: Callback::new(|_| {}),
-            accepts: None,
-            mounted: None,
-            rect: Some(Rect::new(0.0, y, 100.0, 40.0)),
+        let record = |id: u64, parent: Option<u64>, y: f64| {
+            let mut record = ZoneRecord::<u32>::new(ZoneId(id), Callback::new(|_| {}));
+            record.parent = parent.map(ZoneId);
+            record.rect = Some(Rect::new(0.0, y, 100.0, 40.0));
+            record
         };
 
         // Two root boards; the first contains two columns.
@@ -1251,6 +1706,83 @@ fn board_slot_registered_drop_reads_latest_index() {
     );
 }
 
+#[derive(Clone, Props)]
+struct DynamicBoardAcceptsProps {
+    allowed: Shared<bool>,
+    observed: Shared<Vec<bool>>,
+}
+
+impl PartialEq for DynamicBoardAcceptsProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.allowed, &other.allowed) && Arc::ptr_eq(&self.observed, &other.observed)
+    }
+}
+
+fn dynamic_board_accepts_app(props: DynamicBoardAcceptsProps) -> Element {
+    let allowed = *props.allowed.lock().unwrap();
+    rsx! {
+        DndProvider::<BoardPayload<&'static str>> {
+            BoardColumn::<&'static str> {
+                id: ZoneId(191),
+                accepts: move |_: BoardPayload<&'static str>| allowed,
+                on_move: move |_| {},
+                BoardSlot::<&'static str> {
+                    column: ZoneId(191),
+                    index: 0,
+                    on_move: move |_| {},
+                }
+                DynamicBoardAcceptsProbe { allowed, observed: props.observed }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Props)]
+struct DynamicBoardAcceptsProbeProps {
+    allowed: bool,
+    observed: Shared<Vec<bool>>,
+}
+
+impl PartialEq for DynamicBoardAcceptsProbeProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.allowed == other.allowed && Arc::ptr_eq(&self.observed, &other.observed)
+    }
+}
+
+#[allow(non_snake_case)]
+fn DynamicBoardAcceptsProbe(props: DynamicBoardAcceptsProbeProps) -> Element {
+    let registry = use_zone_registry::<BoardPayload<&'static str>>();
+    let payload = BoardPayload {
+        item: "card",
+        from: ZoneId(1),
+        index: 0,
+    };
+    let accepted = !registry.children_of(Some(ZoneId(191)), &payload).is_empty();
+    props.observed.lock().unwrap().push(accepted);
+    assert_eq!(accepted, props.allowed);
+    rsx! {}
+}
+
+#[test]
+fn board_slots_follow_live_column_acceptance_policy() {
+    let allowed = Arc::new(Mutex::new(false));
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        dynamic_board_accepts_app,
+        DynamicBoardAcceptsProps {
+            allowed: allowed.clone(),
+            observed: observed.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+
+    *allowed.lock().unwrap() = true;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+
+    assert_eq!(*observed.lock().unwrap(), vec![false, true]);
+}
+
 // --- Tree targets join the zone registry ---------------------------------
 
 /// TreeNodeTargets register themselves as zones (that's what makes them
@@ -1427,68 +1959,67 @@ impl PartialEq for DynamicTreeTargetProbeProps {
 #[allow(non_snake_case)]
 fn DynamicTreeTargetProbe(props: DynamicTreeTargetProbeProps) -> Element {
     let phase = props.phase;
-    {
-        let mut runs = props.runs.lock().unwrap();
-        if runs.contains(&phase) {
-            return rsx! { div {} };
-        }
-        runs.push(phase);
-    }
-
     let registry = use_zone_registry::<&'static str>();
-    match phase {
-        0 => {
-            let zones = registry.children_of(None, &"blocked");
-            assert_eq!(zones.len(), 1);
-            assert_eq!(zones[0].label.as_deref(), Some("alpha"));
-            zones[0].on_drop.call(DropOutcome {
-                payload: "first",
-                from: None,
-                to: zones[0].id,
-                effect: DropEffect::Move,
-                mode: DragMode::Keyboard,
-                client: Point::default(),
-                element: Point::new(0.0, 120.0),
-                grab: Point::default(),
-
-                edge: None,
-            });
+    use_effect(use_reactive!(|(phase)| {
+        {
+            let mut runs = props.runs.lock().unwrap();
+            if runs.contains(&phase) {
+                return;
+            }
+            runs.push(phase);
         }
-        1 => {
-            assert!(
-                registry.children_of(None, &"blocked").is_empty(),
-                "updated accepts callback should reject blocked payloads"
-            );
-            let zones = registry.children_of(None, &"allowed");
-            assert_eq!(zones.len(), 1);
-            assert_eq!(zones[0].label.as_deref(), Some("beta"));
-            zones[0].on_drop.call(DropOutcome {
-                payload: "blocked",
-                from: None,
-                to: zones[0].id,
-                effect: DropEffect::Move,
-                mode: DragMode::Keyboard,
-                client: Point::default(),
-                element: Point::new(0.0, 120.0),
-                grab: Point::default(),
 
-                edge: None,
-            });
-            zones[0].on_drop.call(DropOutcome {
-                payload: "allowed",
-                from: None,
-                to: zones[0].id,
-                effect: DropEffect::Move,
-                mode: DragMode::Keyboard,
-                client: Point::default(),
-                element: Point::new(0.0, 120.0),
-                grab: Point::default(),
-
-                edge: None,
-            });
+        match phase {
+            0 => {
+                let zones = registry.children_of(None, &"blocked");
+                assert_eq!(zones.len(), 1);
+                assert_eq!(zones[0].label.as_deref(), Some("alpha"));
+                zones[0].on_drop.call(DropOutcome {
+                    payload: "first",
+                    from: None,
+                    to: zones[0].id,
+                    effect: DropEffect::Move,
+                    mode: DragMode::Keyboard,
+                    client: Point::default(),
+                    element: Point::new(0.0, 120.0),
+                    grab: Point::default(),
+                    edge: None,
+                });
+            }
+            1 => {
+                assert!(
+                    registry.children_of(None, &"blocked").is_empty(),
+                    "updated accepts callback should reject blocked payloads"
+                );
+                let zones = registry.children_of(None, &"allowed");
+                assert_eq!(zones.len(), 1);
+                assert_eq!(zones[0].label.as_deref(), Some("beta"));
+                zones[0].on_drop.call(DropOutcome {
+                    payload: "blocked",
+                    from: None,
+                    to: zones[0].id,
+                    effect: DropEffect::Move,
+                    mode: DragMode::Keyboard,
+                    client: Point::default(),
+                    element: Point::new(0.0, 120.0),
+                    grab: Point::default(),
+                    edge: None,
+                });
+                zones[0].on_drop.call(DropOutcome {
+                    payload: "allowed",
+                    from: None,
+                    to: zones[0].id,
+                    effect: DropEffect::Move,
+                    mode: DragMode::Keyboard,
+                    client: Point::default(),
+                    element: Point::new(0.0, 120.0),
+                    grab: Point::default(),
+                    edge: None,
+                });
+            }
+            other => panic!("unexpected phase {other}"),
         }
-        other => panic!("unexpected phase {other}"),
-    }
+    }));
 
     rsx! { div {} }
 }
@@ -1508,6 +2039,10 @@ fn tree_target_registered_callback_reads_latest_props() {
     );
 
     dom.rebuild_in_place();
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    }
     assert_eq!(
         *drops.lock().unwrap(),
         vec![(0, TreeDropEvent::new("first", NodeId(7), DropIntent::After))]
@@ -1515,7 +2050,10 @@ fn tree_target_registered_callback_reads_latest_props() {
 
     *phase.lock().unwrap() = 1;
     dom.mark_dirty(ScopeId::APP);
-    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+    }
 
     assert_eq!(
         *drops.lock().unwrap(),
@@ -1586,10 +2124,316 @@ fn file_drop_zone_renders_a_headless_native_picker() {
     assert!(html.contains(r#"accept=".png,image/*""#), "missing: {html}");
     assert!(html.contains("multiple"), "missing: {html}");
     assert!(html.contains("hidden"), "missing: {html}");
+    assert!(html.contains(r#"role="button""#), "missing: {html}");
+    assert!(html.contains("tabindex=0"), "missing: {html}");
     assert!(
         !html.contains("style="),
         "FileDropZone must not ship visual styles: {html}"
     );
+}
+
+#[test]
+fn handle_activation_moves_semantics_to_the_handle() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<String> {
+                Draggable::<String> {
+                    payload: "card".to_string(),
+                    activation: ActivationPolicy::handle(ActivationConstraint::Distance(6.0)),
+                    input { value: "editable" }
+                    DragHandle { label: "Move card", "Move" }
+                }
+            }
+        }
+    }
+
+    let html = run(app);
+    assert!(html.contains("data-dnd-handle"), "missing handle: {html}");
+    assert!(
+        html.contains(r#"aria-label="Move card""#),
+        "missing: {html}"
+    );
+    assert!(
+        html.contains("tabindex=-1"),
+        "wrapper should leave tab order: {html}"
+    );
+}
+
+thread_local! {
+    static MONITOR_EVENTS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    static MONITOR_EDGES: RefCell<Vec<Option<Edge>>> = const { RefCell::new(Vec::new()) };
+    static MONITOR_CANCEL_REASONS: RefCell<Vec<CancelReason>> = const { RefCell::new(Vec::new()) };
+    static SETTLE_CONTEXT: RefCell<Option<DndContext<String>>> = const { RefCell::new(None) };
+    static DISABLED_EFFECT_CONTEXT: RefCell<Option<DndContext<String>>> = const { RefCell::new(None) };
+    static REENTRANT_MONITOR_EVENTS: RefCell<Vec<(&'static str, Option<CancelReason>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+#[component]
+fn SettleContextProbe() -> Element {
+    let dnd = use_dnd::<String>();
+    use_hook(move || SETTLE_CONTEXT.with_borrow_mut(|slot| *slot = Some(dnd)));
+    rsx! {}
+}
+
+#[component]
+fn DisabledEffectContextProbe() -> Element {
+    let dnd = use_dnd::<String>();
+    use_hook(move || DISABLED_EFFECT_CONTEXT.with_borrow_mut(|slot| *slot = Some(dnd)));
+    rsx! {}
+}
+
+#[component]
+fn MonitorProbe() -> Element {
+    use_dnd_monitor::<String>(|event| {
+        let name = match event {
+            DndEvent::Started(_) => "started",
+            DndEvent::Moved(_) => "moved",
+            DndEvent::TargetChanged { .. } => "target",
+            DndEvent::Dropped(receipt) => {
+                MONITOR_EDGES.with_borrow_mut(|edges| edges.push(receipt.outcome.edge));
+                "dropped"
+            }
+            DndEvent::Cancelled { reason, .. } => {
+                MONITOR_CANCEL_REASONS.with_borrow_mut(|reasons| reasons.push(reason));
+                "cancelled"
+            }
+            _ => "other",
+        };
+        MONITOR_EVENTS.with_borrow_mut(|events| events.push(name));
+    });
+    rsx! {}
+}
+
+#[component]
+fn ReentrantMonitorProbe() -> Element {
+    let mut dnd = use_dnd::<String>();
+    use_dnd_monitor::<String>(move |event| {
+        if matches!(event, DndEvent::Started(_)) {
+            dnd.cancel_with_reason(CancelReason::PointerCancelled);
+        }
+    });
+    use_dnd_monitor::<String>(|event| {
+        let observed = match event {
+            DndEvent::Started(_) => Some(("started", None)),
+            DndEvent::Cancelled { reason, .. } => Some(("cancelled", Some(reason))),
+            _ => None,
+        };
+        if let Some(observed) = observed {
+            REENTRANT_MONITOR_EVENTS.with_borrow_mut(|events| events.push(observed));
+        }
+    });
+    rsx! {}
+}
+
+#[test]
+fn monitor_observes_shared_delivery_lifecycle() {
+    const TARGET: ZoneId = ZoneId(9_001);
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<String> {
+                MonitorProbe {}
+                DragSimProbe::<String> {}
+                DropZone::<String> {
+                    id: TARGET,
+                    edge: EdgeSet::Vertical,
+                    on_drop: move |_| {},
+                    "target"
+                }
+            }
+        }
+    }
+
+    MONITOR_EVENTS.with_borrow_mut(Vec::clear);
+    MONITOR_EDGES.with_borrow_mut(Vec::clear);
+    MONITOR_CANCEL_REASONS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<String>();
+    sim.place(&dom, TARGET, Rect::new(0.0, 0.0, 100.0, 100.0));
+    sim.pick_up(&dom, "card".to_string());
+    sim.move_to(&dom, Point::new(20.0, 20.0));
+    assert_eq!(sim.release(&dom), Some(TARGET));
+
+    MONITOR_EVENTS
+        .with_borrow(|events| assert_eq!(events, &["started", "moved", "target", "dropped"]));
+    MONITOR_EDGES.with_borrow(|edges| assert_eq!(edges, &[Some(Edge::Top)]));
+}
+
+#[test]
+fn disabled_drop_effect_skips_acceptance_hover_and_delivery() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: ZoneId = ZoneId(9_000);
+    static LEGACY_ACCEPTS: AtomicUsize = AtomicUsize::new(0);
+    static RICH_ACCEPTS: AtomicUsize = AtomicUsize::new(0);
+    static DELIVERIES: AtomicUsize = AtomicUsize::new(0);
+
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<String> {
+                DragSimProbe::<String> {}
+                DisabledEffectContextProbe {}
+                DropZone::<String> {
+                    id: TARGET,
+                    accepts: move |_| {
+                        LEGACY_ACCEPTS.fetch_add(1, Ordering::Relaxed);
+                        true
+                    },
+                    accepts_query: move |_| {
+                        RICH_ACCEPTS.fetch_add(1, Ordering::Relaxed);
+                        true
+                    },
+                    on_drop: move |_| {
+                        DELIVERIES.fetch_add(1, Ordering::Relaxed);
+                    },
+                    "target"
+                }
+            }
+        }
+    }
+
+    LEGACY_ACCEPTS.store(0, Ordering::Relaxed);
+    RICH_ACCEPTS.store(0, Ordering::Relaxed);
+    DELIVERIES.store(0, Ordering::Relaxed);
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<String>();
+    sim.place(&dom, TARGET, Rect::new(-10.0, -10.0, 100.0, 100.0));
+    let mut dnd =
+        DISABLED_EFFECT_CONTEXT.with_borrow(|slot| slot.expect("disabled-effect context mounted"));
+    dom.in_runtime(|| {
+        dnd.start(
+            "card".to_string(),
+            None,
+            Point::new(10.0, 10.0),
+            Point::default(),
+            DropEffect::None,
+            DragMode::Pointer,
+        )
+    });
+    rerender(&mut dom);
+    let html = dioxus_ssr::render(&dom);
+    assert!(!html.contains("data-active"));
+    assert_eq!(LEGACY_ACCEPTS.load(Ordering::Relaxed), 0);
+    assert_eq!(RICH_ACCEPTS.load(Ordering::Relaxed), 0);
+
+    assert_eq!(sim.release_as(&dom, DropEffect::None), None);
+    assert_eq!(LEGACY_ACCEPTS.load(Ordering::Relaxed), 0);
+    assert_eq!(RICH_ACCEPTS.load(Ordering::Relaxed), 0);
+    assert_eq!(DELIVERIES.load(Ordering::Relaxed), 0);
+    assert!(dom.in_runtime(|| !dnd.dragging()));
+    assert!(sim.completions(&dom).is_empty());
+}
+
+#[test]
+fn settled_drop_has_exactly_one_terminal_monitor_event() {
+    const TARGET: ZoneId = ZoneId(9_002);
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<String> {
+                MonitorProbe {}
+                SettleContextProbe {}
+                DragSimProbe::<String> {}
+                DropZone::<String> {
+                    id: TARGET,
+                    on_drop: move |_| {},
+                    "target"
+                }
+                DragOverlay::<String> { settle: true, "ghost" }
+            }
+        }
+    }
+
+    MONITOR_EVENTS.with_borrow_mut(Vec::clear);
+    MONITOR_CANCEL_REASONS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<String>();
+    sim.place(&dom, TARGET, Rect::new(0.0, 0.0, 100.0, 100.0));
+    sim.pick_up(&dom, "card".to_string());
+    sim.move_to(&dom, Point::new(20.0, 20.0));
+    assert_eq!(sim.release(&dom), Some(TARGET));
+
+    let mut dnd = SETTLE_CONTEXT.with_borrow(|slot| slot.expect("settle context mounted"));
+    assert!(dom.in_runtime(|| dnd.settling().is_some()));
+    dom.in_runtime(|| dnd.cancel());
+
+    MONITOR_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "dropped" || **event == "cancelled")
+                .count(),
+            1,
+            "a visual-settle interruption cannot create a second terminal event: {events:?}"
+        );
+        assert_eq!(events.last(), Some(&"dropped"));
+    });
+    MONITOR_CANCEL_REASONS.with_borrow(|reasons| assert!(reasons.is_empty()));
+    assert_eq!(sim.completions(&dom), vec![true]);
+    assert!(dom.in_runtime(|| dnd.payload().is_none()));
+}
+
+#[test]
+fn monitor_reports_no_target_and_replaced_cancellation_reasons() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<String> {
+                MonitorProbe {}
+                DragSimProbe::<String> {}
+            }
+        }
+    }
+
+    MONITOR_EVENTS.with_borrow_mut(Vec::clear);
+    MONITOR_CANCEL_REASONS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<String>();
+
+    sim.pick_up(&dom, "first".to_string());
+    sim.pick_up(&dom, "replacement".to_string());
+    assert_eq!(sim.completions(&dom), vec![false]);
+    sim.move_to(&dom, Point::new(100.0, 100.0));
+    assert_eq!(sim.release(&dom), None);
+    assert_eq!(sim.completions(&dom), vec![false, false]);
+    MONITOR_CANCEL_REASONS.with_borrow(|reasons| {
+        assert_eq!(
+            reasons.as_slice(),
+            &[CancelReason::Replaced, CancelReason::NoTarget]
+        );
+    });
+}
+
+#[test]
+fn nested_monitor_events_are_delivered_fifo_to_every_listener() {
+    fn app() -> Element {
+        rsx! {
+            DndProvider::<String> {
+                ReentrantMonitorProbe {}
+                DragSimProbe::<String> {}
+            }
+        }
+    }
+
+    REENTRANT_MONITOR_EVENTS.with_borrow_mut(Vec::clear);
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<String>();
+    sim.pick_up(&dom, "card".to_string());
+
+    assert!(!sim.dragging(&dom));
+    assert_eq!(sim.completions(&dom), vec![false]);
+    REENTRANT_MONITOR_EVENTS.with_borrow(|events| {
+        assert_eq!(
+            events.as_slice(),
+            &[
+                ("started", None),
+                ("cancelled", Some(CancelReason::PointerCancelled)),
+            ]
+        );
+    });
 }
 
 #[test]
@@ -1654,6 +2498,49 @@ fn state_attributes_present_mid_drag() {
 // --- class forwarding & style merging ------------------------------------
 
 #[test]
+fn forwarded_attributes_cannot_replace_component_invariants() {
+    fn app() -> Element {
+        let mut dnd = use_dnd_provider::<u8>();
+        dnd.start(
+            1,
+            None,
+            Point::new(10.0, 10.0),
+            Point::default(),
+            DropEffect::Move,
+            DragMode::Pointer,
+        );
+        rsx! {
+            Draggable::<u8> {
+                payload: 1,
+                role: "link",
+                tabindex: -1_i64,
+                "drag"
+            }
+            DropZone::<u8> {
+                id: ZoneId(42),
+                "data-active": "caller-value",
+                on_drop: move |_| {},
+                "drop"
+            }
+        }
+    }
+
+    let html = run(app);
+    assert!(
+        html.contains(r#"role="button""#),
+        "draggable role replaced: {html}"
+    );
+    assert!(
+        html.contains("tabindex=0"),
+        "draggable tabindex replaced: {html}"
+    );
+    assert!(
+        html.contains(r#"data-active="true""#) && !html.contains("caller-value"),
+        "drop-zone state marker replaced: {html}"
+    );
+}
+
+#[test]
 fn drag_overlay_forwards_class_and_merges_style() {
     fn app() -> Element {
         let mut dnd = use_dnd_provider::<String>();
@@ -1696,16 +2583,57 @@ fn draggable_merges_user_style_with_touch_action() {
         }
     }
     let html = run(app);
-    // Functional style first (Auto's pan-y block), user declarations last so
-    // they win per-property.
+    // User styling remains present, while the drag sensor's behavior-critical
+    // touch declarations are emitted last.
     assert!(
         html.contains("touch-action: pan-y"),
         "touch-action must survive a user style: {html}"
     );
     assert!(
-        html.contains("-webkit-touch-callout: none; background: red;"),
-        "user style must come after the functional block: {html}"
+        html.contains("background: red; touch-action: pan-y"),
+        "touch behavior must follow the user style: {html}"
     );
+}
+
+#[test]
+fn dioxus_style_properties_cannot_replace_drag_or_flip_invariants() {
+    fn app() -> Element {
+        use_dnd_provider::<String>();
+        rsx! {
+            Draggable::<String> {
+                payload: "x".to_string(),
+                touch_action: "auto",
+                user_select: "text",
+                background_color: "red",
+                "drag"
+            }
+            FlipItem {
+                epoch: 0,
+                transform: "scale(9)",
+                transition: "none",
+                opacity: "0.5",
+                "flip"
+            }
+        }
+    }
+
+    let html = run(app);
+    assert!(
+        html.contains("touch-action: pan-y pinch-zoom"),
+        "drag touch ownership missing: {html}"
+    );
+    assert!(!html.contains("touch-action:auto"), "caller won: {html}");
+    assert!(!html.contains("user-select:text"), "caller won: {html}");
+    assert!(
+        html.contains("background-color:red"),
+        "user style lost: {html}"
+    );
+    assert!(
+        html.contains("transform: none"),
+        "FLIP transform lost: {html}"
+    );
+    assert!(!html.contains("scale(9)"), "caller replaced FLIP: {html}");
+    assert!(html.contains("opacity:0.5"), "unrelated style lost: {html}");
 }
 
 #[test]
@@ -1959,14 +2887,10 @@ fn rtl_spatial_order_follows_reading_direction() {
         use_dnd_provider::<u32>();
         let mut reg = use_zone_registry::<u32>();
 
-        let record = |id: u64, x: f64, y: f64| ZoneRecord::<u32> {
-            id: ZoneId(id),
-            parent: None,
-            label: None,
-            on_drop: Callback::new(|_| {}),
-            accepts: None,
-            mounted: None,
-            rect: Some(Rect::new(x, y, 40.0, 40.0)),
+        let record = |id: u64, x: f64, y: f64| {
+            let mut record = ZoneRecord::<u32>::new(ZoneId(id), Callback::new(|_| {}));
+            record.rect = Some(Rect::new(x, y, 40.0, 40.0));
+            record
         };
         // One row of three zones, then one zone on a second row.
         reg.register(record(1, 0.0, 0.0));
@@ -2079,28 +3003,20 @@ fn bridge_app(props: BridgeProps) -> Element {
     let ticket_drops = props.ticket_drops.clone();
     let person_drops = props.person_drops.clone();
     use_hook(move || {
-        reg_a.register(ZoneRecord {
+        let mut tickets = ZoneRecord::new(
             id,
-            parent: None,
-            label: Some("agenda".into()),
-            on_drop: Callback::new(move |o: DropOutcome<&'static str>| {
+            Callback::new(move |o: DropOutcome<&'static str>| {
                 ticket_drops.lock().unwrap().push(o.payload)
             }),
-            accepts: None,
-            mounted: None,
-            rect: None,
-        });
-        reg_b.register(ZoneRecord {
+        );
+        tickets.label = Some("agenda".into());
+        reg_a.register(tickets);
+        let mut people = ZoneRecord::new(
             id,
-            parent: None,
-            label: Some("agenda".into()),
-            on_drop: Callback::new(move |o: DropOutcome<u32>| {
-                person_drops.lock().unwrap().push(o.payload)
-            }),
-            accepts: None,
-            mounted: None,
-            rect: None,
-        });
+            Callback::new(move |o: DropOutcome<u32>| person_drops.lock().unwrap().push(o.payload)),
+        );
+        people.label = Some("agenda".into());
+        reg_b.register(people);
     });
 
     rsx! {
@@ -2296,6 +3212,79 @@ fn bridge_drop_zone_component_registers_both_worlds_with_per_world_accepts() {
     );
 }
 
+#[derive(Clone, Props)]
+struct DynamicBridgeAcceptsProps {
+    allowed: Shared<bool>,
+    observed: Shared<Vec<bool>>,
+}
+
+impl PartialEq for DynamicBridgeAcceptsProps {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.allowed, &other.allowed) && Arc::ptr_eq(&self.observed, &other.observed)
+    }
+}
+
+fn dynamic_bridge_accepts_app(props: DynamicBridgeAcceptsProps) -> Element {
+    let allowed = *props.allowed.lock().unwrap();
+    rsx! {
+        DndProvider::<u8> {
+            DndProvider::<u16> {
+                BridgeDropZone::<u8, u16> {
+                    id: ZoneId(601),
+                    accepts_a: move |_: u8| allowed,
+                    on_drop_a: move |_: DropOutcome<u8>| {},
+                    on_drop_b: move |_: DropOutcome<u16>| {},
+                }
+                DynamicBridgeAcceptsProbe { allowed, observed: props.observed }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Props)]
+struct DynamicBridgeAcceptsProbeProps {
+    allowed: bool,
+    observed: Shared<Vec<bool>>,
+}
+
+impl PartialEq for DynamicBridgeAcceptsProbeProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.allowed == other.allowed && Arc::ptr_eq(&self.observed, &other.observed)
+    }
+}
+
+#[allow(non_snake_case)]
+fn DynamicBridgeAcceptsProbe(props: DynamicBridgeAcceptsProbeProps) -> Element {
+    let registry = use_zone_registry::<u8>();
+    let accepted = registry
+        .acceptable(&7)
+        .iter()
+        .any(|zone| zone.id == ZoneId(601));
+    props.observed.lock().unwrap().push(accepted);
+    assert_eq!(accepted, props.allowed);
+    rsx! {}
+}
+
+#[test]
+fn bridge_registry_delivery_follows_live_acceptance_policy() {
+    let allowed = Arc::new(Mutex::new(false));
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mut dom = VirtualDom::new_with_props(
+        dynamic_bridge_accepts_app,
+        DynamicBridgeAcceptsProps {
+            allowed: allowed.clone(),
+            observed: observed.clone(),
+        },
+    );
+    dom.rebuild_in_place();
+
+    *allowed.lock().unwrap() = true;
+    dom.mark_dirty(ScopeId::APP);
+    dom.render_immediate(&mut dioxus::dioxus_core::NoOpMutations);
+
+    assert_eq!(*observed.lock().unwrap(), vec![false, true]);
+}
+
 // The generated form for N > 2: `bridge_drop_zone!` expands the same recipe
 // to any list of payload worlds - here three - with per-world acceptance
 // and typed callbacks, no `dyn Any` anywhere.
@@ -2309,6 +3298,14 @@ dioxus_dnd::bridge_drop_zone!(TriBridgeZone {
 static TRI_TICKETS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 static TRI_PEOPLE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 static TRI_ALERTS: Mutex<Vec<i8>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static DYNAMIC_TRI_ID: RefCell<Option<Signal<ZoneId>>> = const { RefCell::new(None) };
+    static DYNAMIC_TRI_REGISTRY: RefCell<Option<ZoneRegistry<&'static str>>> = const { RefCell::new(None) };
+    static DYNAMIC_BRIDGE_PARENT: RefCell<Option<ZoneId>> = const { RefCell::new(None) };
+}
+
+const DYNAMIC_TRI_CHILD: ZoneId = ZoneId(704);
 
 fn tri_bridge_app() -> Element {
     rsx! {
@@ -2430,6 +3427,191 @@ fn bridge_drop_zone_macro_registers_three_worlds_with_typed_callbacks() {
         !html.contains("data-over"),
         "idle zone must not be over: {html}"
     );
+}
+
+fn dynamic_tri_bridge_app() -> Element {
+    let id = use_signal(|| ZoneId(701));
+    use_hook(move || DYNAMIC_TRI_ID.with_borrow_mut(|slot| *slot = Some(id)));
+    rsx! {
+        DndProvider::<&'static str> {
+            DndProvider::<u32> {
+                DndProvider::<i8> {
+                    TriBridgeZone {
+                        id: id(),
+                        on_drop_ticket: move |_: DropOutcome<&'static str>| {},
+                        on_drop_person: move |_: DropOutcome<u32>| {},
+                        on_drop_alert: move |_: DropOutcome<i8>| {},
+                        DynamicBridgeParentProbe {}
+                        DropZone::<&'static str> {
+                            id: DYNAMIC_TRI_CHILD,
+                            on_drop: move |_: DropOutcome<&'static str>| {},
+                            DynamicTriProbe {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DynamicBridgeParentProbe() -> Element {
+    let parent = dioxus_dnd::core::use_parent_zone();
+    DYNAMIC_BRIDGE_PARENT.with_borrow_mut(|slot| *slot = parent);
+    rsx! {}
+}
+
+#[component]
+fn DynamicTriProbe() -> Element {
+    let registry = use_zone_registry::<&'static str>();
+    use_hook(move || DYNAMIC_TRI_REGISTRY.with_borrow_mut(|slot| *slot = Some(registry)));
+    rsx! {}
+}
+
+#[test]
+fn bridge_macro_remounts_nested_context_when_its_id_changes() {
+    let mut dom = VirtualDom::new(dynamic_tri_bridge_app);
+    dom.rebuild_in_place();
+    let registry = DYNAMIC_TRI_REGISTRY.with_borrow(|slot| slot.expect("nested probe mounted"));
+    assert_eq!(
+        dom.in_runtime(|| registry.get(DYNAMIC_TRI_CHILD).and_then(|zone| zone.parent)),
+        Some(ZoneId(701))
+    );
+
+    let mut id = DYNAMIC_TRI_ID.with_borrow(|slot| slot.expect("dynamic id captured"));
+    dom.in_runtime(|| id.set(ZoneId(702)));
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::core::NoOpMutations);
+    }
+
+    assert!(!dom.in_runtime(|| registry.contains(ZoneId(701))));
+    assert!(dom.in_runtime(|| registry.contains(ZoneId(702))));
+    assert_eq!(
+        DYNAMIC_BRIDGE_PARENT.with_borrow(|parent| *parent),
+        Some(ZoneId(702)),
+        "the bridge boundary must publish its current id"
+    );
+    assert_eq!(
+        dom.in_runtime(|| registry.get(DYNAMIC_TRI_CHILD).and_then(|zone| zone.parent)),
+        Some(ZoneId(702))
+    );
+}
+
+thread_local! {
+    static DYNAMIC_ID_MOUNTS: Cell<usize> = const { Cell::new(0) };
+    static DYNAMIC_ID_PHASE: RefCell<Option<Signal<bool>>> = const { RefCell::new(None) };
+    static DYNAMIC_CANVAS_REGISTRY: RefCell<Option<ZoneRegistry<u16>>> = const { RefCell::new(None) };
+    static DYNAMIC_BOARD_REGISTRY: RefCell<Option<ZoneRegistry<BoardPayload<u32>>>> = const { RefCell::new(None) };
+    static DYNAMIC_SORTABLE_ID_REGISTRY: RefCell<Option<ZoneRegistry<SortablePayload<u32>>>> = const { RefCell::new(None) };
+}
+
+fn dynamic_identity_app() -> Element {
+    let phase = use_signal(|| false);
+    use_hook(move || DYNAMIC_ID_PHASE.with_borrow_mut(|slot| *slot = Some(phase)));
+    let second = phase();
+    let drag_id = if second { DragId(802) } else { DragId(801) };
+    let canvas_id = if second { ZoneId(812) } else { ZoneId(811) };
+    let board_id = if second { ZoneId(822) } else { ZoneId(821) };
+    let group_id = SortableGroupId::new(if second { 32 } else { 31 });
+    rsx! {
+        DndProvider::<u8> {
+            Draggable::<u8> { payload: 1, drag_id, DynamicIdentityMountProbe {} }
+        }
+        DndProvider::<u16> {
+            CanvasDropZone::<u16> {
+                id: canvas_id,
+                on_drop: move |_| {},
+                DynamicCanvasIdentityProbe {}
+            }
+        }
+        DndProvider::<BoardPayload<u32>> {
+            BoardColumn::<u32> {
+                id: board_id,
+                on_move: move |_| {},
+                DynamicBoardIdentityProbe {}
+            }
+        }
+        SortableProvider::<u32> {
+            SortableGroup::<u32> {
+                id: group_id,
+                on_reorder: move |_| {},
+                DynamicSortableIdentityProbe {}
+            }
+        }
+    }
+}
+
+#[component]
+fn DynamicIdentityMountProbe() -> Element {
+    use_hook(|| DYNAMIC_ID_MOUNTS.with(|mounts| mounts.set(mounts.get() + 1)));
+    rsx! {}
+}
+
+#[component]
+fn DynamicCanvasIdentityProbe() -> Element {
+    let registry = use_zone_registry::<u16>();
+    use_hook(move || DYNAMIC_CANVAS_REGISTRY.with_borrow_mut(|slot| *slot = Some(registry)));
+    rsx! {}
+}
+
+#[component]
+fn DynamicBoardIdentityProbe() -> Element {
+    let registry = use_zone_registry::<BoardPayload<u32>>();
+    use_hook(move || DYNAMIC_BOARD_REGISTRY.with_borrow_mut(|slot| *slot = Some(registry)));
+    rsx! {}
+}
+
+#[component]
+fn DynamicSortableIdentityProbe() -> Element {
+    let registry = use_zone_registry::<SortablePayload<u32>>();
+    use_hook(move || {
+        DYNAMIC_SORTABLE_ID_REGISTRY.with_borrow_mut(|slot| *slot = Some(registry));
+    });
+    rsx! {}
+}
+
+#[test]
+fn public_identity_props_replace_their_keyed_dioxus_instances() {
+    DYNAMIC_ID_MOUNTS.with(|mounts| mounts.set(0));
+    let mut dom = VirtualDom::new(dynamic_identity_app);
+    dom.rebuild_in_place();
+
+    let canvas = DYNAMIC_CANVAS_REGISTRY.with_borrow(|slot| slot.expect("canvas registry"));
+    let board = DYNAMIC_BOARD_REGISTRY.with_borrow(|slot| slot.expect("board registry"));
+    let sortable =
+        DYNAMIC_SORTABLE_ID_REGISTRY.with_borrow(|slot| slot.expect("sortable registry"));
+    assert!(dom.in_runtime(|| canvas.contains(ZoneId(811))));
+    assert!(dom.in_runtime(|| board.contains(ZoneId(821))));
+    let first_group_zone = dom.in_runtime(|| sortable.records()[0].id);
+
+    let mut phase = DYNAMIC_ID_PHASE.with_borrow(|slot| slot.expect("identity phase signal"));
+    dom.in_runtime(|| phase.set(true));
+    for _ in 0..3 {
+        dom.process_events();
+        dom.render_immediate(&mut dioxus::core::NoOpMutations);
+    }
+
+    let canvas_ids = dom.in_runtime(|| {
+        canvas
+            .records()
+            .into_iter()
+            .map(|record| record.id)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(canvas_ids, [ZoneId(812)]);
+    let board_ids = dom.in_runtime(|| {
+        board
+            .records()
+            .into_iter()
+            .map(|record| record.id)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(board_ids, [ZoneId(822)]);
+    let group_records = dom.in_runtime(|| sortable.records());
+    assert_eq!(group_records.len(), 1);
+    assert_ne!(group_records[0].id, first_group_zone);
+    assert_eq!(DYNAMIC_ID_MOUNTS.with(Cell::get), 2);
 }
 
 // --- Headless test driver: dioxus_dnd::test ---------------------------------
@@ -2839,9 +4021,8 @@ fn dnd_strings_context_swaps_the_locale() {
 
 // --- Closest edge: data-edge + DropOutcome::edge ---------------------------
 
-/// A `DropZone` that opted into `edge` enriches delivered outcomes with the
-/// nearest zone edge, computed against its registered rect - but only for
-/// pointer drops, and only when opted in.
+/// Production delivery applies a target's edge policy before both the
+/// monitor receipt and the target callback observe the outcome.
 #[test]
 fn drop_zone_edge_prop_enriches_pointer_outcomes() {
     static RECEIVED: Mutex<Vec<Option<Edge>>> = Mutex::new(Vec::new());
@@ -2849,6 +4030,7 @@ fn drop_zone_edge_prop_enriches_pointer_outcomes() {
     fn app() -> Element {
         rsx! {
             DndProvider::<u32> {
+                DragSimProbe::<u32> {}
                 DropZone::<u32> {
                     id: ZoneId(41),
                     edge: EdgeSet::Vertical,
@@ -2860,61 +4042,26 @@ fn drop_zone_edge_prop_enriches_pointer_outcomes() {
                     on_drop: move |o: DropOutcome<u32>| RECEIVED.lock().unwrap().push(o.edge),
                     "plain"
                 }
-                EdgeProbe {}
             }
         }
     }
 
-    #[component]
-    fn EdgeProbe() -> Element {
-        let mut reg = use_zone_registry::<u32>();
-        let outcome = |to: ZoneId, client: Point, mode: DragMode| DropOutcome {
-            payload: 1u32,
-            from: None,
-            to,
-            effect: DropEffect::Move,
-            mode,
-            client,
-            element: client,
-            grab: Point::default(),
-            edge: None,
-        };
-
-        let tracked = reg.get(ZoneId(41)).expect("tracked zone registered");
-        reg.set_rect(ZoneId(41), Rect::new(0.0, 0.0, 300.0, 40.0));
-        // Pointer drop low in the row: nearest allowed edge is Bottom.
-        tracked.on_drop.call(outcome(
-            ZoneId(41),
-            Point::new(150.0, 31.0),
-            DragMode::Pointer,
-        ));
-        // Keyboard drop: no meaningful release point, edge stays None.
-        tracked.on_drop.call(outcome(
-            ZoneId(41),
-            Point::new(150.0, 20.0),
-            DragMode::Keyboard,
-        ));
-
-        // A zone without the prop never fills it in.
-        let plain = reg.get(ZoneId(42)).expect("plain zone registered");
-        reg.set_rect(ZoneId(42), Rect::new(0.0, 100.0, 300.0, 40.0));
-        plain.on_drop.call(outcome(
-            ZoneId(42),
-            Point::new(150.0, 131.0),
-            DragMode::Pointer,
-        ));
-
-        rsx! {
-            div {}
-        }
-    }
-
     RECEIVED.lock().unwrap().clear();
-    run(app);
-    assert_eq!(
-        *RECEIVED.lock().unwrap(),
-        vec![Some(Edge::Bottom), None, None]
-    );
+    let mut dom = VirtualDom::new(app);
+    dom.rebuild_in_place();
+    let mut sim = drag_sim::<u32>();
+    sim.place(&dom, ZoneId(41), Rect::new(0.0, 0.0, 300.0, 40.0));
+    sim.place(&dom, ZoneId(42), Rect::new(0.0, 100.0, 300.0, 40.0));
+
+    sim.pick_up(&dom, 1);
+    sim.move_to(&dom, Point::new(150.0, 31.0));
+    assert_eq!(sim.release(&dom), Some(ZoneId(41)));
+
+    sim.pick_up(&dom, 2);
+    sim.move_to(&dom, Point::new(150.0, 131.0));
+    assert_eq!(sim.release(&dom), Some(ZoneId(42)));
+
+    assert_eq!(*RECEIVED.lock().unwrap(), vec![Some(Edge::Bottom), None]);
 }
 
 /// `data-edge` never renders while idle, even with the prop set.

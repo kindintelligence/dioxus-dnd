@@ -6,6 +6,7 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::a11y::use_reduced_motion_css;
+use crate::core::components::merge_style_invariant_last;
 use crate::core::{platform, Point, Rect};
 
 /// FLIP animation phase (render-twice fallback only; the `web` path hands
@@ -53,6 +54,7 @@ pub fn FlipItem(
     let mounted = use_signal(|| None::<Rc<MountedData>>);
     let prev = use_signal(|| None::<Rect>);
     let mut phase = use_signal(FlipPhase::default);
+    let mut measurement_generation = use_signal(|| 0u64);
 
     // First & Last & Invert: on every epoch change, measure the new
     // position, and if the item moved, run the glide. The synchronous DOM
@@ -63,9 +65,14 @@ pub fn FlipItem(
         let Some(m) = mounted.peek().clone() else {
             return;
         };
+        measurement_generation += 1;
+        let generation = *measurement_generation.peek();
         let mut prev = prev;
         spawn(async move {
             if let Ok(r) = m.get_client_rect().await {
+                if *measurement_generation.peek() != generation {
+                    return;
+                }
                 let now = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
                 if let Some(old) = *prev.peek() {
                     let d = Point::new(old.x - now.x, old.y - now.y);
@@ -95,10 +102,17 @@ pub fn FlipItem(
         }
     });
 
-    let style = match phase() {
+    let functional_style = match phase() {
         FlipPhase::Invert(d) => invert_style(d),
         FlipPhase::Rest => rest_style(duration, &easing),
     };
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(&mut attributes, &["data-dnd-motion", "onmounted"]);
+    let style = merge_style_invariant_last(
+        &mut attributes,
+        &functional_style,
+        &["transform", "transition"],
+    );
     // The glide is an inline transition; honor prefers-reduced-motion.
     let reduced_motion_css = use_reduced_motion_css();
 

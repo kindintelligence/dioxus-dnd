@@ -14,10 +14,11 @@ the registry's live census over ten thousand virtualized rows.
 
 One provider, three layers:
 
-- A `Store<DragState<T>>` in Dioxus context holds the drag in flight: the
-  payload, the source and hovered zones, the pointer, the grab offset, the
-  effect and the input mode. `DndContext<T>` is the cheap `Copy` handle over
-  it.
+- A `Store<DragState<T>>` in Dioxus context holds the source-compatible drag
+  record: the payload, source and hovered zones, pointer, grab offset,
+  requested effect, and input mode. A private runtime sidecar holds stable
+  identity, tracked sessions, the live modifier-adjusted effect, and terminal
+  phase. `DndContext<T>` is the cheap `Copy` handle over both.
 - A `ZoneRegistry<T>` alongside it records every mounted drop zone: id,
   label, drop callback, acceptance filter, DOM handle, cached client rect.
   Pointer hit-testing and keyboard navigation are queries against this
@@ -58,12 +59,12 @@ the registry always mirrors what is on screen - a virtualized list with ten
 thousand rows keeps only the mounted few dozen registered. Two query
 families power the built-in interactions:
 
-- **Pointer hit-testing.** Move-time hover uses `hit_test`, which names the
-  last containing record in registry order before that zone suppresses its
-  own highlight when rejecting. Release selection uses `hit_test_closest`,
-  which finds the last acceptable overlap in registry order or, from a
-  gutter, the acceptable zone whose rect edge is nearest (the built-in drop
-  passes 48px).
+- **Pointer hit-testing.** Move-time hover uses `resolve_hover`, which filters
+  the full `DropQuery` and ranks candidates through the provider's collision
+  policy. Release selection uses `resolve`, applying the same acceptance and
+  effect negotiation before optional nearest-zone recovery. The legacy
+  `hit_test` and `hit_test_closest` helpers remain available to custom code
+  that only needs geometry or payload-only acceptance.
   Registration order only approximates paint order: CSS stacking and portals
   are not inspected.
 - **Keyboard navigation.** `step_zone` and its sibling/child variants walk
@@ -74,9 +75,13 @@ families power the built-in interactions:
 
 Rects are cached, measured fresh at pickup. When layout moves under a live
 drag - scrolling, a collapsing panel - the `RectRefresh` channel
-(`use_rect_refresh`) pings every provider in the tree to re-measure. Idle
-providers ignore the ping, so wiring it to raw scroll events costs nothing;
-`AutoScroll` pings it for you.
+(`use_rect_refresh`) pings every provider in the tree to re-measure. Once a
+provider's asynchronous measurement batch settles it resolves hover again
+from the current pointer, live effect, drag identity, and session. That keeps
+a resting pointer accurate while auto-scroll moves targets and prevents an
+old batch from touching a replacement drag. Idle providers ignore the ping,
+so wiring it to raw scroll events costs nothing; `AutoScroll` pings it for
+you.
 
 ## The gesture machine
 
@@ -135,15 +140,14 @@ fn TrashZone(on_trash: EventHandler<DropOutcome<Card>>) -> Element {
     let mut registry = use_zone_registry::<Card>();
     let id = use_zone_id();
 
-    let registration = use_hook(|| registry.register(ZoneRecord {
-        id,
-        parent: None,
-        label: Some("Trash".into()),
-        on_drop: Callback::new(move |o| on_trash.call(o)),
-        accepts: None,
-        mounted: None,
-        rect: None,
-    }));
+    let registration = use_hook(|| {
+        let mut record = ZoneRecord::new(
+            id,
+            Callback::new(move |o| on_trash.call(o)),
+        );
+        record.label = Some("Trash".into());
+        registry.register(record)
+    });
     use_drop(move || registry.unregister(id));
 
     let armed = dnd.dragging();

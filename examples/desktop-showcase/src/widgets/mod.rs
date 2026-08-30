@@ -1,6 +1,9 @@
 //! The widget cards: shared chrome + one body module per kind.
 
+mod area;
+mod bars;
 mod pulse;
+mod radar;
 mod ring;
 mod sparkline;
 mod stopwatch;
@@ -17,7 +20,6 @@ pub fn WidgetCard(widget: Widget) -> Element {
     rsx! {
         div { class: "widget", "data-kind": widget.kind.name(),
             header { class: "widget-head",
-                span { class: "widget-dot" }
                 span { class: "widget-title", {widget.kind.title()} }
             }
             div { class: "widget-body",
@@ -26,6 +28,9 @@ pub fn WidgetCard(widget: Widget) -> Element {
                     WidgetKind::Stopwatch => rsx! { stopwatch::StopwatchBody { state: widget.state } },
                     WidgetKind::Ring => rsx! { ring::RingBody { state: widget.state } },
                     WidgetKind::Pulse => rsx! { pulse::PulseBody { state: widget.state } },
+                    WidgetKind::Bars => rsx! { bars::BarsBody { state: widget.state } },
+                    WidgetKind::Area => rsx! { area::AreaBody { state: widget.state } },
+                    WidgetKind::Radar => rsx! { radar::RadarBody { state: widget.state } },
                 }
             }
         }

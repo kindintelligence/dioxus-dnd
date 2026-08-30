@@ -10,15 +10,53 @@ use std::rc::Rc;
 use crate::core::hooks::{
     use_bridge_world, use_dnd, use_zone_id, use_zone_registry, BridgeGeometry,
 };
-use crate::core::registry::ZoneRecord;
+use crate::core::registry::{ZonePolicy, ZoneRecord};
 use crate::core::types::{edge_of, DragMode, DropOutcome, EdgeSet, Rect, ZoneId};
 use crate::core::world::use_joined_window;
+use crate::core::{DropEffects, DropQuery};
 
 /// Context marker a `DropZone` provides so zones nested inside it can
 /// discover their parent - powering hierarchical keyboard traversal with no
 /// configuration.
 #[derive(Clone, Copy, PartialEq)]
 pub struct ParentZone(pub ZoneId);
+
+#[derive(Clone, Copy, PartialEq)]
+struct LiveParentZone(Signal<ZoneId>);
+
+/// Read the nearest parent zone, including a bridge whose identity can change.
+///
+/// Public only for `bridge_drop_zone!` expansions in downstream crates.
+#[doc(hidden)]
+pub fn use_parent_zone() -> Option<ZoneId> {
+    let live = try_use_context::<LiveParentZone>();
+    let fixed = try_use_context::<ParentZone>();
+    live.map(|parent| *parent.0.read())
+        .or_else(|| fixed.map(|parent| parent.0))
+}
+
+/// Keyed context boundary used by the exported bridge macro.
+///
+/// This is public only because macro expansion happens in downstream crates.
+#[doc(hidden)]
+#[component]
+pub fn BridgeParentZoneBoundary(zone_id: ZoneId, children: Element) -> Element {
+    let mut live = use_signal(|| zone_id);
+    use_effect(use_reactive!(|(zone_id)| {
+        if *live.peek() != zone_id {
+            live.set(zone_id);
+        }
+    }));
+    provide_context(LiveParentZone(live));
+    provide_context(ParentZone(zone_id));
+    rsx! { {children} }
+}
+
+#[component]
+fn FixedParentZoneBoundary(zone_id: ZoneId, children: Element) -> Element {
+    provide_context(ParentZone(zone_id));
+    rsx! { {children} }
+}
 
 /// A region that accepts drags carrying `T`.
 ///
@@ -57,10 +95,19 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     #[props(default)]
     label: Option<String>,
     /// Return `false` to reject a payload (zone won't highlight or accept it).
-    /// Keep this predicate cheap and do not mutate this zone registry from it:
-    /// registry queries invoke acceptance while holding their read guard.
+    /// Keep this predicate cheap. Registry queries snapshot their candidates
+    /// before invoking application callbacks, so reentrant registry work does
+    /// not collide with a live signal borrow.
     #[props(default)]
     accepts: Option<Callback<T, bool>>,
+    /// Rich acceptance predicate with source, effect, input mode, pointer
+    /// kind, and drag identity.
+    #[props(default)]
+    accepts_query: Option<Callback<DropQuery<T>, bool>>,
+    /// Effects this zone supports. Defaults to all effects for 3.x
+    /// compatibility; prefer `DropEffects::STANDARD` for new zones.
+    #[props(default)]
+    allowed_effects: DropEffects,
     /// Track the zone edge nearest the pointer: `EdgeSet::Vertical` for
     /// top/bottom (a vertical stack), `EdgeSet::Horizontal` for left/right,
     /// `EdgeSet::All` for all four. Renders `data-edge` while hovered and
@@ -72,53 +119,106 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
+    let auto_id = use_zone_id();
+    let zone_id = id.unwrap_or(auto_id);
+    let parent = use_parent_zone();
+    rsx! {
+        for (keyed_zone_id, keyed_parent) in [(zone_id, parent)] {
+            DropZoneInstance::<T> {
+                key: "{keyed_zone_id.0}:{keyed_parent:?}",
+                zone_id: keyed_zone_id,
+                parent: keyed_parent,
+                provide_parent: true,
+                label: label.clone(),
+                accepts,
+                accepts_query,
+                allowed_effects,
+                edge,
+                on_drop,
+                attributes: attributes.clone(),
+                {children.clone()}
+            }
+        }
+    }
+}
+
+#[component]
+fn DropZoneInstance<T: Clone + PartialEq + 'static>(
+    zone_id: ZoneId,
+    parent: Option<ZoneId>,
+    provide_parent: bool,
+    label: Option<String>,
+    accepts: Option<Callback<T, bool>>,
+    accepts_query: Option<Callback<DropQuery<T>, bool>>,
+    allowed_effects: DropEffects,
+    edge: Option<EdgeSet>,
+    on_drop: EventHandler<DropOutcome<T>>,
+    attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
     let dnd = use_dnd::<T>();
     let joined = use_joined_window::<T>();
     let mut registry = use_zone_registry::<T>();
-    let auto_id = use_zone_id();
-    let zone_id = id.unwrap_or(auto_id);
     // Nesting is automatic: a DropZone inside another discovers its parent
     // via context, and provides itself to zones deeper down.
-    let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    use_context_provider(|| ParentZone(zone_id));
     // Register with the zone registry so keyboard navigation and pointer
     // hit-testing can find this zone. Callbacks are stable handles, so
     // registering once per mount is enough.
+    let registered_label = label.clone();
     let registration = use_hook(|| {
-        registry.register(ZoneRecord {
-            id: zone_id,
-            parent,
-            label: label.clone(),
-            // The zone (not the drag source) owns the edge signal: it knows
-            // its own rect and whether it opted in, so it enriches the
-            // outcome on the way to the app's handler.
-            on_drop: Callback::new(move |mut o: DropOutcome<T>| {
-                if let Some(set) = edge {
-                    if o.mode == DragMode::Pointer {
-                        if let Some(r) = registry.cached_rect(zone_id) {
-                            o.edge = Some(edge_of(o.client, r, set));
-                        }
-                    }
-                }
-                on_drop.call(o)
-            }),
-            accepts,
-            mounted: None,
-            rect: None,
-        })
+        registry.register_with_policy(
+            ZoneRecord {
+                id: zone_id,
+                parent,
+                label: registered_label.clone(),
+                on_drop: Callback::new(move |outcome: DropOutcome<T>| on_drop.call(outcome)),
+                accepts,
+                mounted: None,
+                rect: None,
+            },
+            ZonePolicy {
+                accepts_query,
+                allowed_effects,
+                edge,
+            },
+        )
     });
     use_drop(move || {
-        registry.unregister(zone_id);
+        registry.unregister_registration(registration);
     });
-    // Keep the registered label in sync if the prop changes across renders.
-    // Registry readers only `peek`, so this render-time write can't loop.
-    registry.sync_label(zone_id, label.clone());
+    let label_for_sync = label.clone();
+    use_effect(use_reactive!(|(label_for_sync)| {
+        registry.sync_label(zone_id, label_for_sync);
+    }));
+    use_effect(use_reactive!(|(parent)| {
+        registry.sync_parent(registration, parent);
+    }));
+    use_effect(use_reactive!(|(
+        accepts,
+        accepts_query,
+        allowed_effects,
+        edge,
+    )| {
+        registry.sync_policy(
+            registration,
+            accepts,
+            ZonePolicy {
+                accepts_query,
+                allowed_effects,
+                edge,
+            },
+        );
+    }));
 
     let acceptable = move || -> bool {
-        match dnd.payload() {
-            Some(p) => accepts.map(|cb| cb.call(p)).unwrap_or(true),
-            None => false,
-        }
+        let Some(payload) = dnd.payload() else {
+            return false;
+        };
+        let query = super::delivery::drop_query(&dnd, payload.clone(), dnd.proposed_effect());
+        query.proposed_effect != crate::core::DropEffect::None
+            && accepts.is_none_or(|callback| callback.call(payload.clone()))
+            && accepts_query.is_none_or(|callback| callback.call(query.clone()))
+            && allowed_effects.negotiate(query.proposed_effect).is_some()
     };
     let is_over = move || match joined {
         Some(joined) => joined.is_over(zone_id),
@@ -138,6 +238,19 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
             .and_then(|joined| joined.local_pointer())
             .unwrap_or_else(|| dnd.pointer());
         Some(edge_of(pointer, r, set).as_str())
+    };
+    let mut attributes = attributes;
+    super::protect_attributes(
+        &mut attributes,
+        &["data-active", "data-over", "data-edge", "onmounted"],
+    );
+
+    let content = if provide_parent {
+        rsx! {
+            FixedParentZoneBoundary { zone_id, {children} }
+        }
+    } else {
+        children
     };
 
     rsx! {
@@ -166,7 +279,40 @@ pub fn DropZone<T: Clone + PartialEq + 'static>(
                 });
             },
             ..attributes,
-            {children}
+            {content}
+        }
+    }
+}
+
+/// Internal flat target: registered like a `DropZone`, but it deliberately
+/// does not become the hierarchical parent of the zones rendered inside it.
+#[component]
+pub(crate) fn FlatDropZone<T: Clone + PartialEq + 'static>(
+    zone_id: ZoneId,
+    #[props(default)] label: Option<String>,
+    #[props(default)] accepts_query: Option<Callback<DropQuery<T>, bool>>,
+    #[props(default)] edge: Option<EdgeSet>,
+    on_drop: EventHandler<DropOutcome<T>>,
+    #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    let parent = use_parent_zone();
+    rsx! {
+        for (keyed_zone_id, keyed_parent) in [(zone_id, parent)] {
+            DropZoneInstance::<T> {
+                key: "{keyed_zone_id.0}:{keyed_parent:?}",
+                zone_id: keyed_zone_id,
+                parent: keyed_parent,
+                provide_parent: false,
+                label: label.clone(),
+                accepts: None,
+                accepts_query,
+                allowed_effects: DropEffects::default(),
+                edge,
+                on_drop,
+                attributes: attributes.clone(),
+                {children.clone()}
+            }
         }
     }
 }
@@ -217,10 +363,40 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
 ) -> Element {
     let auto_id = use_zone_id();
     let zone_id = id.unwrap_or(auto_id);
-    let parent = try_use_context::<ParentZone>().map(|p| p.0);
+    let parent = use_parent_zone();
+    rsx! {
+        for (keyed_zone_id, keyed_parent) in [(zone_id, parent)] {
+            BridgeDropZoneInstance::<A, B> {
+                key: "{keyed_zone_id.0}:{keyed_parent:?}",
+                zone_id: keyed_zone_id,
+                parent: keyed_parent,
+                label: label.clone(),
+                accepts_a,
+                accepts_b,
+                on_drop_a,
+                on_drop_b,
+                attributes: attributes.clone(),
+                {children.clone()}
+            }
+        }
+    }
+}
+
+#[component]
+fn BridgeDropZoneInstance<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'static>(
+    zone_id: ZoneId,
+    parent: Option<ZoneId>,
+    label: Option<String>,
+    accepts_a: Option<Callback<A, bool>>,
+    accepts_b: Option<Callback<B, bool>>,
+    on_drop_a: EventHandler<DropOutcome<A>>,
+    on_drop_b: EventHandler<DropOutcome<B>>,
+    attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
     // One unambiguous parent id that resolves in both registries, so nested
     // zones of either type ascend correctly.
-    use_context_provider(|| ParentZone(zone_id));
+    provide_context(ParentZone(zone_id));
     let geometry = use_hook(BridgeGeometry::default);
     // One `use_bridge_world` per world: same id and element, independent
     // provider-owned geometry, each drop through its own typed callback.
@@ -240,6 +416,8 @@ pub fn BridgeDropZone<A: Clone + PartialEq + 'static, B: Clone + PartialEq + 'st
         on_drop_b,
         geometry.clone(),
     );
+    let mut attributes = attributes;
+    super::protect_attributes(&mut attributes, &["data-active", "data-over", "onmounted"]);
 
     rsx! {
         div {
@@ -340,11 +518,12 @@ macro_rules! bridge_drop_zone {
 
             let auto_id = $crate::core::use_zone_id();
             let zone_id = id.unwrap_or(auto_id);
-            let parent = try_use_context::<$crate::core::ParentZone>().map(|p| p.0);
-            // One unambiguous parent id that resolves in every registry, so
-            // nested zones of any listed type ascend correctly.
-            use_context_provider(|| $crate::core::ParentZone(zone_id));
+            let parent = $crate::core::use_parent_zone();
             let geometry = use_hook($crate::core::BridgeGeometry::default);
+            let mut attributes = attributes;
+            attributes.retain(|attribute| {
+                !matches!(attribute.name, "data-active" | "data-over" | "onmounted")
+            });
             let mut active = false;
             let mut over = false;
             $(
@@ -361,33 +540,146 @@ macro_rules! bridge_drop_zone {
             )+
 
             rsx! {
-                div {
-                    "data-active": if active { "true" },
-                    "data-over": if over { "true" },
-                    onmounted: move |evt: Event<::dioxus::html::MountedData>| {
-                        let m = evt.data();
-                        geometry.set_mounted(&m);
-                        // Same as DropZone: measure at mount so a bridge
-                        // appearing mid-drag is immediately hit-testable in
-                        // every world. One DOM read fans out into every
-                        // provider-owned registry.
-                        let geometry = geometry.clone();
-                        spawn(async move {
-                            if let Ok(r) = m.get_client_rect().await {
-                                let rect = $crate::core::Rect::new(
-                                    r.origin.x,
-                                    r.origin.y,
-                                    r.size.width,
-                                    r.size.height,
-                                );
-                                geometry.set_rect_if_present(rect);
-                            }
-                        });
-                    },
-                    ..attributes,
-                    {children}
+                $crate::core::BridgeParentZoneBoundary {
+                    key: "{zone_id.0}",
+                    zone_id,
+                    div {
+                        "data-active": if active { "true" },
+                        "data-over": if over { "true" },
+                        onmounted: move |evt: Event<::dioxus::html::MountedData>| {
+                            let m = evt.data();
+                            geometry.set_mounted(&m);
+                            // Same as DropZone: measure at mount so a bridge
+                            // appearing mid-drag is immediately hit-testable in
+                            // every world. One DOM read fans out into every
+                            // provider-owned registry.
+                            let geometry = geometry.clone();
+                            spawn(async move {
+                                if let Ok(r) = m.get_client_rect().await {
+                                    let rect = $crate::core::Rect::new(
+                                        r.origin.x,
+                                        r.origin.y,
+                                        r.size.width,
+                                        r.size.height,
+                                    );
+                                    geometry.set_rect_if_present(rect);
+                                }
+                            });
+                        },
+                        ..attributes,
+                        {children}
+                    }
                 }
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::core::{DndProvider, DragMode, DropEffect, Point};
+
+    #[component]
+    fn ProposedEffectProbe() -> Element {
+        let mut dnd = use_dnd::<u8>();
+        use_hook(move || {
+            dnd.start(
+                7,
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                DragMode::Pointer,
+            );
+            dnd.set_proposed_effect(DropEffect::Copy);
+        });
+        rsx! {
+            DropZone::<u8> {
+                allowed_effects: DropEffects::COPY,
+                accepts_query: move |query: DropQuery<u8>| {
+                    query.proposed_effect == DropEffect::Copy
+                },
+                on_drop: move |_| {},
+                "copy target"
+            }
+        }
+    }
+
+    fn proposed_effect_app() -> Element {
+        rsx! {
+            DndProvider::<u8> { ProposedEffectProbe {} }
+        }
+    }
+
+    #[test]
+    fn active_state_uses_the_live_proposed_effect() {
+        let mut dom = VirtualDom::new(proposed_effect_app);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(
+            html.contains(r#"data-active="true""#),
+            "copy target stayed dark: {html}"
+        );
+    }
+
+    #[derive(Clone, Props)]
+    struct DynamicIdProps {
+        phase: Rc<Cell<bool>>,
+    }
+
+    impl PartialEq for DynamicIdProps {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.phase, &other.phase)
+        }
+    }
+
+    fn dynamic_id_app(props: DynamicIdProps) -> Element {
+        let id = if props.phase.get() {
+            ZoneId(2)
+        } else {
+            ZoneId(1)
+        };
+        rsx! {
+            DndProvider::<u8> {
+                DropZone::<u8> {
+                    id,
+                    on_drop: move |_| {},
+                    DynamicIdProbe { expected: id }
+                }
+            }
+        }
+    }
+
+    #[component]
+    fn DynamicIdProbe(expected: ZoneId) -> Element {
+        let registry = use_zone_registry::<u8>();
+        let stale = if expected == ZoneId(1) {
+            ZoneId(2)
+        } else {
+            ZoneId(1)
+        };
+        assert!(registry.contains(expected));
+        assert!(!registry.contains(stale));
+        rsx! { div {} }
+    }
+
+    #[test]
+    fn changing_an_explicit_id_replaces_the_registered_instance() {
+        let phase = Rc::new(Cell::new(false));
+        let mut dom = VirtualDom::new_with_props(
+            dynamic_id_app,
+            DynamicIdProps {
+                phase: phase.clone(),
+            },
+        );
+        dom.rebuild_in_place();
+
+        phase.set(true);
+        dom.mark_dirty(ScopeId::APP);
+        dom.render_immediate(&mut dioxus::core::NoOpMutations);
+    }
 }

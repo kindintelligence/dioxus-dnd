@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 
+use crate::core::components::drop_query;
 use crate::core::{use_dnd, use_joined_window, use_zone_registry};
 
 /// Draws every registered zone of one payload world as a tinted outline
@@ -55,7 +56,10 @@ pub fn DndDebugOverlay<T: Clone + PartialEq + 'static>(
                     // Stable per-id tint; the multiplier scatters neighbors
                     // around the wheel.
                     let hue = (id.0.wrapping_mul(47)) % 360;
-                    let accepts = payload.as_ref().map(|p| record.accepts_payload(p));
+                    let accepts = payload.as_ref().map(|payload| {
+                        let query = drop_query(&dnd, payload.clone(), dnd.proposed_effect());
+                        registry.negotiate_zone(id, &query).is_some()
+                    });
                     let is_over = match joined {
                         Some(joined) => joined.is_over(id),
                         None => over == Some(id),

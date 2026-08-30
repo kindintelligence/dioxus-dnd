@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt;
 use std::mem::ManuallyDrop;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::rc::Rc;
@@ -10,6 +11,25 @@ use dioxus::prelude::{provide_context, use_hook};
 use dioxus::signals::{AnyStorage, Owner, SyncStorage, UnsyncStorage};
 
 use super::{DropEffect, DropOutcome, ZoneId};
+
+/// A model helper refused to guess semantics for an unsupported effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ApplyDropError {
+    UnsupportedEffect(DropEffect),
+}
+
+impl fmt::Display for ApplyDropError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedEffect(effect) => {
+                write!(formatter, "unsupported drop effect `{}`", effect.as_str())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ApplyDropError {}
 
 thread_local! {
     /// Owner pairs backing models created by [`use_dnd_model`]. App-wide
@@ -187,12 +207,49 @@ pub fn use_dnd_model<M: Clone + 'static>(init: impl FnOnce() -> M) -> M {
 ///   palette) skips removal and just appends.
 /// - An unknown `to` zone is created on the fly rather than dropping the
 ///   item on the floor.
+/// - For backwards compatibility, every non-`Copy` effect follows the legacy
+///   move path. Use [`try_apply_clone_or_move`] when unsupported effects must
+///   be rejected explicitly.
 pub fn apply_clone_or_move<T, K>(
     zones: &mut HashMap<ZoneId, Vec<T>>,
     outcome: DropOutcome<T>,
     key: impl Fn(&T) -> K,
-    mut clone_item: impl FnMut(T) -> T,
+    clone_item: impl FnMut(T) -> T,
 ) where
+    K: PartialEq,
+{
+    let result = apply_clone_or_move_impl(zones, outcome, key, clone_item, false);
+    debug_assert!(
+        result.is_ok(),
+        "legacy model helper cannot reject an effect"
+    );
+}
+
+/// Checked form of [`apply_clone_or_move`].
+///
+/// `Move` and `Copy` use the same behavior as the compatibility helper.
+/// `Link` and `None` return [`ApplyDropError::UnsupportedEffect`] without
+/// mutating the model.
+pub fn try_apply_clone_or_move<T, K>(
+    zones: &mut HashMap<ZoneId, Vec<T>>,
+    outcome: DropOutcome<T>,
+    key: impl Fn(&T) -> K,
+    clone_item: impl FnMut(T) -> T,
+) -> Result<(), ApplyDropError>
+where
+    K: PartialEq,
+{
+    apply_clone_or_move_impl(zones, outcome, key, clone_item, true)
+}
+
+fn apply_clone_or_move_impl<T, K>(
+    zones: &mut HashMap<ZoneId, Vec<T>>,
+    outcome: DropOutcome<T>,
+    key: impl Fn(&T) -> K,
+    mut clone_item: impl FnMut(T) -> T,
+    checked: bool,
+) -> Result<(), ApplyDropError>
+where
     K: PartialEq,
 {
     let DropOutcome {
@@ -202,19 +259,31 @@ pub fn apply_clone_or_move<T, K>(
         effect,
         ..
     } = outcome;
-    let item = if effect == DropEffect::Copy {
-        clone_item(payload)
-    } else {
-        if let Some(from) = from {
-            let payload_key = key(&payload);
-            if let Some(source) = zones.get_mut(&from) {
-                source.retain(|item| key(item) != payload_key);
+    let item = match effect {
+        DropEffect::Copy => clone_item(payload),
+        DropEffect::Move => {
+            if let Some(from) = from {
+                let payload_key = key(&payload);
+                if let Some(source) = zones.get_mut(&from) {
+                    source.retain(|item| key(item) != payload_key);
+                }
             }
+            payload
         }
-        payload
+        unsupported if checked => return Err(ApplyDropError::UnsupportedEffect(unsupported)),
+        _ => {
+            if let Some(from) = from {
+                let payload_key = key(&payload);
+                if let Some(source) = zones.get_mut(&from) {
+                    source.retain(|item| key(item) != payload_key);
+                }
+            }
+            payload
+        }
     };
 
     zones.entry(to).or_default().push(item);
+    Ok(())
 }
 
 /// Apply a drop between two plain `Vec<T>` lists.
@@ -227,30 +296,78 @@ pub fn apply_clone_or_move<T, K>(
 /// are **ignored** here; only `payload` and `effect` are consulted. Pass
 /// `None` for `source` when the payload came from outside any list. As with
 /// [`apply_clone_or_move`], removal matches every item whose key equals the
-/// payload's key.
+/// payload's key. For backwards compatibility, every non-`Copy` effect uses
+/// the legacy move path. Use [`try_apply_list_clone_or_move`] to reject
+/// unsupported effects explicitly.
 pub fn apply_list_clone_or_move<T, K>(
     source: Option<&mut Vec<T>>,
     target: &mut Vec<T>,
     outcome: DropOutcome<T>,
     key: impl Fn(&T) -> K,
-    mut clone_item: impl FnMut(T) -> T,
+    clone_item: impl FnMut(T) -> T,
 ) where
+    K: PartialEq,
+{
+    let result = apply_list_clone_or_move_impl(source, target, outcome, key, clone_item, false);
+    debug_assert!(
+        result.is_ok(),
+        "legacy model helper cannot reject an effect"
+    );
+}
+
+/// Checked form of [`apply_list_clone_or_move`].
+///
+/// `Move` and `Copy` use the same behavior as the compatibility helper.
+/// `Link` and `None` return [`ApplyDropError::UnsupportedEffect`] without
+/// mutating either list.
+pub fn try_apply_list_clone_or_move<T, K>(
+    source: Option<&mut Vec<T>>,
+    target: &mut Vec<T>,
+    outcome: DropOutcome<T>,
+    key: impl Fn(&T) -> K,
+    clone_item: impl FnMut(T) -> T,
+) -> Result<(), ApplyDropError>
+where
+    K: PartialEq,
+{
+    apply_list_clone_or_move_impl(source, target, outcome, key, clone_item, true)
+}
+
+fn apply_list_clone_or_move_impl<T, K>(
+    source: Option<&mut Vec<T>>,
+    target: &mut Vec<T>,
+    outcome: DropOutcome<T>,
+    key: impl Fn(&T) -> K,
+    mut clone_item: impl FnMut(T) -> T,
+    checked: bool,
+) -> Result<(), ApplyDropError>
+where
     K: PartialEq,
 {
     let DropOutcome {
         payload, effect, ..
     } = outcome;
-    let item = if effect == DropEffect::Copy {
-        clone_item(payload)
-    } else {
-        if let Some(source) = source {
-            let payload_key = key(&payload);
-            source.retain(|item| key(item) != payload_key);
+    let item = match effect {
+        DropEffect::Copy => clone_item(payload),
+        DropEffect::Move => {
+            if let Some(source) = source {
+                let payload_key = key(&payload);
+                source.retain(|item| key(item) != payload_key);
+            }
+            payload
         }
-        payload
+        unsupported if checked => return Err(ApplyDropError::UnsupportedEffect(unsupported)),
+        _ => {
+            if let Some(source) = source {
+                let payload_key = key(&payload);
+                source.retain(|item| key(item) != payload_key);
+            }
+            payload
+        }
     };
 
     target.push(item);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -915,6 +1032,65 @@ mod tests {
                 id: 7,
                 title: "seven"
             }]
+        );
+    }
+
+    #[test]
+    fn unsupported_effect_is_explicit_and_does_not_mutate() {
+        let zone = ZoneId(1);
+        let original = vec![Card {
+            id: 1,
+            title: "one",
+        }];
+        let mut zones = HashMap::from([(zone, original.clone())]);
+        let result = try_apply_clone_or_move(
+            &mut zones,
+            outcome(original[0].clone(), Some(zone), ZoneId(2), DropEffect::Link),
+            |card| card.id,
+            |card| card,
+        );
+
+        assert_eq!(
+            result,
+            Err(ApplyDropError::UnsupportedEffect(DropEffect::Link))
+        );
+        assert_eq!(zones, HashMap::from([(zone, original)]));
+    }
+
+    #[test]
+    fn legacy_helpers_keep_their_unit_return_contract() {
+        let zone = ZoneId(1);
+        let mut zones = HashMap::new();
+        let _: () = apply_clone_or_move(
+            &mut zones,
+            outcome(
+                Card {
+                    id: 1,
+                    title: "one",
+                },
+                None,
+                zone,
+                DropEffect::Move,
+            ),
+            |card| card.id,
+            |card| card,
+        );
+
+        let mut target = Vec::new();
+        let _: () = apply_list_clone_or_move(
+            None,
+            &mut target,
+            outcome(
+                Card {
+                    id: 2,
+                    title: "two",
+                },
+                None,
+                zone,
+                DropEffect::Move,
+            ),
+            |card| card.id,
+            |card| card,
         );
     }
 }

@@ -3,8 +3,21 @@
 
 use dioxus::prelude::*;
 
-use super::state::DndContext;
-use super::types::{DragMode, DragSessionId, DropEffect, Point, ZoneId};
+use super::monitor::CancelReason;
+use super::state::{DndContext, DragIdentity, DragPhase, DragStart};
+use super::types::{DragId, DragSessionId, DropEffect, Point, ZoneId};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DragCompletion {
+    Dropped,
+    Cancelled(CancelReason),
+}
+
+impl DragCompletion {
+    pub(crate) fn dropped(self) -> bool {
+        matches!(self, Self::Dropped)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct SourceCompletion {
@@ -24,23 +37,68 @@ impl<T: Clone + 'static> DndContext<T> {
         effect: DropEffect,
         callback: Callback<bool>,
     ) -> DragSessionId {
-        if let Some(previous) = self.active_session() {
-            self.cancel_session(previous);
-        }
-        self.start(payload, source, pointer, grab, effect, DragMode::Pointer);
+        self.start_tracked_with_metadata(
+            DragId::auto(),
+            DragStart::new(payload, pointer)
+                .with_source(source)
+                .with_grab(grab)
+                .with_effect(effect),
+            callback,
+        )
+    }
+
+    /// Begin a tracked pointer drag with its complete initial monitor
+    /// snapshot. The session, pointer kind, and any press-time source rect
+    /// are installed before `Started` is emitted.
+    pub(crate) fn start_tracked_with_metadata(
+        &mut self,
+        drag_id: DragId,
+        start: DragStart<T>,
+        callback: Callback<bool>,
+    ) -> DragSessionId {
         let id = DragSessionId::auto();
-        let mut completion = self.completion;
+        if !self.prepare_start() {
+            // The cancellation boundary synchronously started a replacement.
+            // This attempted source promoted but never owned shared state, so
+            // retire its local gesture without touching the replacement.
+            callback.call(false);
+            return id;
+        }
+        let mut completion = self.runtime.completion;
         completion.set(Some(SourceCompletion {
             id,
             callback,
             committed: None,
         }));
+        self.start_with_metadata(DragIdentity::Explicit(drag_id), Some(id), start);
+        // A monitor may synchronously start a replacement from `Started`.
+        // Do not leave this source generation claiming that replacement.
+        if self.drag_session_id() != Some(id) && self.active_session() == Some(id) {
+            self.cancel_session(id, CancelReason::Replaced);
+        }
         id
+    }
+
+    /// Retire the current drag before a start. Returns false when cancellation
+    /// user code synchronously started a replacement, which owns the context
+    /// and must not be overwritten by the outer start operation.
+    pub(super) fn prepare_start(&mut self) -> bool {
+        if let Some(previous) = self.active_session() {
+            self.cancel_session(previous, CancelReason::Replaced);
+        } else if self.dragging() {
+            self.cancel_state(CancelReason::Replaced);
+        } else if self.phase_peek() == DragPhase::Settling {
+            // A completed drop owns its terminal outcome already. Starting a
+            // replacement may interrupt only the visual glide.
+            self.finish_settle();
+        }
+        self.active_session().is_none() && !self.dragging()
     }
 
     /// Current pointer-gesture generation, if the source registered one.
     pub(crate) fn active_session(&self) -> Option<DragSessionId> {
-        self.completion
+        self.runtime
+            .completion
             .try_peek()
             .ok()?
             .as_ref()
@@ -52,7 +110,8 @@ impl<T: Clone + 'static> DndContext<T> {
     }
 
     pub(crate) fn session_result(&self, id: DragSessionId) -> Option<bool> {
-        self.completion
+        self.runtime
+            .completion
             .try_peek()
             .ok()?
             .as_ref()
@@ -67,7 +126,7 @@ impl<T: Clone + 'static> DndContext<T> {
         if self.active_session() != Some(id) {
             return false;
         }
-        let mut slot = self.completion;
+        let mut slot = self.runtime.completion;
         let mut completion = slot.write();
         let Some(completion) = completion.as_mut() else {
             return false;
@@ -83,7 +142,7 @@ impl<T: Clone + 'static> DndContext<T> {
         let Some(result) = self.session_result(id) else {
             return false;
         };
-        let Some(completion) = self.completion.take() else {
+        let Some(completion) = self.runtime.completion.take() else {
             return false;
         };
         completion.callback.call(result);
@@ -99,12 +158,12 @@ impl<T: Clone + 'static> DndContext<T> {
     }
 
     /// Cancel this generation and notify its source exactly once.
-    pub(crate) fn cancel_session(&mut self, id: DragSessionId) -> bool {
+    pub(crate) fn cancel_session(&mut self, id: DragSessionId, reason: CancelReason) -> bool {
         if !self.is_session(id) {
             return false;
         }
         if self.session_result(id).is_none() {
-            self.cancel();
+            self.cancel_state(reason);
             self.commit_source(id, false);
         }
         self.finalize_source(id)
@@ -114,14 +173,14 @@ impl<T: Clone + 'static> DndContext<T> {
     /// is already being torn down. Built-in sources cancel from their own
     /// cleanup first; this is the provider/window-close safety net for a
     /// custom source that omitted equivalent cleanup.
-    pub(crate) fn abandon_session(&mut self, id: DragSessionId) -> bool {
+    pub(crate) fn abandon_session(&mut self, id: DragSessionId, reason: CancelReason) -> bool {
         if !self.is_session(id) {
             return false;
         }
         if self.session_result(id).is_none() {
-            self.cancel();
+            self.cancel_state(reason);
         }
-        self.completion.take();
+        self.runtime.completion.take();
         true
     }
 }
@@ -137,6 +196,7 @@ mod tests {
     thread_local! {
         static CONTEXT: RefCell<Option<DndContext<String>>> = const { RefCell::new(None) };
         static CALLBACK: RefCell<Option<Callback<bool>>> = const { RefCell::new(None) };
+        static REPLACEMENT_CALLBACK: RefCell<Option<Callback<bool>>> = const { RefCell::new(None) };
         static COMPLETIONS: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -146,8 +206,18 @@ mod tests {
         let context = use_hook(|| DndContext::from_parts(state, announcement));
         let callback =
             use_callback(|dropped| COMPLETIONS.with_borrow_mut(|calls| calls.push(dropped)));
+        let replacement_callback = use_callback(|dropped: bool| {
+            assert!(!dropped);
+            CONTEXT.with_borrow_mut(|slot| {
+                slot.as_mut().expect("probe context").start_with_id(
+                    DragId(777),
+                    DragStart::new("callback replacement".to_string(), Point::default()),
+                );
+            });
+        });
         CONTEXT.with_borrow_mut(|slot| *slot = Some(context));
         CALLBACK.with_borrow_mut(|slot| *slot = Some(callback));
+        REPLACEMENT_CALLBACK.with_borrow_mut(|slot| *slot = Some(replacement_callback));
         rsx! {}
     }
 
@@ -157,6 +227,10 @@ mod tests {
 
     fn completion_callback() -> Callback<bool> {
         CALLBACK.with_borrow(|slot| slot.expect("probe callback"))
+    }
+
+    fn replacement_callback() -> Callback<bool> {
+        REPLACEMENT_CALLBACK.with_borrow(|slot| slot.expect("replacement callback"))
     }
 
     #[test]
@@ -198,8 +272,8 @@ mod tests {
                 !dnd.finish_source(first, true),
                 "stale generation completed"
             );
-            assert!(dnd.cancel_session(second));
-            assert!(!dnd.cancel_session(second));
+            assert!(dnd.cancel_session(second, CancelReason::User));
+            assert!(!dnd.cancel_session(second, CancelReason::User));
         });
         COMPLETIONS.with_borrow(|calls| assert_eq!(calls.as_slice(), &[true, false]));
     }
@@ -235,6 +309,33 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_callback_replacement_is_not_overwritten_by_outer_start() {
+        let mut dom = VirtualDom::new(probe);
+        dom.rebuild_in_place();
+        let mut dnd = context();
+
+        dom.in_runtime(|| {
+            dnd.start_tracked(
+                "first".into(),
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                DropEffect::Move,
+                replacement_callback(),
+            );
+            dnd.start_with_id(
+                DragId(999),
+                DragStart::new("outer start".to_string(), Point::default()),
+            );
+
+            assert_eq!(dnd.drag_id(), Some(DragId(777)));
+            assert_eq!(dnd.payload().as_deref(), Some("callback replacement"));
+            assert!(dnd.dragging());
+            dnd.cancel();
+        });
+    }
+
+    #[test]
     fn committed_success_survives_source_cleanup_during_delivery() {
         COMPLETIONS.with_borrow_mut(|calls| calls.clear());
         let mut dom = VirtualDom::new(probe);
@@ -259,7 +360,7 @@ mod tests {
         // This is what Draggable's cleanup calls if receiver user code
         // synchronously removes the source. It must finalize the committed
         // success, not overwrite it with cancellation.
-        dom.in_runtime(|| assert!(dnd.cancel_session(session)));
+        dom.in_runtime(|| assert!(dnd.cancel_session(session, CancelReason::SourceUnmounted)));
         COMPLETIONS.with_borrow(|calls| assert_eq!(calls.as_slice(), &[true]));
         dom.in_runtime(|| assert!(!dnd.finalize_source(session)));
     }

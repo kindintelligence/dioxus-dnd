@@ -6,8 +6,8 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_joined_window, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone,
-    Rect, ZoneRecord,
+    use_dnd, use_joined_window, use_parent_zone, use_zone_id, use_zone_registry, DragMode,
+    DropOutcome, Rect, ZoneRecord,
 };
 
 /// Identifies a tree node.
@@ -132,34 +132,13 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
     let dnd = use_dnd::<T>();
     let joined = use_joined_window::<T>();
     let mut registry = use_zone_registry::<T>();
-    let mut label_now = use_signal(|| label.clone());
-    let mut accepts_now = use_signal(|| accepts);
-    let mut row_height_now = use_signal(|| row_height);
-    let mut on_drop_now = use_signal(|| on_drop);
-    let mut node_now = use_signal(|| node);
-
-    if *label_now.peek() != label {
-        label_now.set(label.clone());
-    }
-    if *accepts_now.peek() != accepts {
-        accepts_now.set(accepts);
-    }
-    if *row_height_now.peek() != row_height {
-        row_height_now.set(row_height);
-    }
-    if *on_drop_now.peek() != on_drop {
-        on_drop_now.set(on_drop);
-    }
-    if *node_now.peek() != node {
-        node_now.set(node);
-    }
 
     // --- zone registration: makes this row a touch and keyboard target ----
     let zone_id = use_zone_id();
-    let parent = try_use_context::<ParentZone>().map(|p| p.0);
+    let parent = use_parent_zone();
     // Registry-level filter: would *any* intent be accepted? (Hover can't
     // know the final band yet; the exact intent is re-checked at drop.)
-    let registered_accepts = Callback::new(move |p: T| match *accepts_now.peek() {
+    let registered_accepts = use_callback(move |p: T| match accepts {
         Some(cb) => {
             cb.call((p.clone(), DropIntent::Before))
                 || cb.call((p.clone(), DropIntent::After))
@@ -167,25 +146,26 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
         }
         None => true,
     });
-    let registered_drop = Callback::new(move |o: DropOutcome<T>| {
-        let it = intent_from_offset(o.element.y, *row_height_now.peek());
-        let ok = match *accepts_now.peek() {
+    let registered_drop = use_callback(move |o: DropOutcome<T>| {
+        let it = intent_from_offset(o.element.y, row_height);
+        let ok = match accepts {
             Some(cb) => cb.call((o.payload.clone(), it)),
             None => true,
         };
         if ok {
-            on_drop_now.peek().call(TreeDropEvent {
+            on_drop.call(TreeDropEvent {
                 payload: o.payload,
-                target: *node_now.peek(),
+                target: node,
                 intent: it,
             });
         }
     });
+    let registered_label = label.clone();
     let registration = use_hook(move || {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
-            label: label_now.peek().clone(),
+            label: registered_label,
             on_drop: registered_drop,
             accepts: Some(registered_accepts),
             mounted: None,
@@ -193,11 +173,15 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
         })
     });
     use_drop(move || {
-        registry.unregister(zone_id);
+        registry.unregister_registration(registration);
     });
-    // Keep the registered label in sync if the prop changes across renders.
-    // Registry readers only `peek`, so this render-time write can't loop.
-    registry.sync_label(zone_id, label.clone());
+    let label_for_sync = label.clone();
+    use_effect(use_reactive!(|(label_for_sync)| {
+        registry.sync_label(zone_id, label_for_sync);
+    }));
+    use_effect(use_reactive!(|(parent)| {
+        registry.sync_parent(registration, parent);
+    }));
 
     // Pointer drags derive a live band from the shared pointer position, so
     // fingers see the same before/into/after feedback as mice.
@@ -206,7 +190,11 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             Some(joined) => joined.is_over(zone_id),
             None => dnd.over() == Some(zone_id),
         };
-        if dnd.dragging() && dnd.mode() == DragMode::Pointer && over {
+        if dnd.dragging()
+            && dnd.proposed_effect() != crate::core::DropEffect::None
+            && dnd.mode() == DragMode::Pointer
+            && over
+        {
             let r = registry.cached_rect(zone_id)?;
             let pointer = joined
                 .and_then(|joined| joined.local_pointer())
@@ -223,6 +211,8 @@ pub fn TreeNodeTarget<T: Clone + PartialEq + 'static>(
             None => None,
         }
     };
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(&mut attributes, &["data-intent", "onmounted"]);
     rsx! {
         div {
             "data-intent": intent_str(),

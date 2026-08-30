@@ -10,18 +10,18 @@ you decide what they mean. The two helpers here cover the most common
 meaning, the remove-from-source, append-to-target dance, without imposing
 bounds on your item type: no `Clone` (the payload arrives owned), no
 `PartialEq` (matching is by the key you extract). `DropEffect` and
-`effective_effect` are defined in the core types and re-exported from the
-prelude alongside the helpers; this file is the reference for all four.
+`effective_effect`, `DropEffects`, and `DropQuery` are re-exported from the
+prelude alongside the helpers.
 
 ```rust,ignore
 DropZone::<Card> {
     on_drop: move |o: DropOutcome<Card>| {
-        apply_clone_or_move(
+        try_apply_clone_or_move(
             &mut zones.write(),
             o,
             |c| c.id,                       // identity function
             |mut c| { c.id = fresh_id(); c },  // clone hook, runs only on Copy
-        );
+        ).expect("target accepts only move or copy");
     },
     "Drop here"
 }
@@ -50,6 +50,31 @@ Where it appears:
   effect ([drag-and-drop.md](drag-and-drop.md)).
 - `DropOutcome::effect` carries the resolved value to `on_drop`.
 
+## Target effect negotiation
+
+`DropEffects` is a compact set with `MOVE`, `COPY`, `LINK`, `NONE`,
+`STANDARD`, `ALL`, and `EMPTY` constants. Combine flags with `|` and declare
+them on a target:
+
+```rust,ignore
+DropZone::<Card> {
+    allowed_effects: DropEffects::MOVE | DropEffects::COPY,
+    accepts_query: move |query: DropQuery<Card>| {
+        query.source != Some(ARCHIVE) && query.pointer_kind != PointerKind::Pen
+    },
+    on_drop: move |outcome| { /* ... */ },
+}
+```
+
+If the proposed effect is supported, it is preserved. Otherwise the target
+selects the first supported fallback in Move, Copy, Link order. `EMPTY`
+rejects the drag. `DropEffect::None` is a disabled proposal, not a selectable
+effect: it is rejected before legacy or rich acceptance callbacks, hover,
+collision, or delivery. The complete `DropQuery<T>` contains `payload`, `source`,
+`proposed_effect`, `mode`, `pointer_kind`, and `drag_id`. Highlighting,
+pointer collision, keyboard navigation, cross-window resolution, and final
+delivery all evaluate the same query.
+
 ## `effective_effect`
 
 ```rust,ignore
@@ -76,7 +101,7 @@ another window behaves identically. Keyboard drops skip resolution and
 deliver the base effect unchanged. The function is public for custom drag
 sources and handlers that need the same answer.
 
-## `apply_clone_or_move`
+## `apply_clone_or_move` and `try_apply_clone_or_move`
 
 ```rust,ignore
 pub fn apply_clone_or_move<T, K>(
@@ -101,10 +126,15 @@ keyed by the ids your `DropZone`s declare.
 Semantics:
 
 - `Move` removes the matching item from `outcome.from`, then appends the
-  payload to `outcome.to`. Every effect other than `Copy` takes this
-  branch, `Link` and `None` included.
+  payload to `outcome.to`.
 - `Copy` leaves the source alone and appends `clone_item(payload)` to the
   target.
+- The compatibility helper preserves the 3.x contract: every non-`Copy`
+  effect follows its historical move path and the function returns `()`.
+- `try_apply_clone_or_move` has the same arguments but returns
+  `Result<(), ApplyDropError>`; `Link` and `None` are rejected without
+  mutation. Prefer it when a target has not already constrained
+  `allowed_effects` to Move/Copy.
 - Removal matches **every** item in the source whose key equals the
   payload's key. Keys are expected to be unique within a zone; if they are
   not, a single move prunes all of them.
@@ -114,7 +144,7 @@ Semantics:
   skips removal and just appends. `from` is filled by the `Draggable`'s
   `zone` prop; declare it or removal never runs.
 
-## `apply_list_clone_or_move`
+## `apply_list_clone_or_move` and `try_apply_list_clone_or_move`
 
 ```rust,ignore
 pub fn apply_list_clone_or_move<T, K>(
@@ -127,10 +157,11 @@ pub fn apply_list_clone_or_move<T, K>(
     K: PartialEq,
 ```
 
-The two-list version: applies a drop between two plain `Vec<T>`s with the
-same move/copy semantics. You choose which lists to pass, so the outcome's
-`from` and `to` fields are **ignored** here; only `payload` and `effect`
-are consulted.
+The two-list version applies a drop between two plain `Vec<T>`s with the same
+move/copy semantics. You choose which lists to pass, so the outcome's `from`
+and `to` fields are **ignored** here; only `payload` and `effect` are
+consulted. `try_apply_list_clone_or_move` is the checked form and returns
+`ApplyDropError` for `Link` or `None` before mutation.
 
 | Argument | Type | What it does |
 |---|---|---|

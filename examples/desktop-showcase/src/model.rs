@@ -22,9 +22,23 @@ pub enum WidgetKind {
     Stopwatch,
     Ring,
     Pulse,
+    Bars,
+    Area,
+    Radar,
 }
 
 impl WidgetKind {
+    /// Every chart offered by the showcase, in its initial dock order.
+    pub const ALL: [Self; 7] = [
+        Self::Sparkline,
+        Self::Stopwatch,
+        Self::Ring,
+        Self::Pulse,
+        Self::Bars,
+        Self::Area,
+        Self::Radar,
+    ];
+
     /// Stable name used for `data-kind` styling hooks and labels.
     pub fn name(self) -> &'static str {
         match self {
@@ -32,6 +46,9 @@ impl WidgetKind {
             Self::Stopwatch => "stopwatch",
             Self::Ring => "ring",
             Self::Pulse => "pulse",
+            Self::Bars => "bars",
+            Self::Area => "area",
+            Self::Radar => "radar",
         }
     }
 
@@ -41,6 +58,9 @@ impl WidgetKind {
             Self::Stopwatch => "Mission clock",
             Self::Ring => "Deploy",
             Self::Pulse => "Crew pulse",
+            Self::Bars => "Channel load",
+            Self::Area => "Traffic envelope",
+            Self::Radar => "Systems radar",
         }
     }
 }
@@ -111,35 +131,27 @@ pub struct Model {
 
 impl Model {
     pub fn new() -> Self {
-        let dock = vec![
-            Widget {
-                id: 1,
-                kind: WidgetKind::Sparkline,
-                state: Signal::new(WidgetState::seeded(0x5EED_0001, 0.15)),
-            },
-            Widget {
-                id: 2,
-                kind: WidgetKind::Stopwatch,
-                state: Signal::new(WidgetState::seeded(0x5EED_0002, 0.40)),
-            },
-            Widget {
-                id: 3,
-                kind: WidgetKind::Ring,
-                state: Signal::new(WidgetState::seeded(0x5EED_0003, 0.62)),
-            },
-            Widget {
-                id: 4,
-                kind: WidgetKind::Pulse,
-                state: Signal::new(WidgetState::seeded(0x5EED_0004, 0.85)),
-            },
-        ];
+        let levels = [0.15, 0.40, 0.62, 0.85, 0.28, 0.54, 0.73];
+        let dock = WidgetKind::ALL
+            .into_iter()
+            .zip(levels)
+            .enumerate()
+            .map(|(index, (kind, level))| {
+                let id = index as u32 + 1;
+                Widget {
+                    id,
+                    kind,
+                    state: Signal::new(WidgetState::seeded(0x5EED_0000 + id as u64, level)),
+                }
+            })
+            .collect();
         Self {
             dock: Signal::new(dock),
             satellites: Signal::new(Vec::new()),
             layout_epoch: Signal::new(0),
             widget_scopes: Signal::new(Vec::new()),
             satellite_scopes: Rc::new(RefCell::new(HashMap::new())),
-            next_id: Rc::new(Cell::new(5)),
+            next_id: Rc::new(Cell::new(WidgetKind::ALL.len() as u32 + 1)),
             ticker_claimed: Rc::new(AtomicBool::new(false)),
         }
     }
@@ -297,6 +309,7 @@ mod tests {
     #[test]
     fn satellite_close_returns_widgets_and_repeats_inert() {
         let (model, creator) = park_model();
+        let initial_count = model.dock.peek().len();
         // Scope-creating and signal-creating calls need a current scope, not
         // just a runtime (Signal::new resolves the current scope id).
         let satellite = creator.in_scope(ScopeId::ROOT, || model.new_satellite(1));
@@ -308,7 +321,7 @@ mod tests {
         creator.in_scope(ScopeId::ROOT, || {
             model.deliver(widget, satellite.zone, DropEffect::Move)
         });
-        assert_eq!(model.dock.peek().len(), 3);
+        assert_eq!(model.dock.peek().len(), initial_count - 1);
         assert_eq!(satellite.widgets.peek().len(), 1);
 
         let mut window = VirtualDom::new(closing_satellite_window)
@@ -318,11 +331,11 @@ mod tests {
         drop(creator);
         drop(window);
 
-        assert_eq!(model.dock.peek().len(), 4);
+        assert_eq!(model.dock.peek().len(), initial_count);
         assert!(model.satellites.peek().is_empty());
         assert!(satellite.widgets.try_read().is_err());
         assert!(!model.close_satellite(satellite));
-        assert_eq!(model.dock.peek().len(), 4);
+        assert_eq!(model.dock.peek().len(), initial_count);
     }
 
     #[test]
@@ -346,6 +359,7 @@ mod tests {
     #[test]
     fn copy_delivery_grows_target_and_keeps_source() {
         let (model, creator) = park_model();
+        let initial_count = model.dock.peek().len();
         let satellite = creator.in_scope(ScopeId::ROOT, || model.new_satellite(1));
         creator.in_scope(ScopeId::ROOT, || {
             let mut satellites = model.satellites;
@@ -358,7 +372,7 @@ mod tests {
 
         assert_eq!(
             model.dock.peek().len(),
-            4,
+            initial_count,
             "Copy must not detach the source"
         );
         assert!(model.dock.peek().iter().any(|w| w.id == source.id));
@@ -371,6 +385,19 @@ mod tests {
             model.deliver(landed, ZoneId(9999), DropEffect::Move)
         });
         assert!(satellite.widgets.peek().is_empty());
-        assert_eq!(model.dock.peek().len(), 5);
+        assert_eq!(model.dock.peek().len(), initial_count + 1);
+    }
+
+    #[test]
+    fn initial_dashboard_seeds_every_widget_kind() {
+        let (model, _creator) = park_model();
+        let kinds = model
+            .dock
+            .peek()
+            .iter()
+            .map(|widget| widget.kind)
+            .collect::<Vec<_>>();
+
+        assert_eq!(kinds.as_slice(), &WidgetKind::ALL);
     }
 }

@@ -31,7 +31,9 @@ A zone that accepts files dragged in from the operating system or selected
 from the native file picker opened by clicking it. Independent of
 `DndContext` - these files don't come from inside your app, so no provider is
 required. Renders a wrapper `div`, forwards arbitrary attributes (`class`,
-`style`, `id`, ...) to it, and adds no visual styles of its own.
+`style`, `id`, ...) to it, and adds no visual styles of its own. Its picker,
+drag/drop, focus, and accessibility attributes are component-owned so a
+forwarded attribute cannot accidentally replace the behavior.
 
 | Prop | Type | Default | What it does |
 |---|---|---|---|
@@ -39,12 +41,16 @@ required. Renders a wrapper `div`, forwards arbitrary attributes (`class`,
 | `on_files` | `EventHandler<FileDrop>` | required | Fired with accepted dropped or selected files, only if at least one passed. |
 | `on_rejected` | `Option<EventHandler<Vec<(FileData, FileRejection)>>>` | `None` | Fired with rejected dropped or selected files paired with their reasons, only if at least one failed. |
 | `on_hover` | `Option<EventHandler<bool>>` | `None` | Fired with `true` when a drag enters the zone, `false` when it leaves or the drop lands. |
+| `multiple` | `bool` | `true` | Whether the native picker permits multiple files. Drop batches still pass through `FileFilter::max_files`. |
+| `disabled` | `bool` | `false` | Disables picker and drop delivery, removes the zone from tab order, and exposes `data-disabled`. Browser file navigation is still prevented on dragover/drop. |
+| `label` | `String` | `"Choose or drop files"` | Accessible name for the focusable button-like zone. |
 
 Data attributes:
 
 | Attribute | Present while |
 |---|---|
 | `data-over` | an OS drag hovers the zone; valued `"true"`, absent otherwise |
+| `data-disabled` | the zone is disabled; valued `"true"`, absent otherwise |
 
 Unlike the context-backed attributes on `DropZone`, `data-over` here
 reflects real browser drag events from outside the app: an in-app pointer
@@ -53,8 +59,9 @@ drag crosses the zone's children.
 
 Behavior notes:
 
-- Clicking the wrapper opens a native multi-file picker. A hidden file input
-  provides this behavior without adding layout or visual styling.
+- The wrapper has button semantics, is focusable, and opens the picker on
+  click, Enter, or Space. A hidden file input provides this behavior without
+  adding layout or visual styling.
 - Extension rules plus exact and top-level-wildcard MIME rules are mirrored
   to the input's advisory `accept` value. The complete `FileFilter` always
   runs after selection because native pickers cannot express every rule.

@@ -1,33 +1,47 @@
 //! The mission-control theme. One CSS const injected per window.
 //!
-//! Direction: NASA ops console with a CRT tinge - deep space-blue base, a
-//! faint HUD grid, DIN-style brand type (Bahnschrift ships with Windows 11;
-//! elsewhere it falls back), phosphor monospace readouts (Cascadia Code),
-//! one neon accent per widget kind carried by `--accent` on `data-kind`,
-//! marching-ants landing pads while a drag is in flight, and a lifted,
-//! glowing ghost. All fonts are local; the showcase must not need a network.
+//! Direction: the gallery's ink panel expanded into a dark operations
+//! dashboard. Warm black and graphite surfaces carry the gallery's forest,
+//! sage, ochre, clay, sand, and blue accents. The presentation stays quiet:
+//! large charts, restrained surfaces, and no decorative status animation.
+//! All fonts are local, so the showcase does not need a network.
 
 pub const STYLE: &str = r#"
     * { box-sizing: border-box; }
     :root {
-        --bg: #070a12;
-        --panel: rgba(16, 22, 36, 0.82);
-        --panel-edge: rgba(140, 180, 255, 0.16);
-        --ink: #d9e4ef;
-        --ink-dim: rgba(217, 228, 239, 0.55);
-        --grid: rgba(140, 180, 255, 0.05);
-        --teal: #3ddbd9;
+        color-scheme: dark;
+        --bg: #1A1815;
+        --surface: #2C2A25;
+        --line: rgba(232, 229, 217, 0.12);
+        --line-strong: rgba(187, 184, 174, 0.28);
+        --ink: #FBFAF6;
+        --ink-soft: #E8E5D9;
+        --muted: #9B988D;
+        --muted-soft: #7A776C;
+        --forest: #3E7558;
+        --forest-soft: #A6C1B0;
+        --sage: #6C9984;
+        --forest-pale: #F0F2E3;
+        --ochre: #D5B876;
+        --clay: #C9926B;
+        --blue: #D9E4EC;
+        --sand: #E8D4BE;
+        --gold: #E9DDB8;
+        --grid: rgba(232, 229, 217, 0.045);
+        background: var(--bg);
     }
     body {
         margin: 0;
         height: 100vh;
-        font-family: Bahnschrift, "Segoe UI", "DejaVu Sans", sans-serif;
+        font-family: 'Poppins', ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
         color: var(--ink);
         background:
-            radial-gradient(120% 90% at 30% -10%, rgba(61, 219, 217, 0.07), transparent 60%),
+            radial-gradient(110% 80% at 30% -10%, rgba(108, 153, 132, 0.11), transparent 58%),
             repeating-linear-gradient(0deg, var(--grid) 0 1px, transparent 1px 44px),
             repeating-linear-gradient(90deg, var(--grid) 0 1px, transparent 1px 44px),
             var(--bg);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
         user-select: none;
         -webkit-user-select: none;
         overflow: hidden;
@@ -38,74 +52,68 @@ pub const STYLE: &str = r#"
     .chrome-head {
         display: flex; align-items: center; gap: 12px;
         padding-bottom: 10px;
-        border-bottom: 1px solid var(--panel-edge);
+        border-bottom: 1px solid var(--line);
     }
     .brand {
         font-size: 15px; font-weight: 600;
         letter-spacing: 0.22em;
+        color: var(--ink-soft);
     }
-    .brand::before {
-        content: "";
-        display: inline-block;
-        width: 8px; height: 8px; border-radius: 50%;
-        margin-right: 10px;
-        background: var(--teal);
-        box-shadow: 0 0 8px var(--teal);
-        animation: led 2.4s ease-in-out infinite;
-        vertical-align: 1px;
-    }
-    @keyframes led { 50% { opacity: 0.35; box-shadow: 0 0 2px var(--teal); } }
     .status-pill {
         margin-left: auto;
         font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
         font-size: 11px;
-        color: var(--ink-dim);
-        border: 1px solid var(--panel-edge);
-        border-radius: 999px;
-        padding: 3px 10px;
-        background: rgba(10, 14, 24, 0.6);
+        color: var(--muted);
+        letter-spacing: 0.04em;
+        border-radius: 6px;
+        padding: 4px 9px;
+        background: var(--surface);
     }
     button.spawn {
         font: inherit; font-size: 12px; letter-spacing: 0.08em;
-        color: var(--ink);
+        color: var(--forest-pale);
         padding: 6px 14px;
-        border: 1px solid var(--panel-edge);
+        border: 1px solid var(--forest);
         border-radius: 8px;
-        background: linear-gradient(180deg, rgba(61, 219, 217, 0.16), rgba(61, 219, 217, 0.05));
+        background: var(--forest);
+        box-shadow: 0 1px 0 rgba(26, 24, 21, 0.04), 0 2px 6px rgba(26, 24, 21, 0.10);
         cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
     }
-    button.spawn:hover { border-color: var(--teal); box-shadow: 0 0 12px rgba(61, 219, 217, 0.35); }
+    button.spawn:hover { border-color: var(--sage); background: var(--sage); }
+    button.spawn:active { transform: scale(0.98); }
+    button.spawn:focus-visible, [aria-roledescription="draggable"]:focus-visible {
+        outline: 2px solid var(--forest-soft);
+        outline-offset: 2px;
+    }
 
     /* ---- landing pad (drop zone) ------------------------------------ */
     .zone {
         flex: 1;
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+        gap: 14px;
         align-content: start;
-        padding: 14px;
-        border: 1px solid var(--panel-edge);
+        padding: 16px;
+        border: 1px solid var(--line);
         border-radius: 14px;
-        background: rgba(9, 13, 22, 0.55);
+        background: rgba(44, 42, 37, 0.58);
         overflow: auto;
         position: relative;
-        transition: box-shadow 160ms ease, border-color 160ms ease;
+        transition: border-color 160ms ease, background 160ms ease;
     }
     /* Any drag in flight: every eligible pad shows marching ants. */
     .zone[data-active]::after {
         content: "";
         position: absolute; inset: 5px;
         border-radius: 10px;
-        border: 1.5px dashed rgba(61, 219, 217, 0.45);
+        border: 1.5px dashed rgba(108, 153, 132, 0.72);
         pointer-events: none;
-        animation: ants 1.1s linear infinite;
-        -webkit-mask: conic-gradient(#000 0 0);
     }
-    @keyframes ants { to { transform: rotate(0.0001deg); opacity: 0.55; } }
     .zone[data-over] {
-        border-color: var(--teal);
-        box-shadow: 0 0 0 1px rgba(61, 219, 217, 0.5), 0 0 34px rgba(61, 219, 217, 0.22),
-                    inset 0 0 40px rgba(61, 219, 217, 0.07);
+        border-color: var(--forest-soft);
+        background: rgba(108, 153, 132, 0.14);
+        box-shadow: inset 0 0 0 1px rgba(166, 193, 176, 0.12);
     }
     .empty {
         grid-column: 1 / -1;
@@ -114,10 +122,9 @@ pub const STYLE: &str = r#"
         font-family: "Cascadia Code", ui-monospace, monospace;
         font-size: 12px;
         letter-spacing: 0.14em;
-        color: var(--ink-dim);
-        animation: led 3s ease-in-out infinite;
+        color: var(--muted-soft);
     }
-    .empty::before { content: "\2316  "; color: var(--teal); }
+    .empty::before { content: "\2316  "; color: var(--forest-soft); }
 
     /* ---- widget cards ------------------------------------------------ */
     .slot { cursor: grab; }
@@ -125,57 +132,55 @@ pub const STYLE: &str = r#"
     /* The ghost is the live one; its source dims until the drop resolves. */
     .slot[data-dragging] .widget { opacity: 0.3; filter: saturate(0.4); }
     .widget {
-        --accent: var(--teal);
+        --accent: var(--forest-soft);
         position: relative;
-        border: 1px solid var(--panel-edge);
-        border-radius: 12px;
-        background: linear-gradient(180deg, rgba(24, 32, 50, 0.85), var(--panel));
-        backdrop-filter: blur(6px);
-        padding: 12px 14px;
-        display: flex; flex-direction: column; gap: 8px;
-        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+        padding: 15px 16px;
+        min-height: 146px;
+        height: 100%;
+        display: flex; flex-direction: column; gap: 11px;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025),
+                    0 8px 20px -16px rgba(0, 0, 0, 0.85);
         overflow: hidden;
     }
-    .widget::before {
-        content: "";
-        position: absolute; inset: 0 0 auto 0; height: 2px;
-        background: linear-gradient(90deg, transparent, var(--accent), transparent);
-        opacity: 0.8;
-    }
-    .widget[data-kind="sparkline"] { --accent: #3ddbd9; }
-    .widget[data-kind="stopwatch"] { --accent: #ffb454; }
-    .widget[data-kind="ring"]      { --accent: #3fd97b; }
-    .widget[data-kind="pulse"]     { --accent: #ff5d6c; }
+    .widget[data-kind="sparkline"] { --accent: var(--forest-soft); }
+    .widget[data-kind="stopwatch"] { --accent: var(--ochre); }
+    .widget[data-kind="ring"]      { --accent: var(--sage); }
+    .widget[data-kind="pulse"]     { --accent: var(--clay); }
+    .widget[data-kind="bars"]      { --accent: var(--blue); }
+    .widget[data-kind="area"]      { --accent: var(--sand); }
+    .widget[data-kind="radar"]     { --accent: var(--gold); }
     .widget-head {
-        display: flex; align-items: center; gap: 8px;
-        font-size: 10.5px; font-weight: 600;
-        letter-spacing: 0.18em; text-transform: uppercase;
-        color: var(--ink-dim);
-    }
-    .widget-dot {
-        width: 7px; height: 7px; border-radius: 50%;
-        background: var(--accent);
-        box-shadow: 0 0 8px var(--accent);
-        animation: led 1.8s ease-in-out infinite;
-    }
-    .widget-body {
-        display: flex; flex-direction: column; gap: 5px;
+        display: flex; align-items: center;
+        font-size: 11px; font-weight: 600;
+        letter-spacing: 0.16em; text-transform: uppercase;
         color: var(--accent);
     }
-    .spark, .ecg { width: 100%; height: 46px; filter: drop-shadow(0 0 5px var(--accent)); }
-    .ring { width: 48px; height: 48px; filter: drop-shadow(0 0 5px var(--accent)); }
-    .ring-track { stroke: rgba(140, 180, 255, 0.14); }
+    .widget-body {
+        flex: 1;
+        display: flex; flex-direction: column; justify-content: space-between; gap: 8px;
+        color: var(--accent);
+    }
+    .spark, .ecg, .bars, .area, .radar { width: 100%; height: 72px; }
+    .ring { width: 72px; height: 72px; }
+    .ring-track, .chart-grid { stroke: var(--line-strong); stroke-width: 0.8; }
+    .chart-bar { fill: currentColor; opacity: 0.82; }
+    .area-fill, .radar-fill { fill: currentColor; opacity: 0.16; }
+    .area-line, .radar-line { fill: none; stroke: currentColor; stroke-width: 1.6; }
+    .radar-spoke { stroke: var(--line); stroke-width: 0.8; }
     .clock {
         font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
-        font-size: 27px; font-weight: 350;
-        text-shadow: 0 0 14px var(--accent);
+        font-size: 34px; font-weight: 350;
         font-variant-numeric: tabular-nums;
     }
+    .widget[data-kind="stopwatch"] .widget-body { justify-content: center; gap: 10px; }
     .readout {
         font-family: "Cascadia Code", ui-monospace, monospace;
-        font-size: 11px;
-        letter-spacing: 0.1em;
-        color: var(--ink-dim);
+        font-size: 10.5px;
+        letter-spacing: 0.08em;
+        color: var(--muted);
     }
 
     /* ---- the ghost ----------------------------------------------------
@@ -184,9 +189,8 @@ pub const STYLE: &str = r#"
     .ghost .widget {
         border-color: var(--accent);
         box-shadow:
-            0 0 0 1px var(--accent),
-            0 0 30px color-mix(in srgb, var(--accent) 45%, transparent),
-            0 22px 50px rgba(0, 0, 0, 0.65);
-        transform: scale(1.03);
+            0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent),
+            0 20px 44px rgba(0, 0, 0, 0.52);
+        transform: scale(1.015);
     }
 "#;

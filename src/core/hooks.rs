@@ -6,10 +6,13 @@ use std::rc::Rc;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
+use super::components::{drop_query, resolve_drag_hover};
 use super::registry::{RectRefresh, ZoneRecord, ZoneRegistration, ZoneRegistry};
 use super::state::{DndContext, DragState};
-use super::types::{DragId, DropOutcome, Point, Rect, ZoneId};
-use super::world::{use_joined_window, DndWorld, JoinedWindow, WindowGeometry, WorldMembership};
+use super::types::{DragId, DropEffect, DropOutcome, Point, Rect, ZoneId};
+use super::world::{
+    use_joined_window, DndWorld, JoinedWindow, WindowGeometry, WorldHit, WorldMembership,
+};
 
 /// Marker flag: a settle-enabled `DragOverlay<T>` is mounted somewhere in
 /// this provider's subtree, so `Draggable<T>` should route successful
@@ -109,7 +112,7 @@ pub fn use_dnd_provider<T: Clone + 'static>() -> DndContext<T> {
     });
     let ctx = use_context_provider(move || match membership {
         Some(j) => j.world.context(),
-        None => DndContext::from_parts(state, announcement),
+        None => DndContext::managed(state, announcement),
     });
 
     // One rect-refresh channel per provider *tree*: the outermost provider
@@ -121,9 +124,61 @@ pub fn use_dnd_provider<T: Clone + 'static>() -> DndContext<T> {
     // measured fresh at every pickup, so an idle provider has nothing to
     // keep current, and the gate makes scroll-event pings free while idle.
     use_rect_refresh_thunk(move |_| {
-        if ctx.dragging() {
-            registry.refresh_rects();
+        if !ctx.dragging() {
+            return;
         }
+        let drag_id = ctx.drag_id();
+        let session = ctx.drag_session_id();
+        registry.refresh_rects_then(move || {
+            // Receiver callbacks can synchronously finish this drag and
+            // start another while measurements are in flight. Never let an
+            // old batch alter the successor's hover.
+            if !ctx.alive()
+                || !ctx.dragging()
+                || ctx.drag_id() != drag_id
+                || ctx.drag_session_id() != session
+            {
+                return;
+            }
+
+            let proposed = ctx.proposed_effect();
+            let point = membership
+                .and_then(|joined| joined.local_pointer())
+                .unwrap_or_else(|| ctx.pointer());
+            match membership {
+                Some(joined) => {
+                    let query = ctx
+                        .payload()
+                        .map(|payload| drop_query(&ctx, payload, proposed));
+                    match query
+                        .as_ref()
+                        .map(|query| joined.zone_under_query(point, query))
+                        .unwrap_or(WorldHit::Unresolved)
+                    {
+                        WorldHit::Zone(location) => joined.enter(location),
+                        WorldHit::Window => joined.clear_hover(),
+                        WorldHit::Unresolved => {
+                            match resolve_drag_hover(registry, &ctx, point, proposed) {
+                                Some(zone) => joined.enter(joined.location(zone)),
+                                None => joined.clear_hover(),
+                            }
+                        }
+                    }
+                }
+                None => match resolve_drag_hover(registry, &ctx, point, proposed) {
+                    Some(zone) => {
+                        let mut ctx = ctx;
+                        ctx.enter(zone);
+                    }
+                    None => {
+                        if let Some(over) = ctx.over() {
+                            let mut ctx = ctx;
+                            ctx.leave(over);
+                        }
+                    }
+                },
+            }
+        });
     });
 
     ctx
@@ -201,33 +256,61 @@ pub fn use_zone_id() -> ZoneId {
 /// or callbacks in the child scope.
 #[derive(Clone, Default)]
 pub struct BridgeGeometry {
-    writers: Rc<RefCell<Vec<BridgeGeometryWriter>>>,
+    state: Rc<RefCell<BridgeGeometryState>>,
+}
+
+#[derive(Default)]
+struct BridgeGeometryState {
+    next_writer: u64,
+    writers: Vec<BridgeGeometryWriter>,
+    mounted: Option<Rc<MountedData>>,
+    rect: Option<Rect>,
 }
 
 #[derive(Clone)]
 struct BridgeGeometryWriter {
+    id: u64,
     mounted: Rc<dyn Fn(Rc<MountedData>)>,
     rect: Rc<dyn Fn(Rect)>,
+}
+
+struct BridgeGeometryRegistration {
+    state: Rc<RefCell<BridgeGeometryState>>,
+    id: u64,
+}
+
+impl Drop for BridgeGeometryRegistration {
+    fn drop(&mut self) {
+        self.state
+            .borrow_mut()
+            .writers
+            .retain(|writer| writer.id != self.id);
+    }
 }
 
 impl std::fmt::Debug for BridgeGeometry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BridgeGeometry")
-            .field("worlds", &self.writers.borrow().len())
+            .field("worlds", &self.state.borrow().writers.len())
             .finish()
     }
 }
 
 impl PartialEq for BridgeGeometry {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.writers, &other.writers)
+        Rc::ptr_eq(&self.state, &other.state)
     }
 }
 
 impl BridgeGeometry {
     /// Copy the bridge element's mounted handle into every joined registry.
     pub fn set_mounted(&self, mounted: &Rc<MountedData>) {
-        for writer in self.writers.borrow().iter() {
+        let writers = {
+            let mut state = self.state.borrow_mut();
+            state.mounted = Some(mounted.clone());
+            state.writers.clone()
+        };
+        for writer in writers {
             (writer.mounted)(mounted.clone());
         }
     }
@@ -235,7 +318,12 @@ impl BridgeGeometry {
     /// Copy a completed bridge measurement into every registration that is
     /// still current.
     pub fn set_rect_if_present(&self, rect: Rect) {
-        for writer in self.writers.borrow().iter() {
+        let writers = {
+            let mut state = self.state.borrow_mut();
+            state.rect = Some(rect);
+            state.writers.clone()
+        };
+        for writer in writers {
             (writer.rect)(rect);
         }
     }
@@ -244,8 +332,12 @@ impl BridgeGeometry {
         &self,
         registry: ZoneRegistry<T>,
         registration: ZoneRegistration,
-    ) {
-        self.writers.borrow_mut().push(BridgeGeometryWriter {
+    ) -> BridgeGeometryRegistration {
+        let mut state = self.state.borrow_mut();
+        let id = state.next_writer;
+        state.next_writer = state.next_writer.wrapping_add(1);
+        let writer = BridgeGeometryWriter {
+            id,
             mounted: Rc::new(move |mounted| {
                 let mut registry = registry;
                 registry.set_mounted(registration, mounted);
@@ -254,7 +346,21 @@ impl BridgeGeometry {
                 let mut registry = registry;
                 registry.set_rect_if_present(registration, rect);
             }),
-        });
+        };
+        let mounted = state.mounted.clone();
+        let rect = state.rect;
+        state.writers.push(writer.clone());
+        drop(state);
+        if let Some(mounted) = mounted {
+            (writer.mounted)(mounted);
+        }
+        if let Some(rect) = rect {
+            (writer.rect)(rect);
+        }
+        BridgeGeometryRegistration {
+            state: self.state.clone(),
+            id,
+        }
     }
 }
 
@@ -291,27 +397,71 @@ pub fn use_bridge_world<T: Clone + PartialEq + 'static>(
     let dnd = use_dnd::<T>();
     let joined = use_joined_window::<T>();
     let mut reg = use_zone_registry::<T>();
-    let registration = use_hook(|| {
-        reg.register(ZoneRecord {
+    let on_drop = use_callback(move |outcome| on_drop.call(outcome));
+    // Register one stable callback whose Dioxus callback slot is refreshed
+    // with the current optional policy every render. Delivery and styling
+    // therefore consult the same policy without waiting for a post-render
+    // registry synchronization pass.
+    let registered_accepts = use_callback(move |payload| {
+        accepts
+            .map(|callback| callback.call(payload))
+            .unwrap_or(true)
+    });
+    let initial_label = label.clone();
+    let initial_geometry = geometry.clone();
+    let registrations = use_hook(move || {
+        let registration = reg.register(ZoneRecord {
             id: zone_id,
             parent,
-            label: label.clone(),
-            on_drop: Callback::new(move |o| on_drop.call(o)),
-            accepts,
+            label: initial_label,
+            on_drop,
+            accepts: Some(registered_accepts),
             mounted: None,
             rect: None,
-        })
+        });
+        let writer = initial_geometry.register(reg, registration);
+        Rc::new(RefCell::new(Some((zone_id, parent, registration, writer))))
     });
-    use_drop(move || reg.unregister(zone_id));
-    reg.sync_label(zone_id, label);
-    use_hook(move || {
-        geometry.register(reg, registration);
+    let effect_registrations = registrations.clone();
+    let effect_geometry = geometry.clone();
+    use_effect(use_reactive!(|(zone_id, parent, label)| {
+        let unchanged = effect_registrations.borrow().as_ref().is_some_and(
+            |(current_id, current_parent, ..)| *current_id == zone_id && *current_parent == parent,
+        );
+        if unchanged {
+            reg.sync_label(zone_id, label);
+            return;
+        }
+
+        if let Some((_, _, old_registration, old_writer)) = effect_registrations.borrow_mut().take()
+        {
+            reg.unregister_registration(old_registration);
+            drop(old_writer);
+        }
+        let registration = reg.register(ZoneRecord {
+            id: zone_id,
+            parent,
+            label,
+            on_drop,
+            accepts: Some(registered_accepts),
+            mounted: None,
+            rect: None,
+        });
+        let writer = effect_geometry.register(reg, registration);
+        *effect_registrations.borrow_mut() = Some((zone_id, parent, registration, writer));
+    }));
+    use_drop(move || {
+        if let Some((_, _, registration, writer)) = registrations.borrow_mut().take() {
+            reg.unregister_registration(registration);
+            drop(writer);
+        }
     });
 
-    let acceptable = match dnd.payload() {
-        Some(p) => accepts.map(|cb| cb.call(p)).unwrap_or(true),
-        None => false,
-    };
+    let acceptable = dnd.proposed_effect() != DropEffect::None
+        && match dnd.payload() {
+            Some(p) => accepts.map(|cb| cb.call(p)).unwrap_or(true),
+            None => false,
+        };
     BridgeWorld {
         active: dnd.dragging() && acceptable,
         over: match joined {

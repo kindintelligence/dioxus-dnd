@@ -4,8 +4,6 @@
 //! while crossing between windows - the thing serialized drag-and-drop
 //! cannot do. The payload is a [`model::Widget`]: a live `Signal` handle,
 //! which no OS drag protocol could carry.
-//!
-//! Design: docs/superpowers/specs/2026-07-10-desktop-showcase-design.md
 
 mod layout;
 mod model;
@@ -28,7 +26,7 @@ fn main() {
             Config::new().with_window(
                 WindowBuilder::new()
                     .with_title("dioxus-dnd - mission control")
-                    .with_inner_size(LogicalSize::new(660.0, 560.0)),
+                    .with_inner_size(LogicalSize::new(780.0, 640.0)),
             ),
         )
         .launch(mission_control);
@@ -57,7 +55,7 @@ fn mission_control() -> Element {
             Config::new().with_window(
                 WindowBuilder::new()
                     .with_title(format!("dioxus-dnd - satellite {n}"))
-                    .with_inner_size(LogicalSize::new(360.0, 560.0)),
+                    .with_inner_size(LogicalSize::new(400.0, 620.0)),
             ),
         );
     };

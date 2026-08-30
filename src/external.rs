@@ -101,6 +101,17 @@ pub fn ExternalDropZone(
     children: Element,
 ) -> Element {
     let mut depth = use_signal(|| 0u32);
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &[
+            "data-over",
+            "ondragover",
+            "ondragenter",
+            "ondragleave",
+            "ondrop",
+        ],
+    );
 
     rsx! {
         div {
@@ -248,6 +259,17 @@ pub fn TypedDropZone<T: serde::de::DeserializeOwned + Clone + PartialEq + 'stati
     children: Element,
 ) -> Element {
     let mut depth = use_signal(|| 0u32);
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &[
+            "data-over",
+            "ondragover",
+            "ondragenter",
+            "ondragleave",
+            "ondrop",
+        ],
+    );
 
     rsx! {
         div {

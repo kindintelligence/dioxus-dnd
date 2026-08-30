@@ -19,7 +19,7 @@ pub fn PodcastQueuePage() -> Element {
                 steps: vec![
                     (
                         "Wrap the scroller.",
-                        "AutoScroll renders a div; you give it the overflow CSS. While a drag hovers within threshold pixels of an edge (48 by default), the container scrolls itself by up to speed pixels per event (24 by default), ramped by how deep into the edge band the pointer sits.",
+                        "AutoScroll renders a div; you give it the overflow CSS. While a drag hovers within threshold pixels of an edge (48 by default), a continuous clock scrolls at the exact speed_px_per_second you choose, ramped by how deep into the edge band the pointer sits. The legacy speed prop remains for 3.x compatibility.",
                     ),
                     (
                         "It scrolls for both worlds.",
@@ -50,7 +50,8 @@ pub fn PodcastQueuePage() -> Element {
                 title: "AutoScroll props",
                 rows: vec![
                     ("threshold", "f64 = 48.0", "Size of the edge band in pixels. Enter it and scrolling begins."),
-                    ("speed", "f64 = 24.0", "Maximum scroll per event, reached at the very edge."),
+                    ("speed", "f64 = 24.0", "Compatibility movement per nominal 60 Hz frame; used only when exact velocity is absent."),
+                    ("speed_px_per_second", "Option<f64>", "Exact maximum CSS pixels per second; recommended for new code."),
                     ("axis", "ScrollAxis = Y", "Y for lists, X for strips, Both for 2D panes."),
                     ("active", "Option<bool>", "External gate: Some(true) forces scrolling on pointer movement, Some(false) suppresses it, None uses the built-in contact heuristic."),
                 ],

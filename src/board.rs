@@ -6,8 +6,8 @@ use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_joined_window, use_zone_id, use_zone_registry, Draggable, DropOutcome, DropZone,
-    ParentZone, ZoneId, ZoneRecord,
+    use_dnd, use_joined_window, use_parent_zone, use_zone_id, use_zone_registry, Draggable,
+    DropEffect, DropOutcome, DropZone, ZoneId, ZoneRecord,
 };
 
 /// Columns are just zones.
@@ -26,7 +26,7 @@ pub struct BoardPayload<T> {
 /// Context a [`BoardColumn`] provides so nested [`BoardSlot`]s inherit its
 /// acceptance filter (WIP limits) with no extra wiring - a precise-insert slot
 /// then honors the same limit as an append to the column.
-struct ColumnAccepts<T: Clone + 'static>(Option<Callback<BoardPayload<T>, bool>>);
+struct ColumnAccepts<T: Clone + 'static>(Callback<BoardPayload<T>, bool>);
 
 // Manual impls: `derive` would demand `T: Copy`, but the field is just a
 // `Callback` handle (Copy) wrapped in an `Option`.
@@ -114,6 +114,7 @@ pub fn BoardItem<T: Clone + PartialEq + 'static>(
 /// [`BoardSlot`]s between items.
 #[component]
 pub fn BoardColumn<T: Clone + PartialEq + 'static>(
+    /// Stable identity for this column.
     id: ContainerId,
     /// Human label for screen-reader announcements ("Over {label}").
     #[props(default)]
@@ -125,12 +126,15 @@ pub fn BoardColumn<T: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
+    let column_id = id;
     // Share the column's acceptance filter with any nested `BoardSlot`s so
     // precise inserts respect the same WIP limit as an append.
-    use_context_provider(|| ColumnAccepts(accepts));
+    let inherited_accepts =
+        use_callback(move |payload| accepts.map(|cb| cb.call(payload)).unwrap_or(true));
+    use_context_provider(|| ColumnAccepts(inherited_accepts));
     rsx! {
         DropZone::<BoardPayload<T>> {
-            id,
+            id: column_id,
             label,
             accepts,
             on_drop: move |outcome: DropOutcome<BoardPayload<T>>| {
@@ -138,7 +142,7 @@ pub fn BoardColumn<T: Clone + PartialEq + 'static>(
                 on_move.call(MoveEvent {
                     item: p.item,
                     from: (p.from, p.index),
-                    to: (id, None),
+                    to: (column_id, None),
                 });
             },
             attributes,
@@ -173,44 +177,32 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
     let joined = use_joined_window::<BoardPayload<T>>();
     let mut registry = use_zone_registry::<BoardPayload<T>>();
     let zone_id = use_zone_id();
-    let parent = try_use_context::<ParentZone>().map(|p| p.0);
+    let parent = use_parent_zone();
     // The enclosing column's acceptance filter (WIP limits), inherited via
     // context so a precise-insert honors the same limit as an append. The
     // `Callback` is a stable handle whose closure reads live state at call
     // time, so capturing it once (below) still sees the current column.
-    let column_accepts = try_use_context::<ColumnAccepts<T>>().and_then(|c| c.0);
-    let accepts = move |p: BoardPayload<T>| column_accepts.map(|cb| cb.call(p)).unwrap_or(true);
-
-    // `index` is positional - it shifts as items move above this slot - so the
-    // registered drop must read the *current* props, not the ones captured when
-    // the zone first registered. Mirror them through signals.
-    let mut column_now = use_signal(|| column);
-    let mut index_now = use_signal(|| index);
-    let mut on_move_now = use_signal(|| on_move);
-    if *column_now.peek() != column {
-        column_now.set(column);
-    }
-    if *index_now.peek() != index {
-        index_now.set(index);
-    }
-    if *on_move_now.peek() != on_move {
-        on_move_now.set(on_move);
-    }
+    let column_accepts = try_use_context::<ColumnAccepts<T>>();
+    let accepts = use_callback(move |payload: BoardPayload<T>| {
+        column_accepts
+            .map(|accepts| accepts.0.call(payload))
+            .unwrap_or(true)
+    });
 
     let slot_label = label
         .clone()
         .or_else(|| Some(format!("Insert at position {index}")));
 
-    let registered_accepts = Callback::new(move |p: BoardPayload<T>| accepts(p));
-    let registered_drop = Callback::new(move |outcome: DropOutcome<BoardPayload<T>>| {
+    let registered_accepts = accepts;
+    let registered_drop = use_callback(move |outcome: DropOutcome<BoardPayload<T>>| {
         let p = outcome.payload;
-        if !accepts(p.clone()) {
+        if !accepts.call(p.clone()) {
             return;
         }
-        on_move_now.peek().call(MoveEvent {
+        on_move.call(MoveEvent {
             item: p.item,
             from: (p.from, p.index),
-            to: (*column_now.peek(), Some(*index_now.peek())),
+            to: (column, Some(index)),
         });
     });
     let registered_label = slot_label.clone();
@@ -226,16 +218,33 @@ pub fn BoardSlot<T: Clone + PartialEq + 'static>(
         })
     });
     use_drop(move || {
-        registry.unregister(zone_id);
+        registry.unregister_registration(registration);
     });
-    registry.sync_label(zone_id, slot_label);
+    let label_for_sync = slot_label.clone();
+    use_effect(use_reactive!(|(label_for_sync)| {
+        registry.sync_label(zone_id, label_for_sync);
+    }));
+    use_effect(use_reactive!(|(parent)| {
+        registry.sync_parent(registration, parent);
+    }));
 
     // Does the in-flight payload pass the inherited column filter?
-    let acceptable = move || dnd.payload().map(accepts).unwrap_or(false);
+    let acceptable = move || {
+        (dnd.proposed_effect() != DropEffect::None)
+            && dnd
+                .payload()
+                .map(|payload| accepts.call(payload))
+                .unwrap_or(false)
+    };
     let is_over = move || match joined {
         Some(joined) => joined.is_over(zone_id),
         None => dnd.over() == Some(zone_id),
     };
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &["data-active", "data-over", "onmounted"],
+    );
 
     rsx! {
         div {

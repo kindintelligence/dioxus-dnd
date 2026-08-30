@@ -66,6 +66,8 @@ pub fn ReorderButtons(
     let name = label.unwrap_or_else(|| (strings.row)(index + 1));
     let up_label = (strings.move_up)(&name);
     let down_label = (strings.move_down)(&name);
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(&mut attributes, &["onpointerdown"]);
 
     rsx! {
         span {
@@ -120,8 +122,7 @@ pub(crate) struct MotionCssProvided;
 
 /// One `<style>` with [`REDUCED_MOTION_CSS`] per subtree: the outermost
 /// animated component renders it and marks the context; anything below
-/// gets `None`. (Sibling subtrees each render one - duplicate CSS rules
-/// are idempotent, so that's harmless.)
+/// gets `None`. Sibling subtrees may each render one, which is harmless.
 ///
 /// The element carries an inline `display: none`. The UA stylesheet hides
 /// `<style>` anyway, but at zero specificity: an app rule like
@@ -129,16 +130,8 @@ pub(crate) struct MotionCssProvided;
 /// source as visible text inside the list. An inline declaration outranks
 /// any selector, so the sheet stays invisible whatever the page styles.
 pub(crate) fn use_reduced_motion_css() -> Option<Element> {
-    use_reduced_motion_css_if(true)
-}
-
-/// [`use_reduced_motion_css`] behind a condition, for components whose
-/// animation is an opt-in prop (`DragOverlay`'s settle). When `enabled` is
-/// false the hook neither renders the sheet nor marks the context, so an
-/// inactive component doesn't make nested animated ones skip theirs.
-pub(crate) fn use_reduced_motion_css_if(enabled: bool) -> Option<Element> {
     let first = use_hook(|| {
-        if enabled && try_consume_context::<MotionCssProvided>().is_none() {
+        if try_consume_context::<MotionCssProvided>().is_none() {
             provide_context(MotionCssProvided);
             true
         } else {
