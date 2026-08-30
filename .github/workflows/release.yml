@@ -73,7 +73,49 @@ jobs:
   verify:
     name: release-gate
     needs: validate
-    uses: ./.github/workflows/ci.yml
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Reuse successful main CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          run_id=""
+          for attempt in {1..60}
+          do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --branch main \
+              --event push \
+              --commit "$GITHUB_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+
+            if [[ -n "$run_id" ]]
+            then
+              break
+            fi
+
+            echo "Waiting for main CI to start for $GITHUB_SHA (attempt $attempt/60)"
+            sleep 10
+          done
+
+          if [[ -z "$run_id" ]]
+          then
+            echo "No main CI run found for $GITHUB_SHA"
+            exit 1
+          fi
+
+          echo "Reusing main CI run $run_id"
+          gh run watch "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
 
   publish:
     name: publish-crates-io
@@ -100,9 +142,10 @@ jobs:
         shell: bash
         run: |
           api_url="https://crates.io/api/v1/crates/dioxus-dnd/${VERSION}"
+          registry_response="${RUNNER_TEMP}/crates-io-version.json"
           status=$(curl --silent --show-error \
             --user-agent "dioxus-dnd-release-workflow (https://github.com/kindintelligence/dioxus-dnd)" \
-            --output crates-io-version.json \
+            --output "$registry_response" \
             --write-out '%{http_code}' \
             "$api_url")
 
@@ -120,7 +163,7 @@ jobs:
 
           local_checksum=$(sha256sum "target/package/dioxus-dnd-${VERSION}.crate" \
             | cut -d ' ' -f 1)
-          published_checksum=$(jq -r '.version.checksum' crates-io-version.json)
+          published_checksum=$(jq -r '.version.checksum' "$registry_response")
 
           if [[ "$local_checksum" != "$published_checksum" ]]
           then
