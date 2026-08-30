@@ -33,6 +33,7 @@ thread_local! {
     static DROPS: RefCell<Vec<(&'static str, String, ZoneId, Point)>> =
         const { RefCell::new(Vec::new()) };
     static EFFECTS: RefCell<Vec<DropEffect>> = const { RefCell::new(Vec::new()) };
+    static TERMINALS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
 }
 
 fn log_drop(tag: &'static str, o: &DropOutcome<String>) {
@@ -73,6 +74,37 @@ fn window_a_settling() -> Element {
     }
 }
 
+fn window_a_monitored() -> Element {
+    let world = use_dnd_world::<String>();
+    WORLD.with_borrow_mut(|slot| *slot = Some(world));
+    rsx! {
+        DndProvider::<String> {
+            WorldMonitorProbe {}
+            DragSimProbe::<String> {}
+            DropZone::<String> {
+                id: ZONE_A1,
+                on_drop: move |outcome: DropOutcome<String>| log_drop("A", &outcome),
+                "zone-a"
+            }
+        }
+    }
+}
+
+#[component]
+fn WorldMonitorProbe() -> Element {
+    use_dnd_monitor::<String>(|event| {
+        let terminal = match event {
+            DndEvent::Dropped(_) => Some("dropped"),
+            DndEvent::Cancelled { .. } => Some("cancelled"),
+            _ => None,
+        };
+        if let Some(terminal) = terminal {
+            TERMINALS.with_borrow_mut(|events| events.push(terminal));
+        }
+    });
+    rsx! {}
+}
+
 fn window_b() -> Element {
     rsx! {
         DndProvider::<String> {
@@ -83,6 +115,67 @@ fn window_b() -> Element {
                 "zone-b"
             }
             DragOverlay::<String> { "GHOST" }
+        }
+    }
+}
+
+fn window_b_with_query_policy() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            DropZone::<String> {
+                id: ZONE_B1,
+                allowed_effects: DropEffects::COPY,
+                accepts_query: move |query: DropQuery<String>| {
+                    query.source == Some(ZONE_A1)
+                        && query.proposed_effect == DropEffect::Copy
+                        && query.mode == DragMode::Pointer
+                        && query.pointer_kind == PointerKind::Mouse
+                        && query.drag_id.is_some()
+                },
+                on_drop: move |o: DropOutcome<String>| log_drop("B", &o),
+                "query-zone-b"
+            }
+        }
+    }
+}
+
+fn window_b_without_recovery() -> Element {
+    rsx! {
+        DndProvider::<String> {
+            release: ReleasePolicy::default().with_recovery_radius(0.0),
+            DropZone::<String> {
+                id: ZONE_B1,
+                on_drop: move |o: DropOutcome<String>| log_drop("B", &o),
+                "exact-zone-b"
+            }
+        }
+    }
+}
+
+fn window_b_with_scaled_active_rect_detector() -> Element {
+    let detector = Callback::new(|request: CollisionRequest<String>| {
+        let correctly_scaled = request.active_rect.is_some_and(|rect| {
+            (rect.width - 100.0).abs() < f64::EPSILON && (rect.height - 40.0).abs() < f64::EPSILON
+        });
+        if !correctly_scaled {
+            return Vec::new();
+        }
+        request
+            .candidates
+            .first()
+            .map(|candidate| vec![Collision::new(candidate.id, 0.0)])
+            .unwrap_or_default()
+    });
+    rsx! {
+        DndProvider::<String> {
+            release: ReleasePolicy::default()
+                .with_collision(CollisionDetector::Custom(detector))
+                .with_recovery_radius(0.0),
+            DropZone::<String> {
+                id: ZONE_B1,
+                on_drop: move |o: DropOutcome<String>| log_drop("B", &o),
+                "shape-zone-b"
+            }
         }
     }
 }
@@ -260,9 +353,14 @@ struct TwoWindows {
 
 /// Build both windows, feed the standard geometry, place both zones.
 fn two_windows(b_app: fn() -> Element) -> TwoWindows {
+    two_windows_from(window_a, b_app)
+}
+
+fn two_windows_from(a_app: fn() -> Element, b_app: fn() -> Element) -> TwoWindows {
     DROPS.with_borrow_mut(|d| d.clear());
     EFFECTS.with_borrow_mut(|effects| effects.clear());
-    let mut dom_a = VirtualDom::new(window_a);
+    TERMINALS.with_borrow_mut(Vec::clear);
+    let mut dom_a = VirtualDom::new(a_app);
     dom_a.rebuild_in_place();
     let world = WORLD.with_borrow(|w| *w).expect("window A created a world");
 
@@ -553,6 +651,36 @@ fn cross_window_settle_presents_in_the_receiving_window() {
 }
 
 #[test]
+fn cancelling_a_committed_cross_window_settle_only_finishes_its_visual_phase() {
+    let tw = two_windows_from(window_a_monitored, window_b_settling);
+    let mut sim = tw.sim;
+
+    sim.pick_up(&tw.dom_a, "card".to_string());
+    sim.move_to(&tw.dom_a, Point::new(1200.0, 200.0));
+    assert_eq!(sim.release(&tw.dom_a), Some(ZONE_B1));
+    assert!(tw
+        .dom_a
+        .in_runtime(|| tw.world.context().settling().is_some()));
+    assert_eq!(tw.world.settling_in(), Some(tw.key_b));
+
+    tw.dom_a.in_runtime(|| tw.world.cancel_drag());
+
+    TERMINALS.with_borrow(|events| assert_eq!(events.as_slice(), ["dropped"]));
+    assert_eq!(sim.completions(&tw.dom_a), vec![true]);
+    assert!(tw
+        .dom_a
+        .in_runtime(|| tw.world.context().payload().is_none()));
+    assert!(tw
+        .dom_a
+        .in_runtime(|| tw.world.context().settling().is_none()));
+    assert_eq!(tw.world.settling_in(), None);
+    assert_eq!(tw.world.drag_session(), None);
+    assert_eq!(tw.world.source_location(), None);
+    assert_eq!(tw.world.over_location(), None);
+    assert_eq!(tw.world.origin_window(), None);
+}
+
+#[test]
 fn only_the_elected_window_can_finish_a_world_settle() {
     DROPS.with_borrow_mut(|drops| drops.clear());
     let mut dom_a = VirtualDom::new(window_a_settling);
@@ -787,6 +915,56 @@ fn host_side_tracking_drives_the_drag_where_webviews_are_blind() {
     assert!(sim.dragging(&tw.dom_a));
     tw.dom_a.in_runtime(|| tw.world.cancel_drag());
     assert_eq!(sim.completions(&tw.dom_a), vec![true, false]);
+}
+
+#[test]
+fn host_drive_uses_the_complete_drop_query_and_effect_policy() {
+    let tw = two_windows(window_b_with_query_policy);
+    let mut sim = tw.sim;
+    sim.pick_up_from(&tw.dom_a, "card".to_string(), Some(ZONE_A1));
+    tw.dom_a
+        .in_runtime(|| tw.world.update_modifiers(Modifiers::CONTROL));
+
+    tw.dom_a
+        .in_runtime(|| tw.world.track_global(Point::new(1200.0, 200.0)));
+    assert_eq!(sim.over(&tw.dom_a), Some(ZONE_B1));
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1200.0, 200.0))),
+        Some(ZONE_B1)
+    );
+    EFFECTS.with_borrow(|effects| assert_eq!(effects.as_slice(), &[DropEffect::Copy]));
+}
+
+#[test]
+fn host_release_honors_the_receiving_providers_recovery_radius() {
+    let tw = two_windows(window_b_without_recovery);
+    let mut sim = tw.sim;
+    sim.pick_up(&tw.dom_a, "card".to_string());
+
+    // B-local (160, 100), ten CSS px beyond a zone ending at x=150.
+    assert_eq!(
+        tw.dom_b
+            .in_runtime(|| tw.world.drop_at_global(Point::new(1320.0, 200.0))),
+        None
+    );
+    assert_eq!(sim.completions(&tw.dom_a), vec![false]);
+    DROPS.with_borrow(|drops| assert!(drops.is_empty()));
+}
+
+#[test]
+fn foreign_collision_receives_the_active_rect_in_destination_css_pixels() {
+    let tw = two_windows(window_b_with_scaled_active_rect_detector);
+    let mut sim = tw.sim;
+    sim.pick_up(&tw.dom_a, "card".to_string());
+    tw.dom_a.in_runtime(|| {
+        let mut dnd = tw.world.context();
+        dnd.set_source_rect(Some(Rect::new(0.0, 0.0, 200.0, 80.0)));
+    });
+
+    sim.move_to(&tw.dom_a, Point::new(1080.0, 200.0));
+    assert_eq!(sim.over(&tw.dom_a), Some(ZONE_B1));
+    assert_eq!(sim.release(&tw.dom_a), Some(ZONE_B1));
 }
 
 #[test]

@@ -23,7 +23,10 @@ fn App() -> Element {
         h1 { "Regressions" }
         OverlapReject {}
         SortableFixture {}
+        SortableHandleFixture {}
         GridFixture {}
+        SelectionFixture {}
+        HandleTokenFixture {}
         AutoScrollFixture {}
         CanvasGrabFixture {}
         CopyMoveFixture {}
@@ -40,6 +43,76 @@ fn App() -> Element {
         FlipFixture {}
         MatchSourceFixture {}
         TypedFixture {}
+    }
+}
+
+// --- handle activation: rejected presses cannot leak to the next event -------
+
+#[component]
+fn HandleTokenFixture() -> Element {
+    let mut starts = use_signal(|| 0u32);
+    rsx! {
+        section {
+            h2 { "Handle press isolation" }
+            DndProvider::<u32> {
+                Draggable::<u32> {
+                    payload: 1,
+                    activation: ActivationPolicy::handle(ActivationConstraint::Distance(8.0)),
+                    on_drag_start: move |_| starts += 1,
+                    id: "handle-token-root",
+                    style: "display:flex; gap:12px; width:240px; padding:12px; border:1px solid #999;",
+                    span { class: "handle-token-surface", "card body" }
+                    DragHandle { id: "handle-token-button", label: "Move card", "move" }
+                }
+                div { id: "handle-token-status", "data-starts": "{starts}" }
+            }
+        }
+    }
+}
+
+// --- multi-selection: drag cancellation cannot consume the next click -------
+
+#[component]
+fn SelectionFixture() -> Element {
+    let selection = use_selection::<u32>();
+    let mut drops = use_signal(|| 0u32);
+    let selected = selection
+        .items()
+        .into_iter()
+        .map(|item| item.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    rsx! {
+        section {
+            h2 { "Selection cancellation" }
+            DndProvider::<Vec<u32>> {
+                SelectableDraggable::<u32> {
+                    item: 1,
+                    selection,
+                    id: "selection-one",
+                    style: "display:block; width:180px; padding:10px; border:1px solid #bbb; user-select:none;",
+                    "Selection one"
+                }
+                SelectableDraggable::<u32> {
+                    item: 2,
+                    selection,
+                    id: "selection-two",
+                    style: "display:block; width:180px; padding:10px; border:1px solid #bbb; user-select:none;",
+                    "Selection two"
+                }
+                DropZone::<Vec<u32>> {
+                    class: "selection-target",
+                    on_drop: move |_| drops += 1,
+                    style: "width:180px; min-height:48px; margin-top:12px; border:2px dashed #999;",
+                    "Selection target"
+                }
+                div {
+                    id: "selection-status",
+                    "data-selected": selected,
+                    "data-drops": "{drops}",
+                }
+            }
+        }
     }
 }
 
@@ -322,6 +395,7 @@ fn SortableFixture() -> Element {
             h2 { "Sortable list" }
             SortableList {
                 len: items.read().len(),
+                item_key: move |ix: usize| items.read()[ix].clone(),
                 on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
                 overlay: move |ix: usize| rsx! {
                     "{items.read()[ix]}"
@@ -330,6 +404,34 @@ fn SortableFixture() -> Element {
                 render: move |ix: usize| rsx! {
                     div { style: "padding: 10px; border-bottom: 1px solid #ddd; background: #fff;",
                         "{items.read()[ix]}"
+                    }
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn SortableHandleFixture() -> Element {
+    let mut items = use_signal(|| {
+        ["Alpha", "Beta", "Gamma", "Delta"]
+            .map(String::from)
+            .to_vec()
+    });
+    rsx! {
+        section {
+            h2 { "Sortable handles" }
+            SortableList {
+                len: items.read().len(),
+                item_key: move |index: usize| items.read()[index].clone(),
+                touch_handle: true,
+                on_sort: move |event: SortEvent| apply_sort(&mut items.write(), event),
+                style: "width: 320px;",
+                render: move |index: usize| rsx! {
+                    div {
+                        class: "handled-row-content",
+                        style: "padding: 10px; border-bottom: 1px solid #ddd; background: #fff;",
+                        "{items.read()[index]}"
                     }
                 },
             }
@@ -348,6 +450,7 @@ fn GridFixture() -> Element {
             SortableGrid {
                 len: tiles.read().len(),
                 cols: 3,
+                item_key: move |ix: usize| tiles.read()[ix].clone(),
                 on_sort: move |ev: SortEvent| apply_sort(&mut tiles.write(), ev),
                 style: "width: 360px; gap: 8px;",
                 render: move |ix: usize| rsx! {
@@ -470,7 +573,7 @@ fn CopyMoveFixture() -> Element {
     });
     let mut next_id = use_signal(|| 100u32);
     let on_drop = move |o: DropOutcome<Block>| {
-        apply_clone_or_move(
+        try_apply_clone_or_move(
             &mut zones.write(),
             o,
             |b| b.id,
@@ -479,7 +582,8 @@ fn CopyMoveFixture() -> Element {
                 next_id += 1;
                 b
             },
-        );
+        )
+        .expect("the demo accepts Move and Copy effects");
     };
     rsx! {
         section {
@@ -489,6 +593,7 @@ fn CopyMoveFixture() -> Element {
                     for (label, zone) in [("Palette", PALETTE), ("Stage", STAGE)] {
                         DropZone::<Block> {
                             id: zone,
+                            allowed_effects: DropEffects::MOVE | DropEffects::COPY,
                             on_drop,
                             style: "width: 200px; min-height: 140px; border: 1px dashed #999; padding: 8px;",
                             span { "{label}" }

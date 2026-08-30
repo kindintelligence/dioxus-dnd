@@ -1,6 +1,7 @@
 #![doc = include_str!("../docs/api/autoscroll.md")]
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dioxus::html::geometry::PixelsVector2D;
 use dioxus::html::{MountedData, ScrollBehavior};
@@ -8,6 +9,86 @@ use dioxus::prelude::*;
 
 use crate::core::hooks::use_rect_refresh_provider;
 use crate::core::{Point, Rect};
+
+static NEXT_SCROLL_CONTAINER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ScrollContainerId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScrollEntry {
+    id: ScrollContainerId,
+    rect: Rect,
+    available: bool,
+    blocked: bool,
+}
+
+/// Coordinates nested auto-scroll surfaces. The smallest available
+/// containing rect owns movement; when it reaches a boundary it marks itself
+/// blocked and the next containing surface takes over.
+pub(crate) struct ScrollCoordinator {
+    entries: Signal<Vec<ScrollEntry>>,
+}
+
+impl Copy for ScrollCoordinator {}
+impl Clone for ScrollCoordinator {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl PartialEq for ScrollCoordinator {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl ScrollCoordinator {
+    fn new() -> Self {
+        Self {
+            entries: Signal::new(Vec::new()),
+        }
+    }
+
+    fn update(&mut self, id: ScrollContainerId, rect: Rect, available: bool) {
+        let mut entries = self.entries.write();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.id == id) {
+            entry.rect = rect;
+            entry.available = available;
+        } else {
+            entries.push(ScrollEntry {
+                id,
+                rect,
+                available,
+                blocked: false,
+            });
+        }
+    }
+
+    fn set_blocked(&mut self, id: ScrollContainerId, blocked: bool) {
+        if let Some(entry) = self.entries.write().iter_mut().find(|entry| entry.id == id) {
+            entry.blocked = blocked;
+        }
+    }
+
+    fn owner(&self, point: Point) -> Option<ScrollContainerId> {
+        self.entries
+            .peek()
+            .iter()
+            .filter(|entry| entry.available && !entry.blocked && entry.rect.contains(point))
+            .min_by(|a, b| {
+                let aa = a.rect.width.max(0.0) * a.rect.height.max(0.0);
+                let ba = b.rect.width.max(0.0) * b.rect.height.max(0.0);
+                aa.total_cmp(&ba)
+            })
+            .map(|entry| entry.id)
+    }
+
+    fn unregister(&mut self, id: ScrollContainerId) {
+        if let Ok(mut entries) = self.entries.try_write() {
+            entries.retain(|entry| entry.id != id);
+        }
+    }
+}
 
 /// Which axes to auto-scroll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -39,7 +120,9 @@ pub fn edge_delta(
     if !rect.contains(pos) {
         return (0.0, 0.0);
     }
-    let ramp = |dist_into_band: f64| (dist_into_band / threshold.max(1.0)).clamp(0.0, 1.0) * speed;
+    let threshold = threshold.max(1.0);
+    let speed = speed.max(0.0);
+    let ramp = |dist_into_band: f64| (dist_into_band / threshold).clamp(0.0, 1.0) * speed;
     // Scroll toward whichever edge is nearer on this axis. Choosing the nearer
     // edge (rather than a plain `if left else if right`) means a container
     // narrower than `2 * threshold` - where the pointer is within the band of
@@ -69,6 +152,27 @@ pub fn edge_delta(
     (dx, dy)
 }
 
+/// Convert a pixels-per-second velocity into one frame's movement.
+pub fn frame_delta(velocity: (f64, f64), elapsed_seconds: f64) -> (f64, f64) {
+    let elapsed = if elapsed_seconds.is_finite() {
+        elapsed_seconds.clamp(0.0, 0.1)
+    } else {
+        0.0
+    };
+    (velocity.0 * elapsed, velocity.1 * elapsed)
+}
+
+fn animation_elapsed_seconds(elapsed_seconds: f32) -> f64 {
+    let elapsed_seconds = f64::from(elapsed_seconds);
+    if elapsed_seconds.is_finite() && elapsed_seconds > 0.0 {
+        elapsed_seconds
+    } else {
+        // The clock animation is 16 ms. A renderer that omits its elapsed
+        // duration still advances at the declared cadence.
+        0.016
+    }
+}
+
 /// Whether a pointer move should drive auto-scroll.
 ///
 /// Mouse pointer drags report contact through held buttons. Touch and pen
@@ -93,6 +197,23 @@ fn external_pointer_sample(active: Option<bool>, drag_pointer: Option<Point>) ->
     (active == Some(true)).then_some(drag_pointer).flatten()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClockOwner {
+    Pointer,
+    NativeDrag,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClockToken {
+    owner: ClockOwner,
+    epoch: u64,
+}
+
+fn resolved_velocity(speed: f64, speed_px_per_second: Option<f64>) -> f64 {
+    speed_px_per_second.unwrap_or(speed * 60.0)
+}
+
 /// A scrollable container that scrolls itself while a drag hovers near its
 /// edges. Give it the `overflow` CSS yourself (via `style`/`class`) - and
 /// consider `overscroll-behavior: contain` alongside it, so a wheel or
@@ -104,9 +225,15 @@ pub fn AutoScroll(
     /// Edge band size in px.
     #[props(default = 48.0)]
     threshold: f64,
-    /// Max scroll px per event.
+    /// Legacy maximum movement per nominal 60 Hz frame. Kept for 3.x source
+    /// and behavior compatibility; new code should prefer
+    /// `speed_px_per_second`.
     #[props(default = 24.0)]
     speed: f64,
+    /// Exact maximum scroll velocity in CSS pixels per second. When set, this
+    /// takes precedence over the legacy `speed` prop.
+    #[props(default)]
+    speed_px_per_second: Option<f64>,
     /// Axes to scroll.
     #[props(default)]
     axis: ScrollAxis,
@@ -133,10 +260,27 @@ pub fn AutoScroll(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
+    let max_velocity = resolved_velocity(speed, speed_px_per_second);
     let mut mounted = use_signal(|| None::<Rc<MountedData>>);
     // In-flight guard so a burst of dragover events doesn't queue a pile of
     // overlapping async scrolls.
     let busy = use_signal(|| false);
+    let mut latest_pointer = use_signal(|| None::<Point>);
+    let mut clock_running = use_signal(|| false);
+    let mut clock_generation = use_signal(|| 0u64);
+    let mut clock_owner = use_signal(|| None::<ClockOwner>);
+    let mut clock_epoch = use_signal(|| 0u64);
+    let mut native_drag_depth = use_signal(|| 0u32);
+    let scroll_id =
+        use_hook(|| ScrollContainerId(NEXT_SCROLL_CONTAINER.fetch_add(1, Ordering::Relaxed)));
+    let coordinator = use_hook(|| {
+        try_consume_context::<ScrollCoordinator>().unwrap_or_else(ScrollCoordinator::new)
+    });
+    use_context_provider(|| coordinator);
+    use_drop(move || {
+        let mut coordinator = coordinator;
+        coordinator.unregister(scroll_id);
+    });
     // Scrolling this container moves everything inside it, so cached
     // hit-test rects go stale the moment we scroll. Create-or-inherit the
     // tree's rect-refresh channel: with a DndProvider above we join its
@@ -172,27 +316,76 @@ pub fn AutoScroll(
         });
     };
 
-    let scroll_for = move |point: Point| {
+    let scroll_for = move |point: Point, elapsed_seconds: f64, token: ClockToken| {
         let Some(m) = mounted.peek().clone() else {
             return;
         };
+        let still_owned = move || {
+            *clock_running.peek()
+                && *clock_owner.peek() == Some(token.owner)
+                && *clock_epoch.peek() == token.epoch
+        };
+        if !still_owned() {
+            return;
+        }
         if *busy.peek() {
             return;
         }
         let mut busy = busy;
+        let mut clock_running = clock_running;
+        let mut coordinator = coordinator;
         busy.set(true);
         spawn(async move {
             if let Ok(r) = m.get_client_rect().await {
+                if !still_owned() {
+                    busy.set(false);
+                    return;
+                }
                 let rect = Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
-                let (dx, dy) = edge_delta(point, rect, threshold, speed, axis);
+                let velocity = edge_delta(point, rect, threshold, max_velocity, axis);
+                let (dx, dy) = frame_delta(velocity, elapsed_seconds);
+                let available = dx != 0.0 || dy != 0.0;
+                coordinator.update(scroll_id, rect, available);
+                if !available {
+                    if still_owned() {
+                        clock_running.set(false);
+                        clock_owner.set(None);
+                        clock_epoch += 1;
+                    }
+                    busy.set(false);
+                    return;
+                }
+                if coordinator.owner(point) != Some(scroll_id) {
+                    busy.set(false);
+                    return;
+                }
                 if dx != 0.0 || dy != 0.0 {
                     if let Ok(offset) = m.get_scroll_offset().await {
+                        if !still_owned() {
+                            busy.set(false);
+                            return;
+                        }
                         let _ = m
                             .scroll(
                                 PixelsVector2D::new(offset.x + dx, offset.y + dy),
                                 ScrollBehavior::Instant,
                             )
                             .await;
+                        if !still_owned() {
+                            busy.set(false);
+                            return;
+                        }
+                        let moved = m
+                            .get_scroll_offset()
+                            .await
+                            .map(|after| after.x != offset.x || after.y != offset.y)
+                            .unwrap_or(true);
+                        coordinator.set_blocked(scroll_id, !moved);
+                        if !moved {
+                            clock_running.set(false);
+                            clock_owner.set(None);
+                            clock_epoch += 1;
+                        }
                         // Everything just moved under the drag: re-measure
                         // so hover and the eventual drop hit what the user
                         // sees, not where things sat at pickup - and report
@@ -206,16 +399,59 @@ pub fn AutoScroll(
         });
     };
 
+    let mut start_clock = move |point: Point, owner: ClockOwner| {
+        latest_pointer.set(Some(point));
+        // A fresh pointer sample is a new opportunity for a container that
+        // previously hit a boundary. Geometry updates during an existing
+        // clock must not clear this bit, or the blocked inner container would
+        // repeatedly reclaim ownership before the outer surface can move.
+        let mut coordinator = coordinator;
+        coordinator.set_blocked(scroll_id, false);
+        if !*clock_running.peek() || *clock_owner.peek() != Some(owner) {
+            clock_owner.set(Some(owner));
+            clock_epoch += 1;
+            clock_running.set(true);
+            clock_generation += 1;
+        }
+    };
+    let mut stop_clock = move |owner: ClockOwner| {
+        if *clock_owner.peek() == Some(owner) {
+            clock_running.set(false);
+            clock_owner.set(None);
+            clock_epoch += 1;
+        }
+    };
+
     // A host-driven receiver may be event-blind while another surface owns
     // the pointer. React to its client-space feed through the same scroll
     // path as DOM pointer movement, with the explicit active gate above.
-    use_effect(move || {
+    use_effect(use_reactive!(|(active, drag_pointer)| {
         if let Some(point) = external_pointer_sample(active, drag_pointer) {
-            scroll_for(point);
+            start_clock(point, ClockOwner::External);
+        } else {
+            stop_clock(ClockOwner::External);
         }
-    });
+    }));
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &[
+            "onmounted",
+            "onwheel",
+            "ondragenter",
+            "ondragover",
+            "ondragleave",
+            "ondrop",
+            "onpointermove",
+            "onpointerup",
+            "onpointercancel",
+        ],
+    );
 
     rsx! {
+        style { style: "display: none;",
+            "@keyframes dnd-scroll-clock {{ from {{ opacity: 0.99; }} to {{ opacity: 1; }} }}"
+        }
         div {
             onmounted: move |evt: Event<MountedData>| {
                 mounted.set(Some(evt.data()));
@@ -229,11 +465,28 @@ pub fn AutoScroll(
             // the browser applied the scroll this event causes.
             onwheel: move |_| sample(),
             // Native boundary drags: dragover fires continuously while
-            // hovering. Note: no prevent_default here - drop permission stays
-            // the business of the zones inside.
+            // hovering. The enter/leave depth prevents movement between
+            // descendants from looking like departure from this container.
+            // Note: no prevent_default here - drop permission stays the
+            // business of the zones inside.
+            ondragenter: move |_| native_drag_depth += 1,
             ondragover: move |evt: DragEvent| {
+                if *native_drag_depth.peek() == 0 {
+                    native_drag_depth.set(1);
+                }
                 let c = evt.client_coordinates();
-                scroll_for(Point::new(c.x, c.y));
+                start_clock(Point::new(c.x, c.y), ClockOwner::NativeDrag);
+            },
+            ondragleave: move |_| {
+                let next = native_drag_depth.peek().saturating_sub(1);
+                native_drag_depth.set(next);
+                if next == 0 {
+                    stop_clock(ClockOwner::NativeDrag);
+                }
+            },
+            ondrop: move |_| {
+                native_drag_depth.set(0);
+                stop_clock(ClockOwner::NativeDrag);
             },
             // Pointer-driven drags: mouse uses held buttons, while touch and
             // pen commonly report pressure during contact.
@@ -245,14 +498,40 @@ pub fn AutoScroll(
                     active,
                 ) {
                     let c = evt.client_coordinates();
-                    scroll_for(Point::new(c.x, c.y));
+                    start_clock(Point::new(c.x, c.y), ClockOwner::Pointer);
                 }
                 // Sample on every move, contact or hover: it trues up the
                 // window after scrollbar drags and programmatic scrolls
                 // the moment the pointer stirs.
                 sample();
             },
+            onpointerup: move |_| stop_clock(ClockOwner::Pointer),
+            onpointercancel: move |_| stop_clock(ClockOwner::Pointer),
             ..attributes,
+            if let Some(owner) = clock_running().then_some(clock_owner()).flatten() {
+                div {
+                    key: "{clock_generation}",
+                    style: "position: absolute; width: 0; height: 0; overflow: hidden; \
+                            animation: dnd-scroll-clock 16ms linear forwards;",
+                    aria_hidden: true,
+                    onanimationend: move |event: AnimationEvent| {
+                        let token = ClockToken {
+                            owner,
+                            epoch: *clock_epoch.peek(),
+                        };
+                        let elapsed = animation_elapsed_seconds(event.data().elapsed_time());
+                        if let Some(point) = *latest_pointer.peek() {
+                            scroll_for(point, elapsed, token);
+                        }
+                        if *clock_running.peek()
+                            && *clock_owner.peek() == Some(token.owner)
+                            && *clock_epoch.peek() == token.epoch
+                        {
+                            clock_generation += 1;
+                        }
+                    },
+                }
+            }
             {children}
         }
     }
@@ -260,6 +539,8 @@ pub fn AutoScroll(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     fn external_pointer_app() -> Element {
@@ -279,6 +560,65 @@ mod tests {
         assert!(dioxus_ssr::render(&dom).contains("receiver"));
     }
 
+    #[derive(Clone, Props)]
+    struct DynamicPointerProps {
+        state: Rc<Cell<(Option<bool>, Option<Point>)>>,
+    }
+
+    impl PartialEq for DynamicPointerProps {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.state, &other.state)
+        }
+    }
+
+    fn dynamic_pointer_app(props: DynamicPointerProps) -> Element {
+        let (active, drag_pointer) = props.state.get();
+        rsx! {
+            AutoScroll { active, drag_pointer, "receiver" }
+        }
+    }
+
+    fn flush_effects(dom: &mut VirtualDom) {
+        for _ in 0..3 {
+            dom.process_events();
+            dom.render_immediate(&mut dioxus::core::NoOpMutations);
+        }
+    }
+
+    #[test]
+    fn external_pointer_prop_changes_start_and_stop_the_clock() {
+        let state = Rc::new(Cell::new((Some(false), None)));
+        let mut dom = VirtualDom::new_with_props(
+            dynamic_pointer_app,
+            DynamicPointerProps {
+                state: state.clone(),
+            },
+        );
+        dom.rebuild_in_place();
+        flush_effects(&mut dom);
+        assert!(!dioxus_ssr::render(&dom).contains("position: absolute; width: 0"));
+
+        state.set((Some(true), Some(Point::new(5.0, 5.0))));
+        dom.mark_dirty(ScopeId::APP);
+        flush_effects(&mut dom);
+        assert!(dioxus_ssr::render(&dom).contains("position: absolute; width: 0"));
+
+        state.set((None, Some(Point::new(5.0, 5.0))));
+        dom.mark_dirty(ScopeId::APP);
+        flush_effects(&mut dom);
+        assert!(!dioxus_ssr::render(&dom).contains("position: absolute; width: 0"));
+
+        state.set((Some(true), Some(Point::new(5.0, 5.0))));
+        dom.mark_dirty(ScopeId::APP);
+        flush_effects(&mut dom);
+        assert!(dioxus_ssr::render(&dom).contains("position: absolute; width: 0"));
+
+        state.set((Some(true), None));
+        dom.mark_dirty(ScopeId::APP);
+        flush_effects(&mut dom);
+        assert!(!dioxus_ssr::render(&dom).contains("position: absolute; width: 0"));
+    }
+
     #[test]
     fn external_pointer_requires_an_explicit_active_gate() {
         let point = Point::new(5.0, 5.0);
@@ -289,6 +629,12 @@ mod tests {
         assert_eq!(external_pointer_sample(Some(false), Some(point)), None);
         assert_eq!(external_pointer_sample(None, Some(point)), None);
         assert_eq!(external_pointer_sample(Some(true), None), None);
+    }
+
+    #[test]
+    fn legacy_speed_keeps_its_nominal_sixty_hertz_behavior() {
+        assert_eq!(resolved_velocity(24.0, None), 1440.0);
+        assert_eq!(resolved_velocity(24.0, Some(720.0)), 720.0);
     }
 
     #[test]
@@ -308,6 +654,35 @@ mod tests {
         // axis filtering: Y-only ignores horizontal proximity
         let (dx, _) = edge_delta(Point::new(1.0, 200.0), rect, 48.0, 24.0, ScrollAxis::Y);
         assert_eq!(dx, 0.0);
+    }
+
+    #[test]
+    fn velocity_is_scaled_by_elapsed_time() {
+        assert_eq!(frame_delta((600.0, -300.0), 0.02), (12.0, -6.0));
+        // A suspended tab cannot produce a giant catch-up jump.
+        assert_eq!(frame_delta((100.0, 100.0), 5.0), (10.0, 10.0));
+        assert_eq!(frame_delta((100.0, 100.0), f64::NAN), (0.0, 0.0));
+        assert_eq!(animation_elapsed_seconds(0.0), 0.016);
+        assert_eq!(animation_elapsed_seconds(f32::NAN), 0.016);
+    }
+
+    fn coordinator_probe() -> Element {
+        let mut coordinator = ScrollCoordinator::new();
+        let outer = ScrollContainerId(1);
+        let inner = ScrollContainerId(2);
+        let point = Point::new(50.0, 50.0);
+        coordinator.update(outer, Rect::new(0.0, 0.0, 200.0, 200.0), true);
+        coordinator.update(inner, Rect::new(25.0, 25.0, 50.0, 50.0), true);
+        assert_eq!(coordinator.owner(point), Some(inner));
+        coordinator.set_blocked(inner, true);
+        assert_eq!(coordinator.owner(point), Some(outer));
+        rsx! {}
+    }
+
+    #[test]
+    fn nested_coordinator_hands_boundary_to_outer_container() {
+        let mut dom = VirtualDom::new(coordinator_probe);
+        dom.rebuild_in_place();
     }
 
     #[test]

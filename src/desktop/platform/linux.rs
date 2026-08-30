@@ -12,6 +12,7 @@
 //! to the X server is ordinary (xdotool works this way) and observation-only;
 //! it never changes server state, so it cannot fight tao's own connection.
 
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::OnceLock;
 
 use dioxus::prelude::*;
@@ -53,28 +54,12 @@ fn x11_release_action(
     }
 }
 
-/// The sampling connection plus the root window it queries. One per process:
-/// every window's dead-space leg samples the same global pointer, and an X
-/// connection per window would multiply file descriptors for no information.
+/// The sampling connection plus the root window it queries. It lives only on
+/// the dedicated sampler thread, so an X server roundtrip never blocks the
+/// Dioxus UI executor.
 struct X11Pointer {
     connection: RustConnection,
     root: Window,
-}
-
-/// Connect once, verdict cached for the process lifetime. `None` means the
-/// display could not be opened at all (no X server, refused auth) - the leg
-/// then simply never engages, exactly as when tao had no X connection to
-/// lend. It is NOT a backend verdict: capability selection stays with tao's
-/// `is_wayland()`, and callers only reach here after that gate said X11.
-fn x11_pointer() -> Option<&'static X11Pointer> {
-    static POINTER: OnceLock<Option<X11Pointer>> = OnceLock::new();
-    POINTER
-        .get_or_init(|| {
-            let (connection, screen) = x11rb::connect(None).ok()?;
-            let root = connection.setup().roots.get(screen)?.root;
-            Some(X11Pointer { connection, root })
-        })
-        .as_ref()
 }
 
 fn query_x11_pointer(pointer: &X11Pointer) -> Option<X11PointerSample> {
@@ -90,6 +75,61 @@ fn query_x11_pointer(pointer: &X11Pointer) -> Option<X11PointerSample> {
         global: crate::core::Point::new(f64::from(reply.root_x), f64::from(reply.root_y)),
         primary_pressed: u16::from(reply.mask) & u16::from(KeyButMask::BUTTON1) != 0,
     })
+}
+
+type X11SampleReply = SyncSender<Option<X11PointerSample>>;
+
+/// One process-wide, bounded X11 worker. At most one query is running and
+/// one is queued; extra windows retry on their next 30 ms sampling tick.
+struct X11PointerSampler {
+    requests: SyncSender<X11SampleReply>,
+}
+
+impl X11PointerSampler {
+    fn new() -> Self {
+        let (requests, receiver) = sync_channel::<X11SampleReply>(1);
+        if let Err(error) = std::thread::Builder::new()
+            .name("dioxus-dnd-x11-pointer".to_string())
+            .spawn(move || run_x11_sampler(receiver))
+        {
+            tracing::warn!(%error, "failed to start X11 pointer sampler");
+        }
+        Self { requests }
+    }
+
+    async fn sample(&self) -> Option<X11PointerSample> {
+        let (reply, response) = sync_channel(1);
+        match self.requests.try_send(reply) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => return None,
+        }
+        loop {
+            match response.try_recv() {
+                Ok(sample) => return sample,
+                Err(TryRecvError::Disconnected) => return None,
+                Err(TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            }
+        }
+    }
+}
+
+fn run_x11_sampler(receiver: Receiver<X11SampleReply>) {
+    let Some(pointer) = x11rb::connect(None).ok().and_then(|(connection, screen)| {
+        let root = connection.setup().roots.get(screen)?.root;
+        Some(X11Pointer { connection, root })
+    }) else {
+        return;
+    };
+    while let Ok(reply) = receiver.recv() {
+        let _ = reply.send(query_x11_pointer(&pointer));
+    }
+}
+
+fn x11_pointer() -> &'static X11PointerSampler {
+    static POINTER: OnceLock<X11PointerSampler> = OnceLock::new();
+    POINTER.get_or_init(X11PointerSampler::new)
 }
 
 fn global_capability_for_backend(is_wayland: bool) -> GlobalCapability {
@@ -140,43 +180,31 @@ fn use_x11_dead_space_release<T: Clone + PartialEq + 'static>(
     });
 
     let _release_observer = use_resource(move || {
-        let connection = x11_confirmed().then(x11_pointer).flatten();
+        let sampler = x11_confirmed().then(x11_pointer);
         let generation = subscribed_generation(joined);
         let should_watch = generation.is_some_and(|generation| {
             fallback::poller_owns_generation(joined, &ctx, capability, generation)
         });
-        // Query synchronously only after this composite generation owns every
-        // bridge gate (including mouse/pen rather than touch). This observes
-        // the initiating press without a first 30 ms blind interval; a
-        // transient miss is retried by the async loop.
-        let first_sample = if should_watch {
-            connection.and_then(query_x11_pointer)
-        } else {
-            None
-        };
         async move {
-            let Some((connection, generation)) =
-                connection.zip(generation.filter(|_| should_watch))
+            let Some((sampler, generation)) = sampler.zip(generation.filter(|_| should_watch))
             else {
                 return;
             };
-            let mut first_sample = first_sample;
+            let mut first_sample = true;
             loop {
                 if !fallback::poller_owns_generation(joined, &ctx, capability, generation) {
                     break;
                 }
-                let sample = match first_sample.take() {
-                    Some(sample) => sample,
-                    None => {
-                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                        if !fallback::poller_owns_generation(joined, &ctx, capability, generation) {
-                            break;
-                        }
-                        let Some(sample) = query_x11_pointer(connection) else {
-                            continue;
-                        };
-                        sample
-                    }
+                if first_sample {
+                    first_sample = false;
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                }
+                if !fallback::poller_owns_generation(joined, &ctx, capability, generation) {
+                    break;
+                }
+                let Some(sample) = sampler.sample().await else {
+                    continue;
                 };
                 let pressed_generation_now = *pressed_generation.peek();
                 match x11_release_action(pressed_generation_now, generation, sample.primary_pressed)

@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 
 use crate::core::hooks::SettleFlag;
 use crate::core::model::DndScope;
+use crate::core::monitor::CancelReason;
 use crate::core::registry::ZoneRegistry;
 use crate::core::state::{DndContext, DragState};
 use crate::core::types::{Point, ZoneId};
@@ -120,10 +121,7 @@ impl<T: Clone + 'static> DndWorld<T> {
     pub fn new() -> Self {
         let scope = DndScope::new();
         let world = scope.with(|| Self {
-            ctx: DndContext::from_parts(
-                Store::new(DragState::default()),
-                Signal::new(String::new()),
-            ),
+            ctx: DndContext::managed(Store::new(DragState::default()), Signal::new(String::new())),
             windows: Signal::new(Vec::new()),
             active: Signal::new(None),
             global_pointer: Signal::new(None),
@@ -260,12 +258,12 @@ impl<T: Clone + 'static> DndWorld<T> {
                         // A built-in source normally finishes from its own
                         // cleanup before its provider leaves. Never call an
                         // unknown custom source after child teardown.
-                        ctx.abandon_session(session);
+                        ctx.abandon_session(session, CancelReason::SourceUnmounted);
                     }
                     // An untracked replacement can coexist briefly with the
                     // old source's committed completion. Cancel the closing
                     // window's drag without consuming that unrelated slot.
-                    _ => ctx.cancel(),
+                    _ => ctx.cancel_with_reason(CancelReason::SourceUnmounted),
                 }
                 self.clear_world_state();
                 return;

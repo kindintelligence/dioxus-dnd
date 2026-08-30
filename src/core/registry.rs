@@ -4,13 +4,19 @@
 //! navigation walks the zones in spatial order (top-to-bottom, left-to-right,
 //! with unmeasured zones last in registration order).
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
-use super::types::{Direction, DropOutcome, Point, Rect, ZoneId};
+use super::collision::{
+    rank_builtin_candidates, rank_collisions, CollisionDetector, CollisionRequest, ReleasePolicy,
+    ZoneCandidate,
+};
+use super::effects::{DropEffects, DropQuery};
+use super::types::{Direction, DropEffect, DropOutcome, EdgeSet, Point, Rect, ZoneId};
 
 // Identity freshness only: Relaxed is sufficient because the counter carries
 // no synchronization. Correctness assumes this process-lifetime u64 never
@@ -83,6 +89,19 @@ impl<T: Clone + 'static> Clone for ZoneRecord<T> {
 }
 
 impl<T: Clone + 'static> ZoneRecord<T> {
+    /// Create a zone record with permissive default acceptance policy.
+    pub fn new(id: ZoneId, on_drop: Callback<DropOutcome<T>>) -> Self {
+        Self {
+            id,
+            parent: None,
+            label: None,
+            on_drop,
+            accepts: None,
+            mounted: None,
+            rect: None,
+        }
+    }
+
     /// Does this zone accept the payload?
     pub fn accepts_payload(&self, payload: &T) -> bool {
         match self.accepts {
@@ -102,17 +121,72 @@ impl<T: Clone + 'static> ZoneRecord<T> {
     }
 }
 
+/// Target behavior added after the 3.x `ZoneRecord` shape was published.
+///
+/// This remains private and is keyed by the complete registration token so
+/// policy updates from an unmounted component cannot affect a same-id
+/// replacement.
+#[derive(Clone, PartialEq)]
+pub(crate) struct ZonePolicy<T: Clone + 'static> {
+    pub(crate) accepts_query: Option<Callback<DropQuery<T>, bool>>,
+    pub(crate) allowed_effects: DropEffects,
+    pub(crate) edge: Option<EdgeSet>,
+}
+
+impl<T: Clone + 'static> Default for ZonePolicy<T> {
+    fn default() -> Self {
+        Self {
+            accepts_query: None,
+            allowed_effects: DropEffects::default(),
+            edge: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RegisteredZone<T: Clone + 'static> {
+    record: ZoneRecord<T>,
+    policy: ZonePolicy<T>,
+}
+
+impl<T: Clone + 'static> RegisteredZone<T> {
+    fn negotiate(&self, query: &DropQuery<T>) -> Option<DropEffect> {
+        if query.proposed_effect == DropEffect::None || !self.record.accepts_payload(&query.payload)
+        {
+            return None;
+        }
+        if self
+            .policy
+            .accepts_query
+            .is_some_and(|callback| !callback.call(query.clone()))
+        {
+            return None;
+        }
+        self.policy.allowed_effects.negotiate(query.proposed_effect)
+    }
+}
+
+pub(crate) struct NegotiatedZone<T: Clone + 'static> {
+    pub(crate) record: ZoneRecord<T>,
+    pub(crate) effect: DropEffect,
+    pub(crate) edge: Option<EdgeSet>,
+}
+
 /// Registry of the currently registered drop zones, in registration order.
 pub struct ZoneRegistry<T: Clone + 'static> {
     zones: Signal<Vec<ZoneRecord<T>>>,
     /// Current generation for each id in `zones`. Kept separately so
-    /// `ZoneRecord` remains constructible with a public struct literal.
+    /// registration identity is not part of the public `ZoneRecord` shape.
     registrations: Signal<Vec<(ZoneId, u64)>>,
+    /// New target behavior kept out of the public 3.x `ZoneRecord` shape.
+    policies: Signal<Vec<(ZoneRegistration, ZonePolicy<T>)>>,
     /// Changes only when the zone set or a mounted handle changes. The debug
     /// overlay subscribes here so rect writes cannot retrigger measurement.
     mount_revision: Signal<u64>,
     /// Layout direction for spatial ordering (keyboard navigation).
     dir: Signal<Direction>,
+    /// Collision and release behavior for this provider/window.
+    release: Signal<ReleasePolicy<T>>,
 }
 
 impl<T: Clone + 'static> Copy for ZoneRegistry<T> {}
@@ -125,8 +199,10 @@ impl<T: Clone + 'static> PartialEq for ZoneRegistry<T> {
     fn eq(&self, other: &Self) -> bool {
         self.zones == other.zones
             && self.registrations == other.registrations
+            && self.policies == other.policies
             && self.mount_revision == other.mount_revision
             && self.dir == other.dir
+            && self.release == other.release
     }
 }
 
@@ -136,8 +212,32 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         Self {
             zones,
             registrations: Signal::new(Vec::new()),
+            policies: Signal::new(Vec::new()),
             mount_revision: Signal::new(0),
             dir: Signal::new(Direction::default()),
+            release: Signal::new(ReleasePolicy::default()),
+        }
+    }
+
+    /// Current collision and release policy.
+    pub fn release_policy(&self) -> ReleasePolicy<T> {
+        self.release
+            .try_peek()
+            .map(|policy| *policy)
+            .unwrap_or_default()
+    }
+
+    /// Synchronize the provider's collision and release policy.
+    pub fn set_release_policy(&mut self, policy: ReleasePolicy<T>) {
+        if self
+            .release
+            .try_peek()
+            .is_ok_and(|current| *current == policy)
+        {
+            return;
+        }
+        if let Ok(mut current) = self.release.try_write() {
+            *current = policy;
         }
     }
 
@@ -166,6 +266,16 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
 
     /// Add (or replace, by id) a zone.
     pub fn register(&mut self, record: ZoneRecord<T>) -> ZoneRegistration {
+        self.register_with_policy(record, ZonePolicy::default())
+    }
+
+    /// Register a built-in zone with behavior that is intentionally private
+    /// so the public `ZoneRecord` remains source compatible with 3.x.
+    pub(crate) fn register_with_policy(
+        &mut self,
+        record: ZoneRecord<T>,
+        policy: ZonePolicy<T>,
+    ) -> ZoneRegistration {
         let registration = ZoneRegistration {
             id: record.id,
             generation: NEXT_ZONE_REGISTRATION.fetch_add(1, Ordering::Relaxed),
@@ -198,6 +308,19 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
                 return registration;
             }
         };
+        let mut policies = match self.policies.try_write() {
+            Ok(policies) => policies,
+            Err(error) => {
+                trace_registry_failure(
+                    "register",
+                    "policies",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
+                return registration;
+            }
+        };
         if let Some(existing) = zones.iter_mut().find(|z| z.id == record.id) {
             *existing = record;
         } else {
@@ -211,6 +334,9 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         } else {
             registrations.push((registration.id, registration.generation));
         }
+        policies.retain(|(candidate, _)| candidate.id != registration.id);
+        policies.push((registration, policy));
+        drop(policies);
         drop(registrations);
         drop(zones);
         self.bump_mount_revision();
@@ -238,6 +364,84 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         }
     }
 
+    /// Update hierarchical ownership for this exact live registration.
+    pub(crate) fn sync_parent(&mut self, registration: ZoneRegistration, parent: Option<ZoneId>) {
+        if !self.is_current(registration, "sync_parent") {
+            return;
+        }
+        let needs = self.zones.try_peek().is_ok_and(|zones| {
+            zones
+                .iter()
+                .any(|zone| zone.id == registration.id && zone.parent != parent)
+        });
+        if !needs {
+            return;
+        }
+        match self.zones.try_write() {
+            Ok(mut zones) => {
+                if let Some(zone) = zones.iter_mut().find(|zone| zone.id == registration.id) {
+                    zone.parent = parent;
+                }
+            }
+            Err(error) => trace_registry_failure(
+                "sync_parent",
+                "zones",
+                Some(registration.id),
+                Some(registration.generation),
+                &error,
+            ),
+        }
+    }
+
+    /// Update acceptance, effect, and edge policy in place. Components call
+    /// this from reactive synchronization so policy props can change without
+    /// replacing the zone or losing its measured geometry.
+    pub(crate) fn sync_policy(
+        &mut self,
+        registration: ZoneRegistration,
+        accepts: Option<Callback<T, bool>>,
+        policy: ZonePolicy<T>,
+    ) {
+        if !self.is_current(registration, "sync_policy") {
+            return;
+        }
+        let mut zones = match self.zones.try_write() {
+            Ok(zones) => zones,
+            Err(error) => {
+                trace_registry_failure(
+                    "sync_policy",
+                    "zones",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
+                return;
+            }
+        };
+        let mut policies = match self.policies.try_write() {
+            Ok(policies) => policies,
+            Err(error) => {
+                trace_registry_failure(
+                    "sync_policy",
+                    "policies",
+                    Some(registration.id),
+                    Some(registration.generation),
+                    &error,
+                );
+                return;
+            }
+        };
+        if let Some(zone) = zones.iter_mut().find(|zone| zone.id == registration.id) {
+            zone.accepts = accepts;
+        }
+        if let Some((_, current)) = policies
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == registration)
+        {
+            *current = policy;
+        }
+    }
+
     /// Remove a zone (call when its component unmounts).
     pub fn unregister(&mut self, id: ZoneId) {
         // Structural state is a pair; acquire both guards before changing it.
@@ -255,14 +459,44 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
                 return;
             }
         };
+        let mut policies = match self.policies.try_write() {
+            Ok(policies) => policies,
+            Err(error) => {
+                trace_registry_failure("unregister", "policies", Some(id), None, &error);
+                return;
+            }
+        };
         let old_len = zones.len();
         zones.retain(|z| z.id != id);
         let removed = zones.len() != old_len;
         registrations.retain(|(registered_id, _)| *registered_id != id);
+        policies.retain(|(registration, _)| registration.id != id);
+        drop(policies);
         drop(registrations);
         drop(zones);
         if removed {
             self.bump_mount_revision();
+        }
+    }
+
+    /// Remove this exact registration if it is still current.
+    ///
+    /// A keyed Dioxus replacement may mount a new record with the same id
+    /// before the old component's cleanup runs. Token-aware cleanup prevents
+    /// that stale cleanup from deleting the replacement.
+    pub fn unregister_registration(&mut self, registration: ZoneRegistration) {
+        let current = self
+            .registrations
+            .try_read()
+            .ok()
+            .and_then(|registrations| {
+                registrations
+                    .iter()
+                    .find(|(id, _)| *id == registration.id)
+                    .copied()
+            });
+        if current == Some((registration.id, registration.generation)) {
+            self.unregister(registration.id);
         }
     }
 
@@ -366,10 +600,53 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// rendering from it re-renders when zones mount or unmount - because
     /// its consumers (the debug overlay, your own devtools) are renderers.
     pub fn records(&self) -> Vec<ZoneRecord<T>> {
-        self.zones
+        let records = self
+            .zones
             .try_read()
             .map(|zones| zones.to_vec())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        records
+    }
+
+    /// Take a bounded record snapshot before invoking application callbacks.
+    /// Dioxus signals are runtime-borrowed, so user acceptance or collision
+    /// code must never run while the registry's read guard is live.
+    fn snapshot(&self) -> Vec<RegisteredZone<T>> {
+        let records = self
+            .zones
+            .try_peek()
+            .map(|zones| zones.to_vec())
+            .unwrap_or_default();
+        let registrations = self
+            .registrations
+            .try_peek()
+            .map(|registrations| registrations.to_vec())
+            .unwrap_or_default();
+        let policies = self
+            .policies
+            .try_peek()
+            .map(|policies| policies.to_vec())
+            .unwrap_or_default();
+        records
+            .into_iter()
+            .map(|record| {
+                let registration = registrations.iter().find(|(id, _)| *id == record.id).map(
+                    |(id, generation)| ZoneRegistration {
+                        id: *id,
+                        generation: *generation,
+                    },
+                );
+                let policy = registration
+                    .and_then(|registration| {
+                        policies
+                            .iter()
+                            .find(|(candidate, _)| *candidate == registration)
+                            .map(|(_, policy)| policy.clone())
+                    })
+                    .unwrap_or_default();
+                RegisteredZone { record, policy }
+            })
+            .collect()
     }
 
     /// Is a zone with this id registered *here*? The parent-zone context is
@@ -392,16 +669,38 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
 
     /// All zones accepting `payload`, in registration order.
     pub fn acceptable(&self, payload: &T) -> Vec<ZoneRecord<T>> {
-        self.zones
-            .try_peek()
-            .map(|zones| {
-                zones
-                    .iter()
-                    .filter(|z| z.accepts_payload(payload))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.snapshot()
+            .into_iter()
+            .filter(|zone| zone.record.accepts_payload(payload))
+            .map(|zone| zone.record)
+            .collect()
+    }
+
+    /// All zones accepting a complete drop query.
+    pub fn acceptable_query(&self, query: &DropQuery<T>) -> Vec<ZoneRecord<T>> {
+        self.snapshot()
+            .into_iter()
+            .filter(|zone| zone.negotiate(query).is_some())
+            .map(|zone| zone.record)
+            .collect()
+    }
+
+    /// Negotiate one exact zone against its current private policy.
+    pub(crate) fn negotiate_zone(
+        &self,
+        id: ZoneId,
+        query: &DropQuery<T>,
+    ) -> Option<NegotiatedZone<T>> {
+        let zone = self
+            .snapshot()
+            .into_iter()
+            .find(|zone| zone.record.id == id)?;
+        let effect = zone.negotiate(query)?;
+        Some(NegotiatedZone {
+            record: zone.record,
+            effect,
+            edge: zone.policy.edge,
+        })
     }
 
     /// The next/previous zone (cyclic) relative to `current` among zones that
@@ -417,6 +716,18 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         spatial_sort(&mut zones, self.direction());
         let current_ix = current.and_then(|c| zones.iter().position(|z| z.id == c));
         cycle(zones.len(), current_ix, step).map(|ix| zones[ix].id)
+    }
+
+    pub fn step_zone_query(
+        &self,
+        current: Option<ZoneId>,
+        query: &DropQuery<T>,
+        step: isize,
+    ) -> Option<ZoneId> {
+        let mut zones = self.acceptable_query(query);
+        spatial_sort(&mut zones, self.direction());
+        let current_ix = current.and_then(|candidate| zones.iter().position(|z| z.id == candidate));
+        cycle(zones.len(), current_ix, step).map(|index| zones[index].id)
     }
 
     /// The parent of a zone, if it's nested.
@@ -435,16 +746,26 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// the end).
     pub fn children_of(&self, parent: Option<ZoneId>, payload: &T) -> Vec<ZoneRecord<T>> {
         let mut zones: Vec<_> = self
-            .zones
-            .try_peek()
-            .map(|zones| {
-                zones
-                    .iter()
-                    .filter(|z| z.parent == parent && z.accepts_payload(payload))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
+            .snapshot()
+            .into_iter()
+            .filter(|zone| zone.record.parent == parent && zone.record.accepts_payload(payload))
+            .map(|zone| zone.record)
+            .collect();
+        spatial_sort(&mut zones, self.direction());
+        zones
+    }
+
+    pub fn children_of_query(
+        &self,
+        parent: Option<ZoneId>,
+        query: &DropQuery<T>,
+    ) -> Vec<ZoneRecord<T>> {
+        let mut zones: Vec<_> = self
+            .snapshot()
+            .into_iter()
+            .filter(|zone| zone.record.parent == parent && zone.negotiate(query).is_some())
+            .map(|zone| zone.record)
+            .collect();
         spatial_sort(&mut zones, self.direction());
         zones
     }
@@ -463,9 +784,28 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
         cycle(siblings.len(), current_ix, step).map(|ix| siblings[ix].id)
     }
 
+    pub fn step_sibling_query(
+        &self,
+        current: Option<ZoneId>,
+        query: &DropQuery<T>,
+        step: isize,
+    ) -> Option<ZoneId> {
+        let parent = current.and_then(|candidate| self.parent_of(candidate));
+        let siblings = self.children_of_query(parent, query);
+        let current_ix =
+            current.and_then(|candidate| siblings.iter().position(|zone| zone.id == candidate));
+        cycle(siblings.len(), current_ix, step).map(|index| siblings[index].id)
+    }
+
     /// The first (spatially) acceptable zone nested inside `id`.
     pub fn first_child(&self, id: ZoneId, payload: &T) -> Option<ZoneId> {
         self.children_of(Some(id), payload).first().map(|z| z.id)
+    }
+
+    pub fn first_child_query(&self, id: ZoneId, query: &DropQuery<T>) -> Option<ZoneId> {
+        self.children_of_query(Some(id), query)
+            .first()
+            .map(|zone| zone.id)
     }
 
     /// Last record in registry order containing `point` (client coordinates),
@@ -492,17 +832,19 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// overlap, and is friendlier for imprecise (touch) drops that land in the
     /// gutter between zones.
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
-        let zones = self.zones.try_peek().ok()?;
+        let zones = self.snapshot();
         let mut best: Option<(ZoneId, f64)> = None;
         // One borrowed pass: the former miss path built and cloned an entire
         // `Vec<ZoneRecord<T>>`, then evaluated every acceptance filter twice.
         for z in zones.iter().rev() {
-            if !z.accepts_payload(payload) {
+            if !z.record.accepts_payload(payload) {
                 continue;
             }
-            let Some(r) = z.cached_rect() else { continue };
+            let Some(r) = z.record.cached_rect() else {
+                continue;
+            };
             if r.contains(point) {
-                return Some(z.id);
+                return Some(z.record.id);
             }
             // Distance to the rect's nearest point (zero on either axis the
             // point already overlaps), not to its center.
@@ -513,10 +855,90 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
             // an equal distance preserves the old fallback tie-break: the
             // earlier record in registry order wins.
             if d <= max_distance && best.map(|(_, bd)| d <= bd).unwrap_or(true) {
-                best = Some((z.id, d));
+                best = Some((z.record.id, d));
             }
         }
         best.map(|(id, _)| id)
+    }
+
+    /// Resolve a target with this registry's collision policy and return the
+    /// target-negotiated effect. Candidates are filtered by the full query
+    /// before collision ranking, so hover and release share acceptance.
+    pub fn resolve(
+        &self,
+        query: &DropQuery<T>,
+        point: Point,
+        active_rect: Option<Rect>,
+        max_distance: f64,
+    ) -> Option<(ZoneId, DropEffect)> {
+        let zones = self.snapshot();
+        let accepted: Vec<_> = zones
+            .iter()
+            .enumerate()
+            .filter_map(|(order, zone)| {
+                let effect = zone.negotiate(query)?;
+                Some((
+                    ZoneCandidate {
+                        id: zone.record.id,
+                        rect: zone.record.cached_rect()?,
+                        order,
+                    },
+                    effect,
+                ))
+            })
+            .collect();
+        let candidates = accepted.iter().map(|(candidate, _)| *candidate).collect();
+        let policy = self.release_policy();
+        let max_distance = max_distance.max(0.0);
+        let ranked = match policy.collision {
+            CollisionDetector::BuiltIn(strategy) => {
+                rank_builtin_candidates(strategy, point, active_rect, candidates, max_distance)
+            }
+            CollisionDetector::Custom(callback) => rank_collisions(
+                CollisionDetector::Custom(callback),
+                CollisionRequest {
+                    pointer: point,
+                    active_rect,
+                    payload: query.payload.clone(),
+                    candidates,
+                    max_distance,
+                },
+            ),
+        };
+        for collision in ranked {
+            if let Some((candidate, effect)) = accepted
+                .iter()
+                .find(|(candidate, _)| candidate.id == collision.zone)
+            {
+                return Some((candidate.id, *effect));
+            }
+        }
+        None
+    }
+
+    /// Resolve live hover with optional sticky retention. Exact collisions
+    /// always win. On an exact miss, a sticky policy may retain only the
+    /// current acceptable target while the pointer remains inside its
+    /// recovery radius.
+    pub fn resolve_hover(
+        &self,
+        query: &DropQuery<T>,
+        point: Point,
+        active_rect: Option<Rect>,
+        current: Option<ZoneId>,
+    ) -> Option<(ZoneId, DropEffect)> {
+        if let Some(hit) = self.resolve(query, point, active_rect, 0.0) {
+            return Some(hit);
+        }
+        let policy = self.release_policy();
+        if !policy.sticky {
+            return None;
+        }
+        let current = current?;
+        let zone = self.negotiate_zone(current, query)?;
+        let rect = zone.record.cached_rect()?;
+        (crate::core::collision::point_rect_distance(point, rect) <= policy.recovery_radius)
+            .then_some((current, zone.effect))
     }
 
     /// Re-measure every mounted zone's client rect and **wait** for the
@@ -541,8 +963,31 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
 
     /// Re-measure every mounted zone's client rect (async, spawned).
     pub fn refresh_rects(&self) {
-        for (registration, mounted) in self.measurement_targets() {
+        self.spawn_rect_refresh(None);
+    }
+
+    /// Re-measure every mounted zone in parallel, then notify the caller
+    /// once the whole batch has settled. The completion is used internally
+    /// to repeat hover resolution against the geometry that actually landed;
+    /// without that ordering, a final pointer move can race the async DOM
+    /// measurements and leave the previous zone highlighted.
+    pub(crate) fn refresh_rects_then(&self, on_complete: impl Fn() + 'static) {
+        self.spawn_rect_refresh(Some(Rc::new(on_complete)));
+    }
+
+    fn spawn_rect_refresh(&self, on_complete: Option<Rc<dyn Fn()>>) {
+        let targets = self.measurement_targets();
+        if targets.is_empty() {
+            if let Some(on_complete) = on_complete {
+                on_complete();
+            }
+            return;
+        }
+
+        let remaining = on_complete.map(|callback| (Rc::new(Cell::new(targets.len())), callback));
+        for (registration, mounted) in targets {
             let mut registry = *self;
+            let remaining = remaining.clone();
             spawn(async move {
                 if let Ok(r) = mounted.get_client_rect().await {
                     // See measure_all: the zone can die or be replaced
@@ -551,6 +996,14 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
                         registration,
                         Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
                     );
+                }
+                if let Some((remaining, on_complete)) = remaining {
+                    let pending = remaining.get();
+                    debug_assert!(pending > 0, "rect refresh completion counted twice");
+                    remaining.set(pending.saturating_sub(1));
+                    if pending == 1 {
+                        on_complete();
+                    }
                 }
             });
         }
@@ -779,9 +1232,15 @@ pub(crate) fn cycle(len: usize, current: Option<usize>, step: isize) -> Option<u
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use dioxus::prelude::*;
 
-    use super::{cycle, Direction, Rect, ZoneId, ZoneRecord, ZoneRegistry};
+    use super::{
+        cycle, Direction, DropQuery, Point, Rect, ReleasePolicy, ZoneId, ZonePolicy, ZoneRecord,
+        ZoneRegistry,
+    };
 
     #[test]
     fn cycle_steps_and_wraps() {
@@ -797,14 +1256,18 @@ mod tests {
         let zones = use_signal(Vec::<ZoneRecord<u8>>::new);
         let registrations = use_signal(Vec::<(ZoneId, u64)>::new);
         let other_registrations = use_signal(Vec::<(ZoneId, u64)>::new);
+        let policies = use_signal(Vec::new);
         let mount_revision = use_signal(|| 0u64);
         let other_mount_revision = use_signal(|| 0u64);
         let dir = use_signal(Direction::default);
+        let release = use_signal(ReleasePolicy::default);
         let registry = ZoneRegistry {
             zones,
             registrations,
+            policies,
             mount_revision,
             dir,
+            release,
         };
         let copy = registry;
 
@@ -831,6 +1294,66 @@ mod tests {
     #[test]
     fn equality_covers_every_registry_storage_handle() {
         let mut dom = VirtualDom::new(equality_probe);
+        dom.rebuild_in_place();
+    }
+
+    fn single_negotiation_probe() -> Element {
+        let calls = Rc::new(Cell::new(0));
+        let observed_calls = calls.clone();
+        let mut registry = ZoneRegistry::from_signal(Signal::new(Vec::<ZoneRecord<u8>>::new()));
+        let record = ZoneRecord::new(ZoneId(1), Callback::new(|_| {}));
+        let registration = registry.register_with_policy(
+            record,
+            ZonePolicy {
+                accepts_query: Some(Callback::new(move |_| {
+                    calls.set(calls.get() + 1);
+                    true
+                })),
+                ..ZonePolicy::default()
+            },
+        );
+        registry.set_rect_if_present(registration, Rect::new(0.0, 0.0, 20.0, 20.0));
+
+        assert_eq!(
+            registry.resolve(&DropQuery::new(7), Point::new(10.0, 10.0), None, 0.0,),
+            Some((ZoneId(1), crate::core::DropEffect::Move))
+        );
+        assert_eq!(
+            observed_calls.get(),
+            1,
+            "one hit-test must evaluate target policy once"
+        );
+        rsx! {}
+    }
+
+    #[test]
+    fn resolution_negotiates_each_candidate_once() {
+        let mut dom = VirtualDom::new(single_negotiation_probe);
+        dom.rebuild_in_place();
+    }
+
+    fn reentrant_acceptance_probe() -> Element {
+        let mut registry = ZoneRegistry::from_signal(Signal::new(Vec::<ZoneRecord<u8>>::new()));
+        let mut callback_registry = registry;
+        let mut record = ZoneRecord::new(ZoneId(1), Callback::new(|_| {}));
+        record.accepts = Some(Callback::new(move |_| {
+            callback_registry.register(ZoneRecord::new(ZoneId(2), Callback::new(|_| {})));
+            true
+        }));
+        registry.register(record);
+
+        let acceptable = registry.acceptable(&7);
+        assert_eq!(acceptable.len(), 1);
+        assert!(
+            registry.contains(ZoneId(2)),
+            "acceptance callbacks must be able to mutate the registry"
+        );
+        rsx! {}
+    }
+
+    #[test]
+    fn acceptance_callbacks_run_without_a_registry_borrow() {
+        let mut dom = VirtualDom::new(reentrant_acceptance_probe);
         dom.rebuild_in_place();
     }
 

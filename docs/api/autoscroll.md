@@ -4,8 +4,10 @@ Edge-scrolling for drags, the missing piece for long lists and tall
 boards: `AutoScroll` wraps any scrollable container and scrolls it while a
 drag hovers within `threshold` px of an edge, pings the tree's
 rect-refresh channel after every scroll so hit-testing tracks the
-movement, and reports the offset through `on_scroll`; `ScrollAxis` selects
-the axes and `edge_delta` is the pure math underneath.
+movement, and reports the offset through `on_scroll`. One continuous clock
+drives pixels-per-second velocity even while the pointer is stationary.
+`ScrollAxis` selects the axes. Nested coordination is automatic, and
+`edge_delta` is the pure velocity math underneath.
 
 Concept guide: [docs/concepts/autoscroll.md](../concepts/autoscroll.md).
 
@@ -22,14 +24,18 @@ Scrolling and measuring go through Dioxus's `MountedData`, with no
 JavaScript eval, so the same code works in web and desktop webviews.
 `dragover` (native boundary drags) and active `pointermove` events (in-app
 pointer drags via `Draggable` and the sortable components) feed pointer
-positions; when the pointer sits within `threshold` px of an edge, the
-container is scrolled by up to `speed` px per event, scaled by proximity.
+positions. The latest active sample starts a 16ms clock; while the pointer
+sits within `threshold` px of an edge, the container keeps moving at up to
+the resolved CSS-pixels-per-second velocity, scaled by proximity and elapsed
+time.
 
 ## `AutoScroll`
 
 A scrollable container that scrolls itself while a drag hovers near its
 edges. Renders a wrapper `div` and forwards arbitrary attributes (`class`,
-`style`, `id`, ...) to it. Give it the `overflow` CSS yourself, and
+`style`, `id`, ...) to it. Mounted, wheel, drag, and pointer listeners are
+component-owned and cannot be replaced through that forwarded list. Give it
+the `overflow` CSS yourself, and
 consider `overscroll-behavior: contain` alongside it, so a wheel or touch
 scroll that hits the container's end mid-drag doesn't chain into scrolling
 the page. (The edge-scrolling itself is programmatic, clamps at the
@@ -38,7 +44,8 @@ container's bounds, and never chains.)
 | Prop | Type | Default | What it does |
 |---|---|---|---|
 | `threshold` | `f64` | `48.0` | Edge band size in px. A drag hovering within this distance of an edge scrolls the container. |
-| `speed` | `f64` | `24.0` | Maximum scroll in px per event, reached at the very edge and ramped down linearly across the band. |
+| `speed` | `f64` | `24.0` | 3.x compatibility speed in nominal pixels per 60 Hz frame. Used only when `speed_px_per_second` is absent. |
+| `speed_px_per_second` | `Option<f64>` | `None` | Exact maximum velocity in CSS px per second. Takes precedence over `speed`; recommended for new code. |
 | `axis` | `ScrollAxis` | `Y` | Axes to scroll: `Y` for lists, `X` for strips, `Both` for 2D panes. |
 | `active` | `Option<bool>` | `None` | External drag-state gate for the pointer path. `Some(true)` scrolls on any pointer movement, `Some(false)` suppresses it, `None` uses the built-in contact heuristic. |
 | `drag_pointer` | `Option<Point>` | `None` | Pointer supplied by a host that tracks movement outside this element's DOM event stream, in this window's client coordinates. Read only while `active` is `Some(true)`; pass the matching drag's live active state so a retained coordinate cannot scroll idle or settling content. |
@@ -46,20 +53,26 @@ container's bounds, and never chains.)
 
 Behavior notes:
 
-- Two scrolling paths. Native boundary drags scroll through `dragover`,
-  which fires continuously while hovering; the handler never calls
-  `prevent_default`, so drop permission stays the business of the zones
-  inside. In-app drags scroll through `pointermove`, gated by contact:
+- One continuous clock with several pointer feeds. Native boundary drags
+  start it through `dragover`; the handler never calls `prevent_default`,
+  so drop permission stays the business of the zones inside. In-app drags
+  start it through `pointermove`, gated by contact:
   mouse drags report held buttons, touch and pen commonly report pressure
   during contact (and some platforms expose held buttons for them too).
   `active` overrides the heuristic in both directions.
 - The pointer must be inside the container to scroll it, edges inclusive.
   Under pointer capture the container keeps receiving bubbled
   `pointermove` events with the cursor far outside; without this gate the
-  delta would pin to full `speed` and the container would scroll forever.
+  delta would pin to full velocity and the container would scroll forever.
 - Scrolls with `ScrollBehavior::Instant` through the mounted handle, one
-  async scroll in flight at a time, so a burst of `dragover` events never
-  queues a pile of overlapping scrolls.
+  async scroll in flight at a time. Movement is velocity multiplied by
+  elapsed time, with elapsed time capped at 100ms so a suspended tab cannot
+  produce a giant catch-up jump.
+- Nested ownership. The outermost `AutoScroll` creates a coordinator and
+  nested instances inherit it. The smallest containing surface moves first.
+  If it reaches a boundary, it marks itself blocked and the next containing
+  surface receives subsequent movement until a fresh pointer sample makes
+  the inner surface eligible again.
 - Rect refresh. Scrolling this container moves everything inside it, so
   cached hit-test rects go stale the moment it scrolls. The component
   create-or-inherits the tree's rect-refresh channel: with a `DndProvider`
@@ -117,10 +130,9 @@ Which axes to auto-scroll.
 pub fn edge_delta(pos: Point, rect: Rect, threshold: f64, speed: f64, axis: ScrollAxis) -> (f64, f64)
 ```
 
-The pure per-axis math behind `AutoScroll`, public for unit-testing scroll
-ramps or driving a custom scroller with the same behavior. Returns
-`(dx, dy)`, each in `-speed..=speed`, for a pointer at `pos` inside
-`rect`:
+The pure per-axis velocity math behind `AutoScroll`, public for unit-testing
+ramps or driving a custom scroller with the same behavior. Returns `(vx,
+vy)`, each in `-speed..=speed`, for a pointer at `pos` inside `rect`:
 
 - Outside `rect` (edges inclusive), the delta is `(0.0, 0.0)`.
 - On each allowed axis the pointer scrolls toward whichever edge is
@@ -130,6 +142,9 @@ ramps or driving a custom scroller with the same behavior. Returns
 - The magnitude ramps linearly with depth into the band:
   `(depth / threshold).clamp(0.0, 1.0) * speed`, with the divisor floored
   at 1 so a zero threshold cannot divide by zero.
+
+`frame_delta(velocity, elapsed_seconds)` converts that velocity into one
+clock tick's movement and clamps elapsed time to 100ms.
 
 ## Where the rest lives
 

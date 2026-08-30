@@ -4,7 +4,9 @@
 
 use dioxus::prelude::*;
 
-use crate::core::components::{resolve_release_target, DropCompletion, SettleRoute};
+use crate::core::components::{drop_query, DropCompletion, SettleRoute};
+use crate::core::monitor::CancelReason;
+use crate::core::session::DragCompletion;
 use crate::core::types::{effective_effect, DragMode, Point, ZoneId};
 
 use super::geometry::WindowKey;
@@ -75,6 +77,9 @@ impl<T: Clone + 'static> DndWorld<T> {
         let Some(origin) = self.active_record() else {
             return;
         };
+        let Some((generation, session)) = self.drag_generation_peek() else {
+            return;
+        };
         let mut global_pointer = self.global_pointer;
         if *global_pointer.peek() != Some(global) {
             global_pointer.set(Some(global));
@@ -82,11 +87,29 @@ impl<T: Clone + 'static> DndWorld<T> {
         if let Some(local) = origin.geometry.to_client(global) {
             ctx.update_pointer(local);
         }
+        if !self.is_drag_generation(generation, session) {
+            return;
+        }
+        let modifiers = self
+            .active
+            .peek()
+            .as_ref()
+            .map_or_else(Modifiers::empty, |active| active.modifiers);
+        let effect = effective_effect(ctx.effect(), modifiers);
+        ctx.set_proposed_effect(effect);
         let location = self.resolve_global(global).and_then(|(rec, local)| {
-            rec.registry.hit_test(local).map(|zone| ZoneLocation {
-                window: rec.key,
-                zone,
-            })
+            let payload = ctx.payload()?;
+            let query = drop_query(&ctx, payload, effect);
+            let current = self
+                .over_location()
+                .filter(|location| location.window == rec.key)
+                .map(|location| location.zone);
+            rec.registry
+                .resolve_hover(&query, local, self.active_rect_in(rec, local), current)
+                .map(|(zone, _)| ZoneLocation {
+                    window: rec.key,
+                    zone,
+                })
         });
         match location {
             Some(location) => self.enter_location(location),
@@ -95,10 +118,9 @@ impl<T: Clone + 'static> DndWorld<T> {
     }
 
     /// Complete an in-flight pointer drag at a host-reported cursor
-    /// position (global physical px): last acceptable exact hit in registry
-    /// order within whichever window contains the point, else that window's
-    /// 48px snap (in its own CSS px), else cancel. Rejecting overlaps are
-    /// skipped. Returns the receiving zone. Used by glue that
+    /// position (global physical px), using the receiving registry's full
+    /// acceptance, collision, effect, and recovery policy. Returns the
+    /// receiving zone. Used by glue that
     /// detects a release the webviews never saw - e.g. a non-origin
     /// window receiving its first pointer event mid-"drag", which proves
     /// the button is up. A no-op returning `None` when nothing is
@@ -119,23 +141,22 @@ impl<T: Clone + 'static> DndWorld<T> {
         if !ctx.dragging() || ctx.mode() != DragMode::Pointer {
             return None;
         }
+        let (generation, captured_session) = self.drag_generation_peek()?;
         // The release is authoritative even when no final tracking tick ran.
         self.track_global(global);
+        if !self.is_drag_generation(generation, captured_session) {
+            return None;
+        }
         let session = self.drag_session();
         let Some((rec, local)) = self.resolve_global(global) else {
             match session {
                 Some(session) => {
-                    self.finish_session(session, false);
+                    self.finish_session(session, DragCompletion::Cancelled(CancelReason::NoTarget));
                 }
-                None => self.finish_untracked(false),
+                None => self.finish_untracked(DragCompletion::Cancelled(CancelReason::NoTarget)),
             }
             return None;
         };
-        // Release selection is acceptance-aware even for an exact overlap:
-        // a rejecting later registry record must not mask an accepting one.
-        let target = ctx
-            .payload()
-            .and_then(|p| resolve_release_target(rec.registry, &p, local, 48.0));
         // Imperative host delivery peeks the active snapshot rather than
         // subscribing the bridge runtime to modifier updates.
         let modifiers = self
@@ -144,6 +165,15 @@ impl<T: Clone + 'static> DndWorld<T> {
             .as_ref()
             .map_or_else(Modifiers::empty, |active| active.modifiers);
         let effect = effective_effect(ctx.effect(), modifiers);
+        // Release selection is acceptance-aware even for an exact overlap:
+        // a rejecting later registry record must not mask an accepting one.
+        let target = ctx.payload().and_then(|payload| {
+            let query = drop_query(&ctx, payload, effect);
+            let radius = rec.registry.release_policy().recovery_radius;
+            rec.registry
+                .resolve(&query, local, self.active_rect_in(rec, local), radius)
+                .map(|(zone, _)| zone)
+        });
         let delivered = target.filter(|t| {
             crate::core::components::deliver_drop(
                 rec.registry,
@@ -166,9 +196,14 @@ impl<T: Clone + 'static> DndWorld<T> {
             None => {
                 match session {
                     Some(session) => {
-                        self.finish_session(session, false);
+                        self.finish_session(
+                            session,
+                            DragCompletion::Cancelled(CancelReason::NoTarget),
+                        );
                     }
-                    None => self.finish_untracked(false),
+                    None => {
+                        self.finish_untracked(DragCompletion::Cancelled(CancelReason::NoTarget));
+                    }
                 }
                 None
             }
@@ -176,12 +211,21 @@ impl<T: Clone + 'static> DndWorld<T> {
     }
 
     /// Abort an in-flight drag from the host side (a window manager
-    /// signal, an escape hatch). No-op when nothing is dragging.
+    /// signal, an escape hatch). If delivery already succeeded and only its
+    /// visual settle is still running, this finishes that settle without
+    /// turning the committed drop into a cancellation. No-op when neither a
+    /// drag nor a settle is active.
     pub fn cancel_drag(&self) {
+        if self.ctx.settling().is_some() {
+            let mut ctx = self.ctx;
+            ctx.finish_settle();
+            self.clear_world_state();
+            return;
+        }
         if let Some(session) = self.drag_session() {
-            self.finish_session(session, false);
+            self.finish_session(session, DragCompletion::Cancelled(CancelReason::User));
         } else if self.ctx.dragging() {
-            self.finish_untracked(false);
+            self.finish_untracked(DragCompletion::Cancelled(CancelReason::User));
         }
     }
 

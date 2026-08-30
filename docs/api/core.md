@@ -6,7 +6,7 @@ the pointer gesture state machine, and the id and geometry types.
 
 Concept guide: [docs/concepts/architecture.md](../concepts/architecture.md).
 The ready-made components re-exported from this module (`DndProvider`,
-`Draggable`, `DropZone`, `DragOverlay`, `SettleSlot`, `ParentZone`) are
+`Draggable`, `DropZone`, `DragHandle`, `NoDrag`, `DragOverlay`, `SettleSlot`, `ParentZone`) are
 documented in [docs/api/drag-and-drop.md](drag-and-drop.md); the directory
 at the end of this page maps every other submodule to its reference.
 
@@ -44,11 +44,12 @@ teardown pattern.
 
 ## `DndContext<T>`
 
-The handle to the shared drag state, provided by `use_dnd_provider` (or the
+The handle to shared drag state, provided by `use_dnd_provider` (or the
 `DndProvider` component) and consumed with `use_dnd`. It is `Copy` and cheap
-to pass around - just a store key. All state lives in a `Store<DragState<T>>`,
-and every accessor reads through a per-field lens, so render-time reads
-subscribe only to the field they touch.
+to pass around. The published drag record lives in a `Store<DragState<T>>`;
+provider/world contexts also carry private identity, session, monitor, and
+terminal-phase state. Record accessors read through per-field lenses, so
+render-time reads subscribe only to the field they touch.
 
 Read accessors:
 
@@ -56,6 +57,8 @@ Read accessors:
 |---|---|---|
 | `dragging()` | `bool` | A drag is in flight. False while a completed drop is still settling, even though `payload()` remains readable. |
 | `payload()` | `Option<T>` | Clone of the payload in flight. |
+| `drag_id()` | `Option<DragId>` | Stable identity of the active draggable. |
+| `drag_session_id()` | `Option<DragSessionId>` | Fresh identity of the active tracked pointer gesture. |
 | `over()` | `Option<ZoneId>` | Zone currently hovered. |
 | `source()` | `Option<ZoneId>` | Zone the drag started from. |
 | `pointer()` | `Point` | Last known pointer position, client coordinates. |
@@ -71,7 +74,8 @@ Methods that drive a drag:
 
 | Method | What it does |
 |---|---|
-| `start(payload, source, pointer, grab, effect, mode)` | Begins a drag, resetting every field. `pointer_kind` and `source_rect` get defaults; refine them right after with `set_pointer_kind` and `set_source_rect`, as `Draggable` does. |
+| `start(payload, source, pointer, grab, effect, mode)` | Begins a custom drag, resetting every field. `pointer_kind` and `source_rect` get defaults; custom sources can refine them right after with `set_pointer_kind` and `set_source_rect`. Built-in `Draggable` installs its complete tracked snapshot atomically. |
+| `start_with_id(id, DragStart::new(payload, pointer)...)` | Begins a custom drag with explicit stable source identity. Built-in `Draggable` uses this path. |
 | `update_pointer(point)` | Tracks the pointer (drives `DragOverlay`). Granular: only `pointer` subscribers rerun. An exact (0,0) is ignored as a bogus platform report. |
 | `enter(zone)` | Marks `zone` hovered. Granular: only `over` subscribers rerun. |
 | `leave(zone)` | Clears hover, but only if `zone` is still the hovered one, so enter/leave races between adjacent zones resolve correctly. |
@@ -79,7 +83,8 @@ Methods that drive a drag:
 | `take_settling(to: Rect)` | Like `take`, but enters the settling phase: the stored payload stays readable, `over` clears, `dragging()` turns false, and `settle` records the destination rect so a settle-enabled `DragOverlay` can glide the ghost home. In a joined multi-window world, custom sources must claim the settle first; see [docs/api/multi-window.md](multi-window.md). |
 | `retarget_settle(to: Rect)` | Re-aims an in-flight settle at a better rect (`SettleSlot` does this with the landed element's own). No-op unless settling, and equality-guarded so effects that subscribe to `settle` cannot loop. |
 | `finish_settle()` | Ends the settling phase and resets all state. No-op unless settling, so a late `transitionend` can never clobber a new drag. |
-| `cancel()` | Aborts the drag and resets all state. |
+| `cancel()` | Aborts the drag with `CancelReason::User` and resets all state. |
+| `cancel_with_reason(reason)` | Aborts the drag with an explicit monitor-visible reason. Tracked sources are completed exactly once. |
 
 Helpers for custom sources and flows:
 
@@ -90,7 +95,8 @@ Helpers for custom sources and flows:
 | `request_refocus(payload)` | Marks `payload` as just landed via keyboard so its re-mounted element takes focus. `Draggable` calls it on its own keyboard drops. |
 | `claim_refocus(&payload)` | Claims a pending focus restoration if it matches; returns whether the caller should focus itself. First matching claimant wins - the request is consumed. Requires `T: PartialEq`. |
 | `announce(msg)` | Pushes a screen-reader announcement, rendered by `LiveRegion`. The built-in keyboard interaction calls it automatically; call it yourself for custom flows. |
-| `from_parts(state, announcement)` | Wraps an existing store and announcement signal. Prefer `use_dnd_provider`. |
+| `snapshot()` | Builds a `DragSnapshot<T>` for the active drag, including identity, session, target, geometry, and input metadata. |
+| `from_parts(state, announcement)` | Wraps a caller-owned store and announcement signal. The store remains authoritative: direct writes and other wrappers are observed by `dragging`, `settling`, cancellation, and replacement starts. Prefer `use_dnd_provider` unless custom code genuinely owns the store. |
 
 Pointer drags started by `Draggable` are additionally tracked as sessions
 (see `DragSessionId` below) so the source's `on_drag_end` fires exactly
@@ -98,11 +104,17 @@ once, even when the drop handler unmounts the source mid-delivery. That
 session machinery is internal; custom sources get the same guarantee by
 going through `Draggable` or the drag world.
 
+`DragStart<T>` is the non-exhaustive input used by `start_with_id`. Begin
+with `DragStart::new(payload, pointer)`, then add optional metadata with
+`with_source`, `with_grab`, `with_effect`, `with_mode`,
+`with_pointer_kind`, and `with_source_rect`.
+
 ## `DragState<T>`
 
-The snapshot of an in-flight drag, held in a `Store`. Deriving `Store`
-generates per-field lenses, which is what makes `DndContext`'s accessors
-granular. `Default` is the idle state (everything `None`, zero points).
+The source-compatible 3.x record of an in-flight drag, held in a `Store`.
+Deriving `Store` generates per-field lenses, which is what makes
+`DndContext`'s record accessors granular. `Default` is the idle state
+(everything `None`, zero points).
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -118,6 +130,11 @@ granular. `Default` is the idle state (everything `None`, zero points).
 | `refocus` | `Option<T>` | Payload of a just-completed keyboard drop awaiting focus restoration; the matching `Draggable` claims it on mount so keyboard users keep their place. |
 | `settle` | `Option<Rect>` | Destination rect of a drop whose overlay is still gliding home. While set, `dragging()` is false but `payload` stays readable. |
 
+Stable drag identity, tracked gesture sessions, the live modifier-adjusted
+effect, and the authoritative terminal phase live in `DndContext`'s private
+runtime sidecar. Read them through the context accessors; they are deliberately
+not fields of the source-compatible `DragState` record.
+
 ## Hooks
 
 | Hook | Returns | What it does |
@@ -127,6 +144,7 @@ granular. `Default` is the idle state (everything `None`, zero points).
 | `use_zone_registry::<T>()` | `ZoneRegistry<T>` | The provider's zone registry. Panics without an ancestor provider. |
 | `use_zone_id()` | `ZoneId` | A stable, auto-generated zone id for this component instance. |
 | `use_rect_refresh()` | `RectRefresh` | The provider tree's re-measure channel. Panics without an ancestor provider. |
+| `use_dnd_monitor::<T>(handler)` | `()` | Subscribes a component to Started, Moved, TargetChanged, Dropped, and Cancelled events from the nearest provider; automatically unsubscribes on unmount. |
 
 Pure helpers for native `DragEvent`s (in-app drags never produce these;
 they serve the boundary modules and custom native zones):
@@ -149,8 +167,11 @@ what is mounted, which is why virtualized lists work unmodified: see
 
 ### `ZoneRecord<T>`
 
-One registered drop zone. Constructible as a plain struct literal, so
-custom zones can register themselves.
+The source-compatible 3.x record for one registered drop zone. Custom zones
+can keep using a struct literal or start with `ZoneRecord::new(id, on_drop)`,
+then assign the public fields they need before registration. Rich query,
+effect, and edge policy is configured through `DropZone` props and kept in a
+private registration sidecar so this public record remains constructible.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -162,10 +183,11 @@ custom zones can register themselves.
 | `mounted` | `Option<Rc<MountedData>>` | The zone's mounted element, once available; update through `ZoneRegistry::set_mounted`. |
 | `rect` | `Option<Rect>` | Cached client rect; update through `ZoneRegistry::set_rect_if_present`. |
 
-Methods: `accepts_payload(&payload)` runs the filter (true when there is
-none), `cached_rect()` and `mounted_handle()` read this snapshot's values.
-Keep acceptance predicates cheap and do not mutate the same registry from
-them: registry queries invoke the predicate while holding their read guard.
+Methods: `accepts_payload(&payload)` runs the legacy filter (true when there
+is none), while `cached_rect()` and `mounted_handle()` read this snapshot's
+values. Registry queries snapshot candidates before invoking application
+acceptance callbacks, so a reentrant registry mutation is safe and affects
+future queries rather than the snapshot already being resolved.
 
 ### `ZoneRegistry<T>`
 
@@ -179,6 +201,7 @@ Registration:
 | `register(record)` | Adds a zone, or replaces the existing record with the same id. Returns a `ZoneRegistration` token. |
 | `unregister(id)` | Removes a zone; call when its component unmounts. |
 | `sync_label(id, label)` | Updates a zone's label in place; no-op if unchanged or unknown. Safe to call every render. |
+| `release_policy()` / `set_release_policy(policy)` | Reads or synchronizes this provider's collision detector, recovery radius, and sticky behavior. |
 | `set_mounted(registration, mounted)` | Attaches the mounted element to this exact registration; a stale token is ignored. |
 | `set_rect_if_present(registration, rect)` | Stores a rect only while the registration is still current. Never inserts a missing zone, so an async measurement cannot resurrect a zone that unmounted mid-flight. |
 | `set_rect(id, rect)` | Synchronous, manual counterpart to `set_rect_if_present` for the current registration of `id`; used by custom layout adapters and the headless test driver. |
@@ -193,6 +216,7 @@ Lookups. All of these peek (read without subscribing) except `records`:
 | `mounted_handle(id)` | `Option<Rc<MountedData>>` | The mounted element; `None` before mount, for an unknown zone, or after teardown. |
 | `contains(id)` | `bool` | Is this id registered here? The parent-zone context is shared across payload types, so a record's `parent` can name a zone living in another type's registry - check before navigating to one. |
 | `acceptable(&payload)` | `Vec<ZoneRecord<T>>` | All zones accepting the payload, in registration order. |
+| `acceptable_query(&query)` | `Vec<ZoneRecord<T>>` | All zones accepting and negotiating the complete drop query. |
 | `records()` | `Vec<ZoneRecord<T>>` | Every zone, in registration order. A subscribing read - a component rendering from it reruns when zones mount or unmount - because its consumers (the debug overlay, your devtools) are renderers. |
 
 Keyboard navigation. Order is spatial - top-to-bottom, then reading order,
@@ -205,6 +229,7 @@ rect come last in registration order:
 |---|---|
 | `direction()` / `set_direction(dir)` | The layout direction spatial ordering follows. Setting is a no-op if unchanged; `DndProvider`'s `dir` prop calls it for you. |
 | `step_zone(current, &payload, step)` | Next (`+1`) or previous (`-1`) acceptable zone, cyclic, in spatial order. Call `refresh_rects` first, as the built-in keyboard interaction does on pickup. |
+| `step_zone_query(current, &query, step)` | Query-aware counterpart used by built-in keyboard dragging. |
 | `parent_of(id)` | The parent of a nested zone. |
 | `ascend(current)` | The zone to enter when ascending: the parent, but only when this registry can resolve it. |
 | `children_of(parent, &payload)` | Acceptable zones directly inside `parent` (`None` is the root level), spatially ordered. |
@@ -217,6 +242,43 @@ Hit-testing, against cached rects:
 |---|---|
 | `hit_test(point)` | Last record in registry order containing the point. Registry order only approximates DOM paint order: CSS `z-index`, stacking contexts and portals are not inspected. Replacing a same-id record retains its slot. |
 | `hit_test_closest(point, &payload, max_distance)` | Acceptance-aware: the last record in registry order that contains the point and accepts the payload, so a release can pass a rejecting record and land on an earlier acceptable overlap. When nothing contains the point, falls back to the acceptable zone whose rect edge is nearest, within `max_distance` CSS px - the built-in drop passes 48.0 - which forgives releases in the gutter between zones. |
+| `resolve(&query, point, active_rect, max_distance)` | Filters with full target policy, ranks through the configured collision detector, and returns the selected zone plus negotiated effect. |
+| `resolve_hover(&query, point, active_rect, current)` | Exact policy resolution with optional sticky retention of the current acceptable target. |
+
+## Collision and release policy
+
+`DndProvider` accepts a `ReleasePolicy<T>`:
+
+```rust,ignore
+DndProvider::<Card> {
+    release: ReleasePolicy::strategy(CollisionStrategy::ClosestCorners)
+        .with_recovery_radius(32.0)
+        .with_sticky(true),
+    App {}
+}
+```
+
+Built-in `CollisionStrategy` variants are `PointerWithin`, `ClosestCenter`,
+`ClosestCorners`, and `RectIntersection`. A
+`CollisionDetector::Custom(Callback<CollisionRequest<T>, Vec<Collision>>)`
+receives the pointer, optional active rectangle, payload, candidates, and
+maximum distance, then returns ranked candidates. Lower scores rank first.
+Exact-score ties preserve the existing later-registration overlap
+precedence.
+
+`recovery_radius` replaces the formerly fixed 48px release recovery. Sticky
+hover keeps the current acceptable target across an exact miss while the
+pointer remains within that radius. Final release still runs the configured
+detector and target effect negotiation.
+
+## Lifecycle monitoring
+
+`DndEvent<T>` is non-exhaustive and contains `Started(DragSnapshot<T>)`,
+`Moved`, `TargetChanged`, `Dropped(DropReceipt<T>)`, and `Cancelled`.
+`DropReceipt<T>` pairs the complete pre-delivery drag snapshot with the
+unchanged `DropOutcome<T>`, preserving the 3.x outcome contract while making
+stable identity and lifecycle metadata available to analytics, undo,
+debugging, and persistence layers.
 
 Measurement:
 
@@ -328,7 +390,7 @@ auto-sensor:
 | Type | What it is |
 |---|---|
 | `ZoneId(pub u64)` | Identifies a drop zone. `ZoneId::auto()` generates a process-unique id; call it inside `use_hook` (or use `use_zone_id`) so it sticks across renders. Auto ids start at 2^32; explicit ids in `u32` range can never collide with them. The registry replaces records by id, so a collision would silently knock a zone out - the reservation makes it impossible. `From<u64>` is implemented. |
-| `DragId(pub u64)` | Identifies a draggable item. `DragId::auto()` draws from the same 2^32-and-up sequence. `From<u64>` is implemented. |
+| `DragId(pub u64)` | Identifies a draggable item. `Draggable` accepts an explicit id and otherwise generates one per mount. `DragId::auto()` draws from the same 2^32-and-up sequence. `From<u64>` is implemented. |
 | `DragSessionId(pub u64)` | Identifies one pointer-drag gesture from pickup through its exactly-once completion. Unlike `DragId`, which applications may use as item identity, this id is generated afresh for every gesture; the crate creates and consumes them internally. |
 | `Point` | A 2D point in CSS pixels, `{ x, y }`. Implements `Add` and `Sub`; `Point::new(x, y)`. |
 | `Rect` | An axis-aligned rectangle in client (viewport) coordinates, `{ x, y, width, height }`. `contains(point)` is edge-inclusive; `center()` and `origin()` return the middle and top-left. |

@@ -27,6 +27,7 @@ exclude = [
     "docs/RENDERER-CONTRACT.md",
     "docs/superpowers/",
     "DESKTOP-ARCHITECTURE-RECONCILIATION-REVIEW.md",
+    "DIOXUS_REVIEW.md",
     "package.json",
     "package-lock.json",
     "playwright.config.js",
@@ -39,7 +40,7 @@ all-features = true
 [dependencies]
 # `document` is the cross-renderer bridge used to activate FileDropZone's
 # hidden native file input on click; it adds behavior only, never CSS.
-dioxus = { version = "0.7", default-features = false, features = ["minimal", "document"] }
+dioxus = { version = "0.7", default-features = false, features = ["minimal", "document", "mounted"] }
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 # `web` feature only. Pinned to the version dioxus-web 0.7 pulls so cargo
@@ -64,7 +65,7 @@ tracing = "0.1"
 # but that re-export is not a semver promise - it can vanish in a tao minor
 # without a breaking release - so the leg must not lean on it. Pure-Rust
 # RustConnection, no extension features, no unsafe.
-x11rb = { version = "0.13", optional = true }
+x11rb = { version = "0.14", optional = true }
 
 [features]
 default = []

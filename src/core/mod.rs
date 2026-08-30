@@ -1,10 +1,14 @@
 #![doc = include_str!("../../docs/api/core.md")]
 
+pub mod activation;
+pub mod collision;
 pub mod components;
+pub mod effects;
 pub mod hooks;
 pub mod machine;
 pub mod model;
 pub mod modifiers;
+pub mod monitor;
 pub(crate) mod platform;
 pub mod registry;
 mod session;
@@ -14,9 +18,16 @@ pub mod types;
 pub mod viewport;
 pub mod world;
 
-pub use components::{
-    BridgeDropZone, DndProvider, DragOverlay, Draggable, DropZone, ParentZone, SettleSlot,
+pub use activation::{ActivationConstraint, ActivationPolicy, Activator};
+pub use collision::{
+    rank_collisions, Collision, CollisionDetector, CollisionRequest, CollisionStrategy,
+    ReleasePolicy, ZoneCandidate,
 };
+pub use components::{
+    use_parent_zone, BridgeDropZone, BridgeParentZoneBoundary, DndProvider, DragHandle,
+    DragOverlay, Draggable, DropZone, NoDrag, ParentZone, SettleSlot,
+};
+pub use effects::{DropEffects, DropQuery};
 pub use hooks::{
     client_point, element_point, use_bridge_world, use_dnd, use_dnd_provider, use_rect_refresh,
     use_zone_id, use_zone_registry, BridgeGeometry, BridgeWorld,
@@ -24,10 +35,15 @@ pub use hooks::{
 pub use machine::{
     transition, transition_with, GestureEffect, GestureEvent, GesturePhase, Promotion,
 };
-pub use model::{apply_clone_or_move, apply_list_clone_or_move, use_dnd_model, DndScope};
+pub use model::{
+    apply_clone_or_move, apply_list_clone_or_move, try_apply_clone_or_move,
+    try_apply_list_clone_or_move, use_dnd_model, ApplyDropError, DndScope,
+};
 pub use modifiers::{apply_modifiers, DragModifier, ModifierCtx};
+pub use monitor::{use_dnd_monitor, CancelReason, DndEvent, DragSnapshot, DropReceipt};
 pub use registry::{RectRefresh, ZoneRecord, ZoneRegistration, ZoneRegistry};
-pub use state::{DndContext, DragState};
+pub(crate) use session::DragCompletion;
+pub use state::{DndContext, DragStart, DragState};
 pub use strings::{use_dnd_strings, DndStrings};
 pub use types::{
     edge_of, effective_effect, Direction, DragId, DragMode, DragSessionId, DropEffect, DropOutcome,

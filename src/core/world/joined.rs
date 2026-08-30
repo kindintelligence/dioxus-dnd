@@ -4,6 +4,7 @@
 use dioxus::prelude::{ReadableExt, WritableExt};
 
 use crate::core::types::{Point, ZoneId};
+use crate::core::DropQuery;
 
 use super::geometry::{WindowGeometry, WindowKey};
 use super::state::{DndWorld, WindowRecord, ZoneLocation};
@@ -70,6 +71,37 @@ impl<T: Clone + 'static> JoinedWindow<T> {
         };
         match rec.registry.hit_test(local) {
             Some(zone) => WorldHit::Zone(ZoneLocation {
+                window: rec.key,
+                zone,
+            }),
+            None => WorldHit::Window,
+        }
+    }
+
+    /// Acceptance-aware, policy-driven variant used by built-in drags.
+    pub(crate) fn zone_under_query(&self, client: Point, query: &DropQuery<T>) -> WorldHit {
+        let Some(global) = self.geometry.to_global(client) else {
+            return WorldHit::Unresolved;
+        };
+        let mut global_pointer = self.world.global_pointer;
+        if *global_pointer.peek() != Some(global) {
+            global_pointer.set(Some(global));
+        }
+        let Some((rec, local)) = self.world.resolve_global(global) else {
+            return WorldHit::Unresolved;
+        };
+        let current = self
+            .world
+            .over_location()
+            .filter(|location| location.window == rec.key)
+            .map(|location| location.zone);
+        match rec.registry.resolve_hover(
+            query,
+            local,
+            self.world.active_rect_in(rec, local),
+            current,
+        ) {
+            Some((zone, _)) => WorldHit::Zone(ZoneLocation {
                 window: rec.key,
                 zone,
             }),

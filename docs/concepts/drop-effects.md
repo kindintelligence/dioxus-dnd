@@ -173,13 +173,19 @@ outside the origin webview. Every window's `on_drop` branches on
 
 ## Gotchas
 
+- **`None` disables targeting.** A drag may remain visually in flight, but a
+  `DropEffect::None` proposal neither highlights nor evaluates target
+  acceptance and can never call `on_drop`.
 - **Keyboard drops carry the base effect.** Modifier resolution is pointer
   vocabulary; the keyboard path spends its keys on pickup, navigation and
   drop, so `DropOutcome::effect` is the `effect` prop unchanged. Your
   branch needs no special case, the field is always filled.
-- **The helpers only special-case `Copy`.** `Link` and `None` take the move
-  branch. If `Link` means something in your app, branch on
-  `DropOutcome::effect` before, or instead of, calling the helper.
+- **The checked helpers reject ambiguous effects.**
+  `try_apply_clone_or_move` and `try_apply_list_clone_or_move` return
+  `ApplyDropError::UnsupportedEffect` for `Link` and `None` without mutating
+  the model. The unprefixed helpers retain their 3.x `()` return contract and
+  historical non-Copy move behavior. Prefer target `allowed_effects` plus a
+  checked helper in new code.
 - **A move prunes only a declared source.** `apply_clone_or_move` finds the
   source through `DropOutcome::from`, which the `Draggable`'s `zone` prop
   fills. Without it, a move just appends and the original stays.

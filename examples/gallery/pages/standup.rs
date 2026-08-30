@@ -81,7 +81,7 @@ pub fn StandupPage() -> Element {
                 rows: vec![
                     ("use_zone_registry::<T>()", "-> ZoneRegistry<T>", "The per-type registry the provider carries. Public precisely so custom zones like this one can exist."),
                     ("use_zone_id()", "-> ZoneId", "A stable, process-unique id. Unique across all types, which is what lets one id live in several registries."),
-                    ("ZoneRecord<T>", "id, parent, label, on_drop, accepts, mounted: Option<_>, rect: Option<Rect>", "Everything a registry owns for a zone. register() adds or replaces by id; mutation methods update geometry; unregister() removes."),
+                    ("ZoneRecord<T>", "identity, callbacks, effect policy, geometry", "Everything a registry owns for a zone. register() adds or replaces by id; mutation methods update policy and geometry; unregister() removes."),
                     ("ParentZone", "context marker", "Read it to discover an enclosing zone, provide it so zones nested in the bridge find their parent."),
                 ],
             }
@@ -136,18 +136,22 @@ let mut reg_b = use_zone_registry::<Person>();
 let zone_id = use_zone_id();          // process-unique: valid in both worlds
 let parent = try_use_context::<ParentZone>().map(|p| p.0);
 let registration_a = use_hook(|| {
-    reg_a.register(ZoneRecord {
-        id: zone_id, parent, label: label.clone(),
-        on_drop: Callback::new(move |o| on_ticket.call(o)),
-        accepts: None, mounted: None, rect: None,
-    })
+    let mut record = ZoneRecord::new(
+        zone_id,
+        Callback::new(move |o| on_ticket.call(o)),
+    );
+    record.parent = parent;
+    record.label = label.clone();
+    reg_a.register(record)
 });
 let registration_b = use_hook(|| {
-    reg_b.register(ZoneRecord {
-        id: zone_id, parent, label,   // same id, other registry
-        on_drop: Callback::new(move |o| on_person.call(o)),
-        accepts: None, mounted: None, rect: None,
-    })
+    let mut record = ZoneRecord::new(
+        zone_id, // same id, other registry
+        Callback::new(move |o| on_person.call(o)),
+    );
+    record.parent = parent;
+    record.label = label;
+    reg_b.register(record)
 });
 use_drop(move || {
     reg_a.unregister(zone_id);

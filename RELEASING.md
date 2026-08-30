@@ -7,16 +7,16 @@ tag is validated and automated.
 ## Compatibility policy
 
 The `3.1.x` line supports Dioxus `0.7` and is locked and tested against
-`0.7.9`. This preserves one coherent Dioxus type graph for existing users.
+`0.7.10`. This preserves one coherent Dioxus type graph for existing users.
 
 The renderer-neutral library is checked on Rust 1.85. The optional desktop
 dependency graph is checked on current stable Rust because its Dioxus Desktop
 transitives currently require Rust 1.88 for a security-patched `time` release.
 
-CI also rewrites a clean checkout to published Dioxus `0.8.0-alpha.0` and runs
+CI also rewrites a clean checkout to published Dioxus `0.8.0-alpha.1` and runs
 the full Rust suite. That is a source-compatibility signal, not a published
-dependency promise. Cargo cannot cleanly express a union of stable `0.7.9` and
-prerelease `0.8.0-alpha.0`. When Dioxus 0.8 stabilizes, review its final public
+dependency promise. Cargo cannot cleanly express a union of stable `0.7.10` and
+prerelease `0.8.0-alpha.1`. When Dioxus 0.8 stabilizes, review its final public
 types and choose an intentional compatibility range or a new dioxus-dnd major
 version.
 

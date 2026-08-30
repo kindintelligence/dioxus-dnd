@@ -5,17 +5,20 @@
 //! reference for both components lives with the [`crate::sortable`]
 //! module docs, docs/api/sortable-lists.md.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
 
 use crate::a11y::use_reduced_motion_css;
-use crate::core::components::merge_style;
+use crate::core::components::merge_style_user_last;
 use crate::core::hooks::use_rect_refresh_thunk;
 use crate::core::{platform, transition, GestureEffect, GestureEvent, GesturePhase, Point, Rect};
-use crate::sortable::{list_bounds, refresh_rects, ReorderMode, SortEvent};
+use crate::sortable::{
+    build_render_keys, current_rects, list_bounds, measure_rect, mounted_at, refresh_rects,
+    RenderKey, ReorderMode, SortEvent,
+};
 
 fn pointer_client(evt: &PointerEvent) -> Point {
     let c = evt.client_coordinates();
@@ -69,8 +72,15 @@ pub fn SortableGrid(
     /// `data-dragging` / `data-drop-target`.
     #[props(default)]
     item_class: Option<String>,
+    /// Stable render identity for each tile. Supply this whenever tiles own
+    /// hook state or focus and the backing collection can reorder.
+    #[props(default)]
+    item_key: Option<Callback<usize, String>>,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
 ) -> Element {
+    let render_keys = build_render_keys(len, item_key);
+    let initial_render_keys = render_keys.clone();
+    let mut index_keys = use_signal(move || initial_render_keys);
     // `mode` only affects what the caller does with the SortEvent, but we
     // surface it as a data attribute so styling can differ (e.g. swap
     // targets often highlight the whole tile, insert targets show an edge).
@@ -82,21 +92,46 @@ pub fn SortableGrid(
     let mut over = use_signal(|| None::<usize>);
     let mut press_from = use_signal(|| None::<usize>);
     let mut attributes = attributes;
-    let style = merge_style(
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &[
+            "data-mode",
+            "onpointermove",
+            "onpointerup",
+            "onpointercancel",
+            "onlostpointercapture",
+        ],
+    );
+    let style = merge_style_user_last(
         &mut attributes,
         &format!("display: grid; grid-template-columns: repeat({cols}, 1fr);"),
     );
 
     // Pointer path: per-tile rects measured at drag start, hovered tile =
     // the one containing the pointer.
-    let rects = use_signal(HashMap::<usize, Rect>::new);
-    let mounteds = use_signal(HashMap::<usize, Rc<MountedData>>::new);
+    let rects = use_signal(HashMap::<RenderKey, Rect>::new);
+    let mounteds = use_signal(HashMap::<RenderKey, Rc<MountedData>>::new);
+    let generations = use_signal(HashMap::<RenderKey, u64>::new);
+    let mut rects_for_keys = rects;
+    let mut mounteds_for_keys = mounteds;
+    let mut generations_for_keys = generations;
+    use_effect(use_reactive!(|(render_keys)| {
+        let active: HashSet<_> = render_keys.iter().cloned().collect();
+        index_keys.set(render_keys);
+        rects_for_keys.write().retain(|key, _| active.contains(key));
+        mounteds_for_keys
+            .write()
+            .retain(|key, _| active.contains(key));
+        generations_for_keys
+            .write()
+            .retain(|key, _| active.contains(key));
+    }));
     // Tiles never transform mid-drag, so a scroll ping is a plain
     // re-measure (see the compensated variant in `sortable` for why lists
     // differ).
     use_rect_refresh_thunk(move |_| {
         if drag_from.peek().is_some() {
-            refresh_rects(mounteds, rects);
+            refresh_rects(mounteds, rects, generations);
         }
     });
     let mut gesture = use_signal(|| GesturePhase::Idle);
@@ -111,19 +146,17 @@ pub fn SortableGrid(
                 return;
             };
             drag_from.set(Some(ix));
-            let next = rects
-                .peek()
+            let next = current_rects(index_keys, rects)
                 .iter()
                 .find(|(_, r)| r.contains(at))
                 .map(|(&i, _)| i)
                 .or(fallback_ix)
                 .filter(|&i| i != ix);
             over.set(next);
-            refresh_rects(mounteds, rects);
+            refresh_rects(mounteds, rects, generations);
         }
         GestureEffect::Track { at } => {
-            let next = rects
-                .peek()
+            let next = current_rects(index_keys, rects)
                 .iter()
                 .find(|(_, r)| r.contains(at))
                 .map(|(&i, _)| i)
@@ -138,7 +171,7 @@ pub fn SortableGrid(
             // A release outside the grid's tile bounds cancels rather than
             // committing a reorder; inside them, the hovered tile is the
             // target.
-            let inside = list_bounds(&rects.peek())
+            let inside = list_bounds(&current_rects(index_keys, rects))
                 .map(|b| b.contains(at))
                 .unwrap_or(false);
             let pair = (*drag_from.peek(), *over.peek());
@@ -150,7 +183,7 @@ pub fn SortableGrid(
             over.set(None);
             if inside {
                 if let (Some(from), Some(to)) = pair {
-                    if from != to {
+                    if from != to && from < len && to < len {
                         on_sort.call(SortEvent { from, to });
                     }
                 }
@@ -200,7 +233,7 @@ pub fn SortableGrid(
                     empty_held_moves.set(streak);
                     if streak >= crate::core::components::RELEASE_RECOVERY_MOVES {
                         if let Some(from) = *drag_from.peek() {
-                            if let Some(n) = mounteds.peek().get(&from).cloned() {
+                            if let Some(n) = mounted_at(from, index_keys, mounteds) {
                                 platform::release_pointer(&n, evt.pointer_id());
                             }
                         }
@@ -214,7 +247,7 @@ pub fn SortableGrid(
             },
             onpointerup: move |evt: PointerEvent| {
                 if let Some(from) = *drag_from.peek() {
-                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                    if let Some(n) = mounted_at(from, index_keys, mounteds) {
                         platform::release_pointer(&n, evt.pointer_id());
                     }
                 }
@@ -225,7 +258,7 @@ pub fn SortableGrid(
             },
             onpointercancel: move |evt: PointerEvent| {
                 if let Some(from) = *drag_from.peek() {
-                    if let Some(n) = mounteds.peek().get(&from).cloned() {
+                    if let Some(n) = mounted_at(from, index_keys, mounteds) {
                         platform::release_pointer(&n, evt.pointer_id());
                     }
                 }
@@ -242,9 +275,9 @@ pub fn SortableGrid(
                     aria_hidden: true,
                 }
             }
-            for ix in 0..len {
+            for (ix, render_key) in (0..len).zip(render_keys) {
                 div {
-                    key: "{ix}",
+                    key: "{render_key}",
                     class: item_class.clone(),
                     style: "touch-action: none;",
                     "data-dragging": if drag_from() == Some(ix) { "true" },
@@ -252,16 +285,8 @@ pub fn SortableGrid(
                     onmounted: move |evt: Event<MountedData>| {
                         let m: Rc<MountedData> = evt.data();
                         let mut mounteds = mounteds;
-                        let mut rects = rects;
-                        mounteds.write().insert(ix, m.clone());
-                        spawn(async move {
-                            if let Ok(r) = m.get_client_rect().await {
-                                rects.write().insert(
-                                    ix,
-                                    Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height),
-                                );
-                            }
-                        });
+                        mounteds.write().insert(render_key.clone(), m.clone());
+                        measure_rect(render_key.clone(), m, mounteds, rects, generations);
                     },
                     oncontextmenu: move |evt: Event<MouseData>| {
                         // Android's long-press context menu would tear an
@@ -283,7 +308,7 @@ pub fn SortableGrid(
                         // the cursor leaving it (real capture with the `web`
                         // feature; the capture-substitute layer covers the
                         // rest).
-                        captured.set(match mounteds.peek().get(&ix).cloned() {
+                        captured.set(match mounted_at(ix, index_keys, mounteds) {
                             Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
                             None => false,
                         });

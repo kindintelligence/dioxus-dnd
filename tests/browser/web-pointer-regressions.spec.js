@@ -104,6 +104,26 @@ async function dispatchNativeDrop(target, setup) {
   }, setup);
 }
 
+test("a rejected handle press cannot authorize a later surface press", async ({ page }) => {
+  await openFixtures(page);
+  const fixture = await section(page, "Handle press isolation");
+  await fixture.scrollIntoViewIfNeeded();
+  const handle = fixture.locator("#handle-token-button");
+  const surface = fixture.locator(".handle-token-surface");
+  const status = fixture.locator("#handle-token-status");
+
+  await handle.click({ button: "right" });
+  const box = await surface.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down({ button: "left" });
+  await page.mouse.move(box.x + box.width / 2 + 24, box.y + box.height / 2);
+  await page.mouse.up({ button: "left" });
+
+  await expect(status).toHaveAttribute("data-starts", "0");
+  await expect(fixture.locator("#handle-token-root")).not.toHaveAttribute("data-dragging", "true");
+});
+
 test("sortable overlay matches the source row and cleans up after drop", async ({ page }) => {
   await openFixtures(page);
 
@@ -197,6 +217,68 @@ test("sortable release inside the list still reorders (control)", async ({ page 
     .toEqual(["Draft", "Review", "Revise", "Research", "Publish"]);
 });
 
+test("stable keyed sortable geometry follows items after reorder", async ({ page }) => {
+  await openFixtures(page);
+
+  const sortable = await section(page, "Sortable list");
+  await sortable.scrollIntoViewIfNeeded();
+  const drag = async (sourceText, targetText, targetDepth) => {
+    const source = await elementBox(sortable, sourceText);
+    const target = await elementBox(sortable, targetText);
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(source.x + source.width / 2, target.y + target.height * targetDepth, {
+      steps: 24,
+    });
+    await expect(sortable.locator("[data-dragging]").first()).toBeVisible();
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+  };
+
+  await drag("Research", "Revise", 0.75);
+  await expect
+    .poll(() => sortableRowTexts(page))
+    .toEqual(["Draft", "Review", "Revise", "Research", "Publish"]);
+
+  // Dioxus preserves the Research DOM node by key and does not fire its
+  // onmounted handler again. A second drag therefore proves geometry and
+  // pointer capture are projected by stable identity, not the old index.
+  await drag("Research", "Draft", 0.25);
+  await expect
+    .poll(() => sortableRowTexts(page))
+    .toEqual(["Research", "Draft", "Review", "Revise", "Publish"]);
+});
+
+test("stable keyed sortable handle capture follows items after reorder", async ({ page }) => {
+  await openFixtures(page);
+
+  const sortable = await section(page, "Sortable handles");
+  await sortable.scrollIntoViewIfNeeded();
+  const order = () => sortable.locator(".handled-row-content").allInnerTexts();
+  const drag = async (sourceText, targetText, depth) => {
+    const source = sortable.locator("[data-dnd-motion]", { hasText: sourceText });
+    const handle = source.locator("[data-sort-handle]");
+    const target = sortable.locator(".handled-row-content", { hasText: targetText });
+    const handleBox = await handle.boundingBox();
+    const targetBox = await target.boundingBox();
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      targetBox.x + targetBox.width / 2,
+      targetBox.y + targetBox.height * depth,
+      { steps: 20 },
+    );
+    await expect(source).toHaveAttribute("data-dragging", "true");
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+  };
+
+  await drag("Alpha", "Gamma", 0.75);
+  await expect.poll(order).toEqual(["Beta", "Gamma", "Alpha", "Delta"]);
+  await drag("Alpha", "Beta", 0.25);
+  await expect.poll(order).toEqual(["Alpha", "Beta", "Gamma", "Delta"]);
+});
+
 test("grid release outside the tiles commits no reorder", async ({ page }) => {
   await openFixtures(page);
 
@@ -219,6 +301,124 @@ test("grid release outside the tiles commits no reorder", async ({ page }) => {
   await page.waitForTimeout(300);
 
   expect(await gridTileTexts(page)).toEqual(before);
+});
+
+test("stable keyed grid geometry follows tiles after reorder", async ({ page }) => {
+  await openFixtures(page);
+
+  const grid = await section(page, "Grid");
+  await grid.scrollIntoViewIfNeeded();
+  const drag = async (sourceText, targetText) => {
+    const source = await elementBox(grid, sourceText);
+    const target = await elementBox(grid, targetText);
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 20 });
+    await expect(grid.locator("[data-dragging]").first()).toBeVisible();
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+  };
+
+  await drag("Tile 1", "Tile 3");
+  await expect.poll(() => gridTileTexts(page)).toEqual([
+    "Tile 2",
+    "Tile 3",
+    "Tile 1",
+    "Tile 4",
+    "Tile 5",
+    "Tile 6",
+  ]);
+
+  await drag("Tile 1", "Tile 2");
+  await expect.poll(() => gridTileTexts(page)).toEqual([
+    "Tile 1",
+    "Tile 2",
+    "Tile 3",
+    "Tile 4",
+    "Tile 5",
+    "Tile 6",
+  ]);
+});
+
+test("a cancelled selectable drag does not consume the next genuine click", async ({ page }) => {
+  await openFixtures(page);
+
+  const demo = await section(page, "Selection cancellation");
+  await demo.scrollIntoViewIfNeeded();
+  const first = demo.locator("#selection-one");
+  const second = demo.locator("#selection-two");
+  const status = demo.locator("#selection-status");
+  await first.click();
+  await expect(status).toHaveAttribute("data-selected", "1");
+
+  const firstBox = await first.boundingBox();
+  await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(firstBox.x + firstBox.width / 2 + 20, firstBox.y + firstBox.height / 2, {
+    steps: 6,
+  });
+  const draggable = first.getByRole("button");
+  await expect(draggable).toHaveAttribute("data-dragging", "true");
+  await draggable.dispatchEvent("pointercancel", {
+    pointerId: 1,
+    pointerType: "mouse",
+    bubbles: true,
+    cancelable: true,
+  });
+  await page.mouse.up();
+  await expect(draggable).not.toHaveAttribute("data-dragging", "true");
+
+  await second.click();
+  await expect(status).toHaveAttribute("data-selected", "2");
+});
+
+test("a keyboard drag never arms pointer-click suppression", async ({ page }) => {
+  await openFixtures(page);
+
+  const demo = await section(page, "Selection cancellation");
+  await demo.scrollIntoViewIfNeeded();
+  const first = demo.locator("#selection-one");
+  const second = demo.locator("#selection-two");
+  const status = demo.locator("#selection-status");
+  const draggable = first.getByRole("button");
+
+  await draggable.focus();
+  await page.keyboard.press("Space");
+  await expect(draggable).toHaveAttribute("data-dragging", "true");
+  await page.keyboard.press("Escape");
+  await expect(draggable).not.toHaveAttribute("data-dragging", "true");
+
+  await second.click();
+  await expect(status).toHaveAttribute("data-selected", "2");
+});
+
+test("a completed pointer drag suppresses only its trailing click", async ({ page }) => {
+  await openFixtures(page);
+
+  const demo = await section(page, "Selection cancellation");
+  await demo.scrollIntoViewIfNeeded();
+  const first = demo.locator("#selection-one");
+  const second = demo.locator("#selection-two");
+  const status = demo.locator("#selection-status");
+  await first.click();
+  await second.click({ modifiers: ["Control"] });
+  await expect(status).toHaveAttribute("data-selected", "1,2");
+
+  const source = first.getByRole("button");
+  const sourceBox = await source.boundingBox();
+  const targetBox = await demo.locator(".selection-target").boundingBox();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, {
+    steps: 20,
+  });
+  await expect(source).toHaveAttribute("data-dragging", "true");
+  await page.mouse.up();
+  await expect(status).toHaveAttribute("data-drops", "1");
+  await expect(status).toHaveAttribute("data-selected", "1,2");
+
+  await second.click();
+  await expect(status).toHaveAttribute("data-selected", "2");
 });
 
 test("autoscroll follows default mouse pointer drags near the edge", async ({ page }) => {
@@ -313,6 +513,36 @@ test("autoscroll stops when the pointer leaves the container", async ({ page }) 
   expect(await scroll.evaluate((node) => node.scrollTop)).toBe(0);
 
   await page.mouse.up();
+});
+
+test("native autoscroll stops when the drag leaves the container", async ({ page }) => {
+  await openFixtures(page);
+
+  const demo = await section(page, "Autoscroll");
+  const scroll = demo.locator(".list-scroll");
+  await scroll.scrollIntoViewIfNeeded();
+  await scroll.evaluate((node) => {
+    node.scrollTop = 0;
+    const rect = node.getBoundingClientRect();
+    node.dispatchEvent(
+      new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.bottom - 2,
+        dataTransfer: new DataTransfer(),
+      }),
+    );
+  });
+  await expect
+    .poll(() => scroll.evaluate((node) => node.scrollTop), { timeout: 5_000 })
+    .toBeGreaterThan(0);
+
+  await scroll.dispatchEvent("dragleave", { bubbles: true, cancelable: true });
+  await page.waitForTimeout(100);
+  const stoppedAt = await scroll.evaluate((node) => node.scrollTop);
+  await page.waitForTimeout(250);
+  expect(await scroll.evaluate((node) => node.scrollTop)).toBe(stoppedAt);
 });
 
 test("canvas pointer drop uses the recorded grab offset", async ({ page }) => {
@@ -573,19 +803,25 @@ test("drops land on the zone that auto-scrolled into place", async ({ page }) =>
     })
     .toBeGreaterThan(120);
 
-  // The list has scrolled well past a full zone height. Ask the DOM which
-  // zone is REALLY under the container's midpoint now...
+  // The list has scrolled well past a full zone height. Leave the edge band
+  // first: the frame clock intentionally keeps scrolling while the pointer
+  // remains there, so reading the DOM before stopping it would race the last
+  // scroll and measurement batch.
   const midX = box.x + box.width / 2;
   const midY = box.y + box.height / 2;
+  await page.mouse.move(midX, midY, { steps: 8 });
+  await page.waitForTimeout(250);
+
+  // Ask the settled DOM which zone is REALLY under the midpoint now...
   const expected = await page.evaluate(([x, y]) => {
     const el = document.elementFromPoint(x, y);
     return el?.closest(".stale-zone")?.textContent.trim() ?? null;
   }, [midX, midY]);
   expect(expected).not.toBeNull();
 
-  // ...hover it: the freshly-measured zone must light up, not its stale
-  // predecessor...
-  await page.mouse.move(midX, midY, { steps: 8 });
+  // ...and stir the pointer once so the freshly-measured zone lights up, not
+  // its stale predecessor.
+  await page.mouse.move(midX + 1, midY);
   const target = sec.locator(".stale-zone").filter({ hasText: new RegExp(`^${expected}$`) });
   await expect(target).toHaveAttribute("data-over", "true");
 

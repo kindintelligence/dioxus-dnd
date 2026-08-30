@@ -11,7 +11,7 @@ use crate::core::hooks::{use_dnd, SettleFlag};
 use crate::core::types::{DragId, DragMode, Point, Rect};
 use crate::core::world::WorldMembership;
 
-use super::merge_style;
+use super::merge_style_invariant_last;
 
 /// The functional inline style for a pointer-pinned "ghost": fixed to `pos`
 /// (a viewport-space top-left), out of flow, click-through, above the page.
@@ -125,43 +125,65 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     owned_settle_generation.set(render_settle_generation);
     let settle_capability = use_hook(|| DragId::auto().0);
 
-    // Arm settle-aware drops for this provider while mounted. Draggables
-    // check the flag at delivery time, so mount order doesn't matter.
+    // Keep settle ownership synchronized with the live prop. Hook
+    // initializers are mount-only, so doing this in a reactive effect is
+    // required for both false -> true and true -> false transitions.
     let flag = try_use_context::<SettleFlag<T>>();
+    // Arm the initial value synchronously so a drag driven immediately after
+    // `rebuild_in_place` observes the overlay. The effect handles updates.
     use_hook(move || {
+        if settle {
+            if let Some(flag) = flag {
+                flag.arm(settle_capability);
+            }
+        }
+    });
+    let effect_owned_settle_generation = Rc::clone(&owned_settle_generation);
+    use_effect(use_reactive!(|settle| {
         if settle {
             if let Some(f) = flag {
                 f.arm(settle_capability);
             }
-        }
-    });
-    use_drop(move || {
-        if settle {
-            // A replacement overlay supersedes this capability before the
-            // old scope drops. Only the still-armed scope may adopt a claim
-            // that arrived before its first settling render.
-            let still_armed = flag.is_none_or(|flag| flag.release(settle_capability));
-            // Unmounting mid-glide: nobody is left to hear transitionend,
-            // so reset now (guarded no-op otherwise). The aliveness gate
-            // covers app shutdown in multi-window use, where the shared
-            // context can die before this window's overlay unmounts.
-            if dnd.alive() {
-                match membership {
-                    Some(joined) => {
-                        let generation = cleanup_generation(
-                            still_armed,
-                            owned_settle_generation.get(),
-                            joined.world.peek_settle_token(joined.key),
-                        );
-                        if let Some(generation) = generation {
-                            joined
-                                .world
-                                .finish_settle_generation(joined.key, generation);
-                        }
+        } else if flag.is_some_and(|flag| flag.release(settle_capability)) && dnd.alive() {
+            match membership {
+                Some(joined) => {
+                    if let Some(generation) = cleanup_generation(
+                        true,
+                        effect_owned_settle_generation.get(),
+                        joined.world.peek_settle_token(joined.key),
+                    ) {
+                        joined
+                            .world
+                            .finish_settle_generation(joined.key, generation);
                     }
-                    None if still_armed => dnd.finish_settle(),
-                    None => {}
                 }
+                None => dnd.finish_settle(),
+            }
+        }
+    }));
+    use_drop(move || {
+        // A replacement overlay supersedes this capability before the old
+        // scope drops. Only the still-armed scope may adopt a claim that
+        // arrived before its first settling render.
+        let still_armed = flag.is_some_and(|flag| flag.release(settle_capability));
+        // Unmounting mid-glide: nobody is left to hear transitionend, so
+        // reset now. The aliveness gate covers app shutdown in multi-window
+        // use, where shared state can die before this scope's cleanup.
+        if still_armed && dnd.alive() {
+            match membership {
+                Some(joined) => {
+                    let generation = cleanup_generation(
+                        true,
+                        owned_settle_generation.get(),
+                        joined.world.peek_settle_token(joined.key),
+                    );
+                    if let Some(generation) = generation {
+                        joined
+                            .world
+                            .finish_settle_generation(joined.key, generation);
+                    }
+                }
+                None => dnd.finish_settle(),
             }
         }
     });
@@ -172,9 +194,10 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     // The played glide: `Some(delta)` once the ghost has been measured and
     // the transform released toward the target.
     let mut glide = use_signal(|| None::<SettleGlide>);
-    // The settle transition is inline; honor prefers-reduced-motion. Only
-    // an overlay that settles claims the subtree's stylesheet slot.
-    let reduced_motion_css = crate::a11y::use_reduced_motion_css_if(settle);
+    // The settle transition is inline; honor prefers-reduced-motion. The
+    // sheet is safe to anchor unconditionally because it only targets
+    // elements carrying `data-dnd-motion`; that marker remains live below.
+    let reduced_motion_css = crate::a11y::use_reduced_motion_css();
 
     // Every way a settle can complete funnels through here, so `on_settled`
     // fires exactly once per landed drop - glide or no glide.
@@ -370,7 +393,18 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
     };
     let overlay_key = overlay_generation_key(settle_generation);
     let mut attributes = attributes;
-    let style = merge_style(&mut attributes, &functional);
+    super::protect_attributes(
+        &mut attributes,
+        &["data-dnd-motion", "onmounted", "ontransitionend"],
+    );
+    let mut invariant_properties = vec!["position", "left", "top", "pointer-events", "z-index"];
+    if match_source {
+        invariant_properties.extend(["width", "height", "box-sizing"]);
+    }
+    if settling {
+        invariant_properties.extend(["transform", "transition"]);
+    }
+    let style = merge_style_invariant_last(&mut attributes, &functional, &invariant_properties);
     rsx! {
         // A one-item keyed list forces an actual DOM-node replacement when
         // the settle generation changes. A key on a fixed single child is
@@ -408,6 +442,87 @@ pub fn DragOverlay<T: Clone + PartialEq + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Props)]
+    struct DynamicSettleProps {
+        enabled: Rc<Cell<bool>>,
+        captured: Rc<Cell<Option<SettleFlag<u8>>>>,
+    }
+
+    impl PartialEq for DynamicSettleProps {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.enabled, &other.enabled) && Rc::ptr_eq(&self.captured, &other.captured)
+        }
+    }
+
+    #[allow(non_snake_case)]
+    fn SettleFlagProbe(props: DynamicSettleProps) -> Element {
+        let mut dnd = use_dnd::<u8>();
+        props.captured.set(try_use_context::<SettleFlag<u8>>());
+        use_hook(move || {
+            dnd.start(
+                1,
+                None,
+                Point::new(10.0, 10.0),
+                Point::default(),
+                crate::core::DropEffect::Move,
+                DragMode::Pointer,
+            );
+        });
+        rsx! {}
+    }
+
+    fn dynamic_settle_app(props: DynamicSettleProps) -> Element {
+        let enabled = props.enabled.get();
+        rsx! {
+            crate::core::DndProvider::<u8> {
+                SettleFlagProbe { enabled: props.enabled, captured: props.captured }
+                DragOverlay::<u8> { settle: enabled, "ghost" }
+            }
+        }
+    }
+
+    fn flush_effects(dom: &mut VirtualDom) {
+        for _ in 0..3 {
+            dom.process_events();
+            dom.render_immediate(&mut dioxus::core::NoOpMutations);
+        }
+    }
+
+    #[test]
+    fn settle_prop_arms_releases_and_renders_motion_css_dynamically() {
+        let enabled = Rc::new(Cell::new(false));
+        let captured = Rc::new(Cell::new(None));
+        let mut dom = VirtualDom::new_with_props(
+            dynamic_settle_app,
+            DynamicSettleProps {
+                enabled: enabled.clone(),
+                captured: captured.clone(),
+            },
+        );
+        dom.rebuild_in_place();
+        flush_effects(&mut dom);
+        assert!(!dom.in_runtime(|| captured.get().unwrap().is_armed()));
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.contains("prefers-reduced-motion"));
+        assert!(!html.contains(r#"data-dnd-motion="true""#));
+
+        enabled.set(true);
+        dom.mark_dirty(ScopeId::APP);
+        flush_effects(&mut dom);
+        assert!(dom.in_runtime(|| captured.get().unwrap().is_armed()));
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.contains("prefers-reduced-motion"));
+        assert!(html.contains(r#"data-dnd-motion="true""#), "{html}");
+
+        enabled.set(false);
+        dom.mark_dirty(ScopeId::APP);
+        flush_effects(&mut dom);
+        assert!(!dom.in_runtime(|| captured.get().unwrap().is_armed()));
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.contains("prefers-reduced-motion"));
+        assert!(!html.contains(r#"data-dnd-motion="true""#));
+    }
 
     #[test]
     fn stale_glide_is_not_relabelled_as_its_successor() {
@@ -497,13 +612,15 @@ pub fn SettleSlot<T: Clone + PartialEq + 'static>(
     // leave the old declaration standing.
     let hidden = active && settle_token().is_some();
     let mut attributes = attributes;
-    let style = merge_style(
+    super::protect_attributes(&mut attributes, &["data-settling", "onmounted"]);
+    let style = merge_style_invariant_last(
         &mut attributes,
         if hidden {
             "visibility: hidden;"
         } else {
             "visibility: visible;"
         },
+        &["visibility"],
     );
     rsx! {
         div {

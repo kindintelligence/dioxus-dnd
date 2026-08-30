@@ -1,10 +1,11 @@
-# Sortable lists API reference
+# Sortable API reference
 
-Self-contained reorder components: `SortableList` drags rows along one
-axis, `SortableGrid` drags tiles in a `cols`-column grid, and both emit
-index-based `SortEvent`s you apply with `apply_sort` or `apply_swap`. No
-`DndProvider` is needed; drag state lives inside each component and the
-payload transport is indices, so you keep ownership of the data.
+The stable-ID sortable kernel composes with the shared drag core:
+`SortableProvider`, `SortableGroup`, `SortableCollection`, `SortableItem`,
+stable-ID `ReorderEvent<K>`, layout strategies, and variable-size layout
+projection.
+The original self-contained `SortableList` and `SortableGrid` remain as
+index-based compatibility components for concise single-list call sites.
 
 Concept guide:
 [docs/concepts/sortable-lists.md](../concepts/sortable-lists.md).
@@ -12,11 +13,123 @@ Concept guide:
 module; everything on this page is re-exported through the prelude except
 `pointer_target` (reach it as `dioxus_dnd::sortable::pointer_target`).
 
+## Stable-ID sortable kernel
+
+Use one `SortableProvider<K>` around one or more groups. `K` is the unique
+semantic item identity. The collection adapter requires `Eq + Hash` so it can
+reject duplicate IDs; direct group/item composition requires `PartialEq` and
+still requires the caller to keep IDs unique. Every item is both a core
+`Draggable<SortablePayload<K>>` and `DropZone<SortablePayload<K>>`, so
+sortables inherit core keyboard dragging, collision and release policy,
+monitors, effect negotiation, drag handles, world composition, and
+cross-group delivery.
+
+```rust,ignore
+let mut items = use_signal(|| vec![CardId(10), CardId(20), CardId(30)]);
+rsx! {
+    SortableProvider::<CardId> {
+        SortableCollection::<CardId> {
+            id: SortableGroupId::new(1),
+            items: items(),
+            item_key: move |id: CardId| id.0.to_string(),
+            strategy: SortStrategy::LinearVertical,
+            activation: ActivationPolicy::handle(
+                ActivationConstraint::Distance(6.0)
+            ),
+            render: move |id| rsx! {
+                SortableHandle { label: "Move card", "Move" }
+                CardRow { id }
+            },
+            on_reorder: move |event: ReorderEvent<CardId>| {
+                apply_reorder(&mut items.write(), &event);
+            },
+        }
+    }
+}
+```
+
+`SortableCollection` is the concise `items + render` adapter:
+
+| Prop | Type | Default | What it does |
+|---|---|---|---|
+| `items` | `Vec<K>` | required | Stable item ids in visual order. |
+| `item_key` | `Callback<K, String>` | required | Stable, unique Dioxus key for each item. Duplicate item ids or render keys are rejected with a clear panic. |
+| `render` | `Callback<K, Element>` | required | Renders one item by id. |
+| `on_reorder` | `EventHandler<ReorderEvent<K>>` | required | Reports identity, source and destination groups, and placement intent. |
+| `id` | `Option<SortableGroupId>` | stable auto id | Stable group identity used for cross-group intent. |
+| `strategy` | `SortStrategy` | `LinearVertical` | `LinearVertical`, `LinearHorizontal`, `GridInsert`, or `GridSwap`. |
+| `activation` | `Option<ActivationPolicy>` | core default | Activation policy forwarded to every item's core draggable. |
+
+`ReorderEvent<K>` carries `active`, `over`, `from_group`, `to_group`, and
+`placement`. `over: Some(id)` targets an item; `over: None` targets the group
+background and means append. `Placement` is `Before`, `After`, or `On`;
+`GridSwap` uses `On` for pointer and keyboard drops alike. Events describe
+intent without exposing mutable indexes. Every group registers a background
+target, so both input modes can append to populated groups and an initially
+empty group remains reachable by keyboard.
+
+`SortableGroupId::new(value)` creates an explicit application ID below `2^32`.
+Automatic IDs use a disjoint namespace at or above `2^32`, so an omitted ID
+cannot collide with an explicit one.
+
+`apply_reorder(&mut Vec<K>, &ReorderEvent<K>) -> bool` applies same-group
+insertions by stable identity and returns whether it changed the vector.
+Cross-group events are deliberately left to the owning model because source
+and target collections may live in different stores.
+
+For custom layouts, `SortableGroup<K>` is the public provider and layout
+boundary. It takes the same `id`, `strategy`, `activation`, and `on_reorder`
+props plus children; render keyed `SortableItem<K>` children directly:
+
+```rust,ignore
+SortableGroup::<CardId> {
+    on_reorder,
+    class: "custom-grid",
+    for (position, id) in items().into_iter().enumerate() {
+        SortableItem::<CardId> {
+            key: "{id.0}",
+            id,
+            position,
+            CardRow { id }
+        }
+    }
+}
+```
+
+`position` is the item's current zero-based visual position. It makes keyboard
+intent deterministic without inspecting opaque Dioxus children: for insertion
+strategies, moving from a later item to an earlier one yields `Before`, the
+reverse yields `After`, and cross-group item targets use `Before`. A group
+background supplies explicit append intent. `GridSwap` always yields `On`.
+The group context remains private implementation detail; the components are
+the supported composition seam.
+`SortableHandle` is a semantic alias for the core `DragHandle`.
+
+### Variable-size layout projection
+
+`project_layout(items, rects, active, target)` is the pure preview seam. It
+maps ids to the measured slots they would occupy after insertion and returns
+`Vec<ItemTransform<K>>` with per-id `x` and `y` translations. It reads real
+rect origins rather than multiplying by a uniform row pitch, so variable
+height rows, gaps, and virtualized measurements can share the same policy.
+`DropPlacement<K>` supplies `over: Option<K>` and `Placement`; `None` projects
+the active item into the append slot.
+
+## Index-based compatibility components
+
+The APIs below remain source-compatible. They own their gesture state and
+emit `SortEvent { from, to }`; use the stable-ID kernel when sortables need to
+share core policy or move between containers. Their optional index-key
+fallback exists only for 3.x compatibility and is safe only for stateless,
+position-identified rows. Stateful, focusable, or reordered domain items must
+supply `item_key`.
+
 ```rust,ignore
 let mut items = use_signal(|| vec!["a".to_string(), "b".into(), "c".into()]);
 rsx! {
     SortableList {
         len: items.read().len(),
+        item_key: move |ix| items.read()[ix].clone(),
         render: move |ix: usize| rsx! { li { "{items.read()[ix]}" } },
         on_sort: move |ev: SortEvent| apply_sort(&mut items.write(), ev),
     }
@@ -44,6 +157,7 @@ default; opt into a floating, caller-composed ghost with `overlay`.
 | `touch_handle` | `bool` | `false` | Confine pointer drags to a leading grip instead of the whole row. The grip carries `touch-action: none`; the rest of the row keeps scrolling by finger. Style it via `[data-sort-handle]`. |
 | `touch` | `TouchSense` | `Auto` | How a finger shares whole rows with native scrolling. `Auto` keeps vertical swipes scrolling and picks a row up on a short hold or a sideways pull; `Immediate` makes any 8px travel drag. Ignored under `touch_handle`, where the grip owns every touch. |
 | `handle` | `Option<Callback<usize, Element>>` | `None` | Content for the `touch_handle` grip, keyed by index. Defaults to a braille-dots glyph. |
+| `item_key` | `Option<Callback<usize, String>>` | index text (compatibility only) | Stable render identity for the item currently at each index. Required in practice when rows contain hook state, focus, or mounted handles and the backing collection can reorder. |
 
 Data attributes, present while true and absent otherwise:
 
@@ -107,6 +221,7 @@ the sortable vocabulary: drops emit `SortEvent`s you apply with
 | `on_sort` | `EventHandler<SortEvent>` | required | Fired when the user drops a tile on another. |
 | `mode` | `ReorderMode` | `Insert` | Insert-and-reflow (gallery) or swap (dashboard). Changes no behavior; it renders as `data-mode` so the two feels can style differently. Pair `Insert` with `apply_sort`, `Swap` with `apply_swap`. |
 | `item_class` | `Option<String>` | `None` | Classes for each tile's wrapper div, the element that carries `data-dragging` / `data-drop-target`. |
+| `item_key` | `Option<Callback<usize, String>>` | index text (compatibility only) | Stable render identity for the item currently at each index. Supply it for stateful or focusable tiles whose backing collection can reorder. |
 
 The root renders `display: grid; grid-template-columns: repeat(cols, 1fr)`
 and forwards arbitrary attributes. A forwarded `style` merges after that

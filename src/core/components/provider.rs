@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 
+use crate::core::collision::ReleasePolicy;
 use crate::core::hooks::{use_dnd_provider, use_zone_registry};
 use crate::core::types::Direction;
 
@@ -15,13 +16,25 @@ pub fn DndProvider<T: Clone + PartialEq + 'static>(
     /// spatial zone ordering to follow the visual right-to-left flow.
     #[props(default)]
     dir: Direction,
+    /// Collision detector, recovery radius, and sticky-hover behavior for
+    /// this provider's zones.
+    #[props(default)]
+    release: ReleasePolicy<T>,
     children: Element,
 ) -> Element {
     let _ = phantom;
     use_dnd_provider::<T>();
-    // Synced every render (a compare-and-set no-op when unchanged), so a
-    // live direction switch propagates.
-    use_zone_registry::<T>().set_direction(dir);
+    let mut registry = use_zone_registry::<T>();
+    // Seed the provider policy before children register or a headless VDOM
+    // can drive a drag. The effect below keeps later prop changes reactive.
+    use_hook(move || {
+        registry.set_direction(dir);
+        registry.set_release_policy(release);
+    });
+    use_effect(use_reactive!(|(dir, release)| {
+        registry.set_direction(dir);
+        registry.set_release_policy(release);
+    }));
     rsx! {
         {children}
     }

@@ -2,6 +2,103 @@
 
 ## Unreleased
 
+### Added
+
+- **Stable-ID sortable kernel.** `SortableProvider`, `SortableGroup`,
+  `SortableCollection`, and `SortableItem` build sortable collections on the
+  shared core. Reorder events report stable identities, source and target
+  groups, item-or-background targets, and placement intent. Empty groups are
+  keyboard reachable, background drops append, and explicit group IDs occupy
+  a namespace disjoint from automatic IDs. `project_layout` derives
+  variable-size previews from measured slots, while the index-based list and
+  grid APIs remain available.
+- **Checked model helpers.** `try_apply_clone_or_move` and
+  `try_apply_list_clone_or_move` reject unsupported effects without mutation,
+  while the unprefixed helpers retain their existing 3.x signatures.
+- **Composable activation.** `ActivationPolicy` combines handle, surface, or
+  manual activation with distance, delay, or either constraints.
+  `DragHandle` supplies an accessible activator and `NoDrag` protects nested
+  interactive content.
+- **Collision, effect, and lifecycle policy.** Providers accept configurable
+  collision and release policy with ranked custom detectors, sticky hover,
+  and configurable recovery. Targets can negotiate `DropEffects` through a
+  rich `DropQuery`. Stable `DragId` values and `use_dnd_monitor` expose the
+  Started, Moved, TargetChanged, Dropped, and Cancelled lifecycle without
+  changing `DropOutcome`.
+- **Selection ranges.** `Selection` now supports anchored Shift ranges,
+  additive ranges, and keyboard range movement.
+
+### Changed
+
+- **Continuous coordinated auto-scroll.** Auto-scroll now runs from one
+  elapsed-time clock, continues while the pointer rests in an edge band, and
+  hands nested scrolling from an inner container at its boundary to the next
+  containing surface. New code can set exact `speed_px_per_second`; the 3.x
+  `speed` prop retains its nominal-per-frame contract.
+- **Accessible file zones.** `FileDropZone` has button semantics, Enter and
+  Space activation, an accessible label, a configurable `multiple` picker,
+  and a disabled state.
+- **Dioxus alpha canary.** CI now checks source compatibility against
+  `0.8.0-alpha.1`.
+- **Dependency baseline.** Committed lockfiles now verify Dioxus `0.7.10`,
+  futures-util `0.3.34`, Serde `1.0.229`, serde_json `1.0.151`, Tokio
+  `1.53.1`, webbrowser `1.2.2`, and the direct Linux integration against
+  x11rb `0.14`. The root lockfile also selects non-yanked chacha20 `0.10.2`
+  and spin `0.9.9`. The browser suite uses Playwright `1.62.1` and Dioxus CLI
+  `0.7.10`.
+
+### Fixed
+
+- **Post-review Dioxus correctness.** Caller-owned `DndContext::from_parts`
+  stores remain authoritative across direct writes and sibling wrappers.
+  Individual Dioxus style-property attributes can no longer replace drag,
+  overlay, settle, or FLIP invariants. Stable sortable keyboard drops preserve
+  `GridSwap` intent and can append to populated groups, and rejected
+  non-primary handle presses cannot authorize a later surface press.
+- **Dioxus 0.7 renderer and reactivity contracts.** Production now enables
+  Dioxus's `mounted` capability required by geometry measurement. Overlay
+  settle ownership, receiver-fed auto-scroll, board/bridge acceptance,
+  labels, and provider policy follow live props without mount-time captures
+  or render-time signal synchronization.
+- **Reactive component identity and forwarded invariants.** Explicit
+  drag/zone/group ids replace keyed implementation instances when they change,
+  so cleanup and registration follow Dioxus lifecycle semantics. Stable-ID
+  collections require unique semantic ids and explicit Dioxus keys;
+  index-based adapters accept an `item_key` callback. Forwarded attributes can
+  no longer replace component-owned event, mounted, accessibility, state, or
+  behavior-critical style declarations.
+- **Borrow-safe callbacks and bounded async work.** Registry queries snapshot
+  records before invoking application acceptance/collision callbacks, FLIP
+  and press measurements discard stale generations, and Linux X11 pointer
+  roundtrips run on one bounded worker instead of the Dioxus UI executor.
+- **Bounded refresh and sortable measurements.** Rect-refresh completions use
+  ordinary one-shot closures rather than retaining a new scope-owned Dioxus
+  callback per scroll ping. List/grid DOM reads validate node identity and a
+  per-index generation after every await, and grid cache shrinkage cannot
+  leave an out-of-range drop target.
+- **Selection modality.** Keyboard drags no longer arm browser click
+  suppression, and cancelled pointer drags cannot consume a later genuine
+  selection click.
+- **Auto-scroll hover reconciliation.** Geometry refreshes re-resolve hover
+  after every completed measurement batch, so targets moving beneath a
+  stationary pointer stay current. Drag identity and session guards prevent a
+  late batch from modifying a replacement drag, including across windows.
+- **Single-pass target policy.** Collision resolution evaluates each target's
+  acceptance and effect negotiation once per query, and active highlighting
+  uses the same live modifier-adjusted effect as final delivery. Custom
+  detector output is ordered by its documented score and registration
+  tie-break instead of callback vector order.
+- **Activation and selection edges.** Empty or manual-only activation
+  disjunctions remain manual, independent delayed alternatives retain their
+  own clocks and tolerances, and keyboard range movement saturates safely for
+  extreme signed steps.
+- **Reentrant drag replacement.** A replacement drag started synchronously by
+  cancellation user code is no longer overwritten when the outer start call
+  resumes.
+- **Selection constructor compatibility.** `Selection::from_signal` remains a
+  non-hook wrapper for existing callers; persistent range-anchor state is
+  opt-in through `use_selection_from_signal` or `from_signals`.
+
 ## 3.1.0 - 2026-07-13
 
 ### Added

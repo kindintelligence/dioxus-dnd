@@ -5,8 +5,8 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 
 use crate::core::{
-    use_dnd, use_zone_id, use_zone_registry, DragMode, DropOutcome, ParentZone, Point, Rect,
-    ZoneId, ZoneRecord,
+    use_dnd, use_parent_zone, use_zone_id, use_zone_registry, DragMode, DropEffect, DropOutcome,
+    Point, Rect, ZoneId, ZoneRecord,
 };
 
 /// A payload dropped at a position on the canvas.
@@ -172,55 +172,62 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
-    let dnd = use_dnd::<T>();
-    let mut registry = use_zone_registry::<T>();
     let auto_id = use_zone_id();
     let zone_id = id.unwrap_or(auto_id);
+    rsx! {
+        for keyed_zone_id in [zone_id] {
+            CanvasDropZoneInstance::<T> {
+                key: "{keyed_zone_id.0}",
+                zone_id: keyed_zone_id,
+                snap,
+                bounds,
+                keyboard,
+                label: label.clone(),
+                on_drop,
+                attributes: attributes.clone(),
+                {children.clone()}
+            }
+        }
+    }
+}
 
-    // Mirror `snap`/`bounds` into signals so the registry callback - which is
-    // registered once (first render) - reads the *current* values, not the
-    // ones captured at mount. Keep them current during render so child probes
-    // and same-frame drops observe the latest geometry.
-    let mut snap_now = use_signal(|| snap);
-    let mut bounds_now = use_signal(|| bounds);
-    let mut keyboard_now = use_signal(|| keyboard);
-    if *snap_now.peek() != snap {
-        snap_now.set(snap);
-    }
-    if *bounds_now.peek() != bounds {
-        bounds_now.set(bounds);
-    }
-    if *keyboard_now.peek() != keyboard {
-        keyboard_now.set(keyboard);
-    }
-
-    // Turn a corrected drop at `pointer` (canvas-relative) into a CanvasDrop.
-    let place = move |payload: T, pointer: Point, grab: Point| {
-        let position = canvas_position(pointer, grab, *snap_now.peek(), *bounds_now.peek());
-        on_drop.call(CanvasDrop {
-            payload,
-            position,
-            pointer,
-        });
-    };
+#[component]
+fn CanvasDropZoneInstance<T: Clone + PartialEq + 'static>(
+    zone_id: ZoneId,
+    snap: Option<SnapGrid>,
+    bounds: Option<Bounds>,
+    keyboard: CanvasKeyboardPlacement,
+    label: Option<String>,
+    on_drop: EventHandler<CanvasDrop<T>>,
+    attributes: Vec<Attribute>,
+    children: Element,
+) -> Element {
+    let dnd = use_dnd::<T>();
+    let mut registry = use_zone_registry::<T>();
 
     // Register as a zone so pointer and keyboard drags can drop here. The
     // registry delivers a `DropOutcome`; `element` is the pointer relative to
     // the canvas and `grab` is the pickup offset.
-    let parent = try_use_context::<ParentZone>().map(|p| p.0);
-    let registered_drop = Callback::new(move |o: DropOutcome<T>| {
+    let parent = use_parent_zone();
+    let registered_drop = use_callback(move |o: DropOutcome<T>| {
         let pointer = if o.mode == DragMode::Keyboard {
-            canvas_keyboard_pointer(*keyboard_now.peek(), o.element)
+            canvas_keyboard_pointer(keyboard, o.element)
         } else {
             o.element
         };
-        place(o.payload, pointer, o.grab);
+        let position = canvas_position(pointer, o.grab, snap, bounds);
+        on_drop.call(CanvasDrop {
+            payload: o.payload,
+            position,
+            pointer,
+        });
     });
+    let registered_label = label.clone();
     let registration = use_hook(|| {
         registry.register(ZoneRecord {
             id: zone_id,
             parent,
-            label: label.clone(),
+            label: registered_label.clone(),
             on_drop: registered_drop,
             accepts: None,
             mounted: None,
@@ -228,15 +235,21 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
         })
     });
     use_drop(move || {
-        registry.unregister(zone_id);
+        registry.unregister_registration(registration);
     });
-    // Keep the registered label in sync if the prop changes across renders.
-    // Registry readers only `peek`, so this render-time write can't loop.
-    registry.sync_label(zone_id, label.clone());
+    let label_for_sync = label.clone();
+    use_effect(use_reactive!(|(label_for_sync)| {
+        registry.sync_label(zone_id, label_for_sync);
+    }));
+    use_effect(use_reactive!(|(parent)| {
+        registry.sync_parent(registration, parent);
+    }));
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(&mut attributes, &["data-active", "onmounted"]);
 
     rsx! {
         div {
-            "data-active": if dnd.dragging() { "true" },
+            "data-active": if dnd.dragging() && dnd.proposed_effect() != DropEffect::None { "true" },
             onmounted: move |evt: Event<MountedData>| {
                 let m: Rc<MountedData> = evt.data();
                 let mut registry = registry;

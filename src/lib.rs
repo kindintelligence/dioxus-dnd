@@ -17,6 +17,7 @@ pub mod files;
 pub mod grid;
 pub mod multiselect;
 pub mod sortable;
+mod sortable_kernel;
 pub mod test;
 pub mod tree;
 
@@ -24,7 +25,7 @@ pub mod tree;
 pub mod prelude {
     pub use crate::a11y::{LiveRegion, ReorderButtons};
     pub use crate::animate::FlipItem;
-    pub use crate::autoscroll::{edge_delta, AutoScroll, ScrollAxis};
+    pub use crate::autoscroll::{edge_delta, frame_delta, AutoScroll, ScrollAxis};
     pub use crate::board::{
         apply_move, BoardColumn, BoardItem, BoardPayload, BoardSlot, ContainerId, MoveEvent,
     };
@@ -35,15 +36,19 @@ pub mod prelude {
     };
     pub use crate::core::{
         apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point, edge_of,
-        effective_effect, element_point, screen_delta_to_world, screen_to_world, transition,
-        use_bridge_world, use_dnd, use_dnd_model, use_dnd_provider, use_dnd_strings, use_dnd_world,
+        effective_effect, element_point, rank_collisions, screen_delta_to_world, screen_to_world,
+        transition, try_apply_clone_or_move, try_apply_list_clone_or_move, use_bridge_world,
+        use_dnd, use_dnd_model, use_dnd_monitor, use_dnd_provider, use_dnd_strings, use_dnd_world,
         use_joined_window, use_rect_refresh, use_zone_id, use_zone_registry, world_delta_to_screen,
-        world_to_screen, BridgeDropZone, BridgeGeometry, BridgeWorld, CanvasViewport, Direction,
-        DndContext, DndProvider, DndScope, DndStrings, DndWorld, DragId, DragMode, DragModifier,
-        DragOverlay, DragState, Draggable, DropEffect, DropOutcome, DropZone, Edge, EdgeSet,
-        GestureEffect, GestureEvent, GesturePhase, JoinedWindow, ModifierCtx, ParentZone, Point,
-        PointerKind, Rect, RectRefresh, SettleSlot, TouchSense, WindowGeometry, WindowKey, ZoneId,
-        ZoneRecord, ZoneRegistration, ZoneRegistry,
+        world_to_screen, ActivationConstraint, ActivationPolicy, Activator, ApplyDropError,
+        BridgeDropZone, BridgeGeometry, BridgeWorld, CancelReason, CanvasViewport, Collision,
+        CollisionDetector, CollisionRequest, CollisionStrategy, Direction, DndContext, DndEvent,
+        DndProvider, DndScope, DndStrings, DndWorld, DragHandle, DragId, DragMode, DragModifier,
+        DragOverlay, DragSnapshot, DragStart, DragState, Draggable, DropEffect, DropEffects,
+        DropOutcome, DropQuery, DropReceipt, DropZone, Edge, EdgeSet, GestureEffect, GestureEvent,
+        GesturePhase, JoinedWindow, ModifierCtx, NoDrag, ParentZone, Point, PointerKind, Rect,
+        RectRefresh, ReleasePolicy, SettleSlot, TouchSense, WindowGeometry, WindowKey,
+        ZoneCandidate, ZoneId, ZoneRecord, ZoneRegistration, ZoneRegistry,
     };
     pub use crate::debug::DndDebugOverlay;
     #[cfg(feature = "desktop")]
@@ -56,9 +61,14 @@ pub mod prelude {
     pub use crate::external::{TypedDrop, TypedDropZone};
     pub use crate::files::{FileDrop, FileDropZone, FileFilter, FileRejection};
     pub use crate::grid::{cell_of, index_of, SortableGrid};
-    pub use crate::multiselect::{use_selection, SelectableDraggable, Selection, SelectionCount};
+    pub use crate::multiselect::{
+        use_selection, use_selection_from_signal, SelectableDraggable, Selection, SelectionCount,
+    };
     pub use crate::sortable::{
-        apply_sort, apply_swap, displacement, Axis, ReorderMode, SortEvent, SortableList,
+        apply_reorder, apply_sort, apply_swap, displacement, project_layout, Axis, DropPlacement,
+        ItemTransform, Placement, ReorderEvent, ReorderMode, SortEvent, SortStrategy,
+        SortableCollection, SortableGroup, SortableGroupId, SortableHandle, SortableItem,
+        SortableList, SortablePayload, SortableProvider,
     };
     pub use crate::tree::{
         intent_from_offset, would_create_cycle, DropIntent, NodeId, TreeDropEvent, TreeNodeTarget,

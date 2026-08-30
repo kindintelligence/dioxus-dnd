@@ -127,17 +127,18 @@ in plain CSS.
 ## How styles merge
 
 Some components need functional inline styles to work: `touch-action` on
-`Draggable`, positioning on `DragOverlay`, the `display: grid` layout on
-`SortableGrid`. A forwarded `style` is merged *after* the functional style
-rather than replacing it, and later declarations win per property. So your
-declarations always win where they collide, and the functional ones survive
-where they don't: grid spacing is just `class: "gap-2"`, and custom column
-tracks are `style: "grid-template-columns: 2fr 1fr 1fr;"` - `display: grid`
-stays.
+`Draggable`, positioning and transforms on `DragOverlay`, and the
+`display: grid` layout on `SortableGrid`. Every forwarded style fragment is
+collected before the final inline style is emitted. Configurable defaults
+such as grid tracks come first, so user declarations win; behavior invariants
+such as touch ownership, drag transforms, and settle visibility come last, so
+styling cannot disable the interaction. Grid spacing is just
+`class: "gap-2"`, and custom column tracks remain
+`style: "grid-template-columns: 2fr 1fr 1fr;"`.
 
-The corollary: functional styles are *inline*, so a class can never
-override them (inline beats stylesheet). When you need to beat one, use the
-`style` prop, which is exactly the per-property override channel.
+Functional styles are inline, so classes do not override them. Properties
+documented as configurable have an explicit user-last merge policy; invariant
+properties should be composed through the component API rather than replaced.
 
 ## Styling children
 
@@ -163,9 +164,11 @@ To *react to drag state* from children, two techniques:
 - **The wrapper is real.** `class` styles the wrapper `div`, not your
   content; layout like `flex` stops there. Use the group or `in-*`
   technique for state, and your own elements for layout.
-- **Inline beats class.** `touch-action`, overlay positioning and the grid
-  layout are inline styles; override them through the `style` prop, not a
-  utility class.
+- **Inline beats class.** Configurable inline defaults such as grid tracks can
+  be overridden through the `style` prop. Interaction invariants such as
+  `touch-action`, overlay positioning, and animation transforms are emitted
+  last and cannot be replaced by forwarded styles; style your own child or an
+  outer wrapper when you need an additional transform.
 - **`data-active` is your reveal hook.** Styling only `data-over` makes
   targets invisible until the pointer finds them; light `data-active` too
   so users can see where drops are possible.

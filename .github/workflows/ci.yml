@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust formatting tools
         run: rustup toolchain install stable --profile minimal --component rustfmt
@@ -37,9 +37,9 @@ jobs:
           cargo +stable fmt --manifest-path examples/desktop-showcase/Cargo.toml -- --check
 
       - name: Lint public Markdown
-        uses: rvben/rumdl@067aba16501ffb3670c569a136b007622146c8f7 # v0
+        uses: rvben/rumdl@9faf4696d56c0cff426a2f85b3fd476ebe0d0ec0 # v0.2.52
         with:
-          version: "0.2.30"
+          version: "0.2.52"
           path: .
           config: .rumdl.toml
           report-type: annotations
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install stable Rust
         run: |
@@ -57,9 +57,16 @@ jobs:
           rustup target add wasm32-unknown-unknown --toolchain stable
 
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Test the minimal feature set
         run: cargo +stable test --locked --no-default-features --lib --tests
+
+      - name: Minimal consumers retain mounted-element support
+        run: |
+          cargo +stable tree --locked --no-default-features -e normal,features -p dioxus-dnd \
+            | grep -F 'dioxus feature "mounted"'
 
       - name: Test serde support
         run: cargo +stable test --locked --features serde
@@ -75,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install desktop system libraries
         run: |
@@ -93,6 +100,11 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: desktop-linux
+          workspaces: |
+            . -> target
+            examples/desktop-multiwindow -> target
+            examples/desktop-showcase -> target
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Test every library feature
         run: cargo +stable test --locked --all-features
@@ -137,7 +149,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal --component clippy
@@ -145,6 +157,11 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: desktop-${{ matrix.platform }}
+          workspaces: |
+            . -> target
+            examples/desktop-multiwindow -> target
+            examples/desktop-showcase -> target
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Test platform-specific desktop code
         run: cargo +stable test --locked --features "serde desktop" --lib --tests
@@ -162,7 +179,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install stable Rust and the web target
         run: |
@@ -171,9 +188,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          key: web
+          shared-key: web-gallery
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -184,7 +202,9 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Install the Dioxus CLI
-        run: cargo +stable install dioxus-cli --version 0.7.9 --locked
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: dioxus-cli@0.7.10
 
       - name: Run browser regressions
         run: npm run test:web
@@ -194,7 +214,7 @@ jobs:
 
       - name: Upload browser diagnostics on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-diagnostics
           path: |
@@ -208,7 +228,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install the minimum supported Rust version
         run: rustup toolchain install 1.85.0 --profile minimal
@@ -216,6 +236,7 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: msrv-core-1.85
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Check the renderer-neutral library on the MSRV
         run: cargo +1.85.0 check --locked --no-default-features --lib
@@ -225,7 +246,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal
@@ -233,6 +254,7 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: package
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Verify the crates.io payload
         run: cargo +stable publish --dry-run --locked
@@ -245,13 +267,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
           tool: cargo-deny@0.19.4
 
@@ -274,7 +296,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install desktop system libraries
         run: |
@@ -295,7 +317,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install desktop system libraries
         run: |
@@ -313,15 +335,16 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: dioxus-0.8-alpha
+          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Select published Dioxus 0.8 alpha packages
         run: |
-          cargo add dioxus@0.8.0-alpha.0 \
-            --no-default-features --features minimal,document
-          cargo add dioxus-desktop@0.8.0-alpha.0 --optional
-          cargo add --dev dioxus@0.8.0-alpha.0 \
+          cargo add dioxus@0.8.0-alpha.1 \
+            --no-default-features --features minimal,document,mounted
+          cargo add dioxus-desktop@0.8.0-alpha.1 --optional
+          cargo add --dev dioxus@0.8.0-alpha.1 \
             --no-default-features --features minimal,launch,web,document,mounted,router
-          cargo add --dev dioxus-ssr@0.8.0-alpha.0
+          cargo add --dev dioxus-ssr@0.8.0-alpha.1
 
       - name: Test against published Dioxus 0.8 alpha
         run: cargo test --all-features

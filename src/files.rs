@@ -298,6 +298,15 @@ pub fn FileDropZone(
     /// Fired with `true` when a drag hovers the zone, `false` when it leaves.
     #[props(default)]
     on_hover: Option<EventHandler<bool>>,
+    /// Allow selecting more than one file in the native picker.
+    #[props(default = true)]
+    multiple: bool,
+    /// Disable picker activation and native file input.
+    #[props(default)]
+    disabled: bool,
+    /// Accessible name for the keyboard-focusable drop zone.
+    #[props(default = "Choose or drop files".to_string())]
+    label: String,
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
@@ -313,19 +322,57 @@ pub fn FileDropZone(
     let picker_filter = filter.clone();
     let picker_on_files = on_files;
     let picker_on_rejected = on_rejected;
+    let open_picker = use_callback(move |_: ()| {
+        if disabled {
+            return;
+        }
+        // Clear the value before opening so choosing the same file twice
+        // still produces a change event.
+        let script = format!(
+            "const input = document.getElementById({picker_input_id:?}); \
+             if (input) {{ input.value = ''; input.click(); }}"
+        );
+        let _ = dioxus::document::eval(&script);
+    });
+    let mut attributes = attributes;
+    crate::core::components::protect_attributes(
+        &mut attributes,
+        &[
+            "data-over",
+            "data-disabled",
+            "role",
+            "tabindex",
+            "aria-label",
+            "aria-disabled",
+            "onclick",
+            "onkeydown",
+            "ondragover",
+            "ondragenter",
+            "ondragleave",
+            "ondrop",
+        ],
+    );
 
     rsx! {
         div {
-            "data-over": if depth() > 0 { "true" },
-            onclick: move |_| {
-                // Clear the value before opening so choosing the same file
-                // twice still produces a change event. The generated id is
-                // internal and contains only the numeric Dioxus scope id.
-                let script = format!(
-                    "const input = document.getElementById({picker_input_id:?}); \
-                     if (input) {{ input.value = ''; input.click(); }}"
-                );
-                let _ = dioxus::document::eval(&script);
+            "data-over": if !disabled && depth() > 0 { "true" },
+            "data-disabled": if disabled { "true" },
+            role: "button",
+            tabindex: if disabled { -1_i64 } else { 0 },
+            aria_label: label,
+            aria_disabled: disabled,
+            onclick: move |_| open_picker.call(()),
+            onkeydown: move |event: KeyboardEvent| {
+                if disabled {
+                    return;
+                }
+                let key = event.key();
+                if matches!(key, Key::Enter)
+                    || matches!(&key, Key::Character(value) if value == " ")
+                {
+                    event.prevent_default();
+                    open_picker.call(());
+                }
             },
             ondragover: move |evt: DragEvent| {
                 // Required: without preventDefault the browser never delivers
@@ -334,6 +381,9 @@ pub fn FileDropZone(
             },
             ondragenter: move |evt: DragEvent| {
                 evt.prevent_default();
+                if disabled {
+                    return;
+                }
                 let d = depth() + 1;
                 depth.set(d);
                 if d == 1 {
@@ -343,6 +393,10 @@ pub fn FileDropZone(
                 }
             },
             ondragleave: move |_| {
+                if disabled {
+                    depth.set(0);
+                    return;
+                }
                 let d = depth().saturating_sub(1);
                 depth.set(d);
                 if d == 0 {
@@ -356,6 +410,9 @@ pub fn FileDropZone(
                 depth.set(0);
                 if let Some(h) = &on_hover {
                     h.call(false);
+                }
+                if disabled {
+                    return;
                 }
                 deliver_files(
                     evt.files(),
@@ -372,12 +429,16 @@ pub fn FileDropZone(
                 id: input_id,
                 type: "file",
                 accept: picker_accept,
-                multiple: true,
+                multiple,
+                disabled,
                 hidden: true,
                 // The programmatic input click bubbles. Stop it here so it
                 // cannot reopen the picker through the zone's click handler.
                 onclick: move |evt: MouseEvent| evt.stop_propagation(),
                 onchange: move |evt: FormEvent| {
+                    if disabled {
+                        return;
+                    }
                     deliver_files(
                         evt.files(),
                         picker_filter.as_ref(),

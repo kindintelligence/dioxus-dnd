@@ -58,16 +58,18 @@ Data attributes:
 Behavior:
 
 - **Click semantics.** A plain click selects only this item; a click with
-  Ctrl or Cmd held toggles it. Both go through `Selection::click` with the
-  event's modifiers.
+  Ctrl or Cmd held toggles it. `SelectableDraggable` retains the 3.x
+  `Selection::click` behavior. Custom rows can opt into Shift ranges with
+  `Selection::click_in_order`.
 - **Payload resolution.** Resolved from the current selection each render:
   a selected item drags `selection.items()`, the whole group in selection
   order; an unselected item drags `vec![item]`.
 - **Trailing-click protection.** The browser fires a trailing `click` on
   the source after a completed pointer drag; letting it through would
-  collapse a just-dragged multi-selection to this one item. Drag start
-  arms a flag and the next click consumes it, so exactly one trailing
-  click is swallowed.
+  collapse a just-dragged multi-selection to this one item. Pointer drag
+  start arms a flag and that click consumes it. Keyboard drags never arm the
+  flag, cancellation clears it, and a new pointerdown retires any stale token
+  before the next genuine click.
 - **Wrapper structure.** Forwarded attributes and `data-selected` sit on
   the outer div. The inner `Draggable` renders its own wrapper carrying
   `data-dragging` and the keyboard behavior. During a stack drag every
@@ -106,7 +108,8 @@ anything else derived from the selection updates reactively.
 
 | Method | Signature | What it does |
 |---|---|---|
-| `from_signal` | `(Signal<Vec<K>>) -> Selection<K>` | Wrap an existing signal, for selection state that is hoisted or global. Prefer `use_selection`. |
+| `from_signal` | `(Signal<Vec<K>>) -> Selection<K>` | Non-hook compatibility wrapper. Range operations derive their anchor from the first selected item. |
+| `from_signals` | `(Signal<Vec<K>>, Signal<Option<K>>) -> Selection<K>` | Non-hook wrapper for externally owned item and anchor signals. |
 | `is_selected` | `(&K) -> bool` | Membership test; drives `data-selected`. |
 | `select_only` | `(K)` | Replace the selection with just this key. |
 | `toggle` | `(K)` | Add or remove this key (the Ctrl/Cmd+click semantics). |
@@ -115,6 +118,9 @@ anything else derived from the selection updates reactively.
 | `len` | `() -> usize` | Number of selected keys. |
 | `is_empty` | `() -> bool` | Is nothing selected? |
 | `click` | `(K, Modifiers)` | The standard convention in one call: toggles when `Modifiers::CONTROL` or `Modifiers::META` is held, otherwise selects only this key. `SelectableDraggable` calls it for you; in custom rows pass `evt.modifiers()`. |
+| `select_range` | `(&[K], &K, bool) -> bool` | Select the inclusive range from the current anchor to a key in stable visual order. `additive` preserves existing selection. Returns false if an endpoint is absent. |
+| `click_in_order` | `(K, Modifiers, &[K])` | Plain and Ctrl/Cmd click behavior plus Shift-range and Ctrl/Cmd+Shift additive range selection. |
+| `keyboard_range` | `(&[K], usize, isize, bool) -> Option<usize>` | Move a focus index, clamped to the collection, and either select the next item or extend the anchored range. |
 
 Mutating methods take `&mut self`, which the `Copy` handle satisfies with
 a `mut` binding, signal-style: `let mut selection = use_selection::<K>()`.
@@ -125,7 +131,12 @@ a `mut` binding, signal-style: `let mut selection = use_selection::<K>()`.
 the calling component (a `use_signal` under the hood). Call it once in the
 component that owns the list and pass the handle down. For selection that
 outlives that component, build the `Signal<Vec<K>>` yourself and wrap it
-with `Selection::from_signal`.
+with the non-hook `Selection::from_signal`; if both pieces of state are owned
+elsewhere, use `Selection::from_signals`.
+
+`use_selection_from_signal(items)` is the hook-style option when the item
+signal is already owned elsewhere but this component should own the range
+anchor.
 
 ## Where the rest lives
 
