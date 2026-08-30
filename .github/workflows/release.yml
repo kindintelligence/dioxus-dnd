@@ -73,7 +73,49 @@ jobs:
   verify:
     name: release-gate
     needs: validate
-    uses: ./.github/workflows/ci.yml
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Reuse successful main CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          run_id=""
+          for attempt in {1..60}
+          do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --branch main \
+              --event push \
+              --commit "$GITHUB_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+
+            if [[ -n "$run_id" ]]
+            then
+              break
+            fi
+
+            echo "Waiting for main CI to start for $GITHUB_SHA (attempt $attempt/60)"
+            sleep 10
+          done
+
+          if [[ -z "$run_id" ]]
+          then
+            echo "No main CI run found for $GITHUB_SHA"
+            exit 1
+          fi
+
+          echo "Reusing main CI run $run_id"
+          gh run watch "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
 
   publish:
     name: publish-crates-io

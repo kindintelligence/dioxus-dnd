@@ -133,7 +133,8 @@
   opt-in through `use_selection_from_signal` or `from_signals`.
 - **Clean release publishing.** The crates.io existence probe writes its
   response outside the checkout, so Cargo receives the clean tagged payload
-  required by `cargo publish`.
+  required by `cargo publish`. Tag workflows reuse the successful CI run for
+  the same `main` commit instead of compiling the full matrix a second time.
 - **Owner restoration and lifetime precision.** `DndScope::with` now restores
   both Dioxus owner overrides before resuming an initializer panic, and
   process-owned model/world scopes remain deliberately non-dropping even if
