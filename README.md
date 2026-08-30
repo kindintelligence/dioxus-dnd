@@ -57,8 +57,7 @@ walkthroughs and API references, and it is built with this crate.
 [Examples and website](#examples-and-website)
 
 **Reference:** [Feature flags](#feature-flags) ·
-[Platform notes](#platform-notes) · [Prior art](#prior-art) ·
-[Release process](RELEASING.md)
+[Platform notes](#platform-notes) · [Prior art](#prior-art)
 
 Every concept above also has a full guide and API reference in
 [`docs/`](docs/README.md), paired by name; the API references double as

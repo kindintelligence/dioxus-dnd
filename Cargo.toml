@@ -11,8 +11,8 @@ keywords = ["dioxus", "drag-and-drop", "dnd", "sortable", "ui"]
 categories = ["gui", "wasm", "web-programming"]
 # Keep repo plumbing out of the published tarball: lint, security, and workflow
 # files serve maintainers; assets/ carries the README hero GIF;
-# the renderer/Blitz notes, superpowers plans, and reconciliation review are
-# internal working documents; and the package.json/playwright trio plus
+# the renderer and Blitz notes are internal working documents; and the
+# package.json/playwright trio plus
 # tests/browser/ are the Playwright browser suite - JS specs a `cargo test`
 # consumer can never run. Public docs stay in the package because the module
 # rustdoc includes docs/api/*.md at compile time.
@@ -25,9 +25,6 @@ exclude = [
     "deny.toml",
     "docs/BLITZ-TRACKING-ISSUE.md",
     "docs/RENDERER-CONTRACT.md",
-    "docs/superpowers/",
-    "DESKTOP-ARCHITECTURE-RECONCILIATION-REVIEW.md",
-    "DIOXUS_REVIEW.md",
     "package.json",
     "package-lock.json",
     "playwright.config.js",
