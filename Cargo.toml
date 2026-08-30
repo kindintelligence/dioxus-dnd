@@ -37,6 +37,13 @@ exclude = [
 [package.metadata.docs.rs]
 all-features = true
 
+# `#[component]` exposes generated `*Props` structs, while the supported
+# construction path is Dioxus RSX. Adding a defaulted component prop is a
+# compatible RSX extension and therefore requires a minor release, not a major
+# one. Hand-written constructible records stay guarded by tests/compatibility.rs.
+[package.metadata.cargo-semver-checks.lints]
+constructible_struct_adds_field = { required-update = "minor" }
+
 [dependencies]
 # `document` is the cross-renderer bridge used to activate FileDropZone's
 # hidden native file input on click; it adds behavior only, never CSS.
