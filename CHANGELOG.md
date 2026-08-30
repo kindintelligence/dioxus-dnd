@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.0 - 2026-08-30
 
 ### Added
 
@@ -29,6 +29,27 @@
   cancel with monitor-visible reasons.
 - **Selection ranges.** `Selection` now supports anchored Shift ranges,
   additive ranges, and keyboard range movement.
+- **Click-to-upload file drop zones.** Clicking `FileDropZone` opens the
+  native multi-file picker. Picker selections share the existing filtering,
+  rejection, and `on_files` path with OS drops, while the wrapper remains
+  headless and receives no library-owned visual styles.
+- **Multi-window ownership and wiring primitives.** `use_dnd_model` creates
+  app-wide state under process-lived unsynchronized and synchronized owners;
+  `DndScope` gives reclaimable dynamic state the same correct owner pair.
+  With the `desktop` feature, `MultiWindowProvider` structurally installs the
+  geometry feed, drag provider, and host bridge in their required order and
+  warns when no world is present or when it was incorrectly nested beneath
+  the old same-type provider. `DndWorld::vdom` pre-seeds spawned windows with
+  that world while preserving ordinary root-context chaining.
+- **Release and compatibility automation.** CI now covers formatting,
+  documentation, the full Rust feature surface, browser regressions, the
+  release gallery, standalone desktop examples, the Rust 1.85 core MSRV,
+  Windows, macOS, packaging, dependency policy, and SemVer. A required
+  compatibility job runs the full Rust suite against published Dioxus
+  `0.8.0-alpha.1`, while the supported and locked release line remains Dioxus
+  `0.7.10`. Version tags validate the manifest, lockfiles, changelog, and
+  protected `main` head before crates.io Trusted Publishing and GitHub Release
+  creation.
 
 ### Changed
 
@@ -48,6 +69,16 @@
   x11rb `0.14`. The root lockfile also selects non-yanked chacha20 `0.10.2`
   and spin `0.9.9`. The browser suite uses Playwright `1.62.1` and Dioxus CLI
   `0.7.10`.
+- **CI and deployment safety.** Every Cargo release check uses the committed
+  lockfiles, third-party actions are pinned to immutable revisions, and gallery
+  deployment waits for successful `main` CI. The weekly upstream canary keeps
+  released Dioxus 0.7 failures visible while treating Dioxus git-main churn as
+  an informational early warning.
+- **Dependency maintenance policy.** Dependabot groups weekly Cargo, browser,
+  and GitHub Actions updates against `development`. `cargo-deny` enforces
+  advisory, license, duplicate, wildcard, registry, and git-source policy,
+  with explicit reasons for the Dioxus Desktop 0.7 GTK3 advisories that cannot
+  be upgraded independently.
 
 ### Fixed
 
@@ -100,50 +131,6 @@
 - **Selection constructor compatibility.** `Selection::from_signal` remains a
   non-hook wrapper for existing callers; persistent range-anchor state is
   opt-in through `use_selection_from_signal` or `from_signals`.
-
-## 3.1.0 - 2026-07-13
-
-### Added
-
-- **Click-to-upload file drop zones.** Clicking `FileDropZone` opens the
-  native multi-file picker. Picker selections share the existing filtering,
-  rejection, and `on_files` path with OS drops, while the wrapper remains
-  headless and receives no library-owned visual styles.
-
-- **Multi-window ownership and wiring primitives.** `use_dnd_model` creates
-  app-wide state under process-lived unsynchronized and synchronized owners;
-  `DndScope` gives reclaimable dynamic state the same correct owner pair.
-  With the `desktop` feature, `MultiWindowProvider` structurally installs the
-  geometry feed, drag provider, and host bridge in their required order and
-  warns when no world is present or when it was incorrectly nested beneath
-  the old same-type provider. `DndWorld::vdom` pre-seeds spawned windows with
-  that world while preserving ordinary root-context chaining.
-
-- **Release and compatibility automation.** CI now covers formatting,
-  documentation, the full Rust feature surface, browser regressions, the
-  release gallery, standalone desktop examples, the Rust 1.85 core MSRV,
-  Windows, macOS, packaging, dependency policy, and SemVer. A required
-  compatibility job runs
-  the full Rust suite against published Dioxus `0.8.0-alpha.0`, while the
-  supported and locked release line remains Dioxus `0.7.9`. Version tags now
-  validate the manifest, lockfiles, changelog, and protected `main` head before
-  crates.io Trusted Publishing and GitHub Release creation.
-
-### Changed
-
-- **CI and deployment safety.** Every Cargo release check uses the committed
-  lockfiles, third-party actions are pinned to immutable revisions, and gallery
-  deployment waits for successful `main` CI. The weekly upstream canary keeps
-  released Dioxus 0.7 failures visible while treating Dioxus git-main churn as
-  an informational early warning.
-- **Dependency maintenance policy.** Dependabot now groups weekly Cargo,
-  browser, and GitHub Actions updates against `development`. `cargo-deny`
-  enforces advisory, license, duplicate, wildcard, registry, and git-source
-  policy, with explicit reasons for the Dioxus Desktop 0.7 GTK3 advisories that
-  cannot be upgraded independently.
-
-### Fixed
-
 - **Owner restoration and lifetime precision.** `DndScope::with` now restores
   both Dioxus owner overrides before resuming an initializer panic, and
   process-owned model/world scopes remain deliberately non-dropping even if
@@ -171,10 +158,9 @@
   protocol that protects a replacement drag started synchronously inside a
   receiver or source callback. Identity counters also document their relaxed,
   process-lifetime non-wrapping assumption.
-- **Release operations and Dioxus compatibility.** The maintainer guide records
-  the reviewed release PR, protected tag, OIDC publishing, retry, checksum, and
-  yank procedures. The compatibility table now distinguishes supported Dioxus
-  `0.7.9` from the source-compatibility canary for Dioxus `0.8.0-alpha.0`.
+- **Dioxus compatibility.** The compatibility table distinguishes the
+  supported Dioxus `0.7.10` line from the source-compatibility canary for
+  Dioxus `0.8.0-alpha.1`.
 
 ## 3.0.1 - 2026-07-11
 
