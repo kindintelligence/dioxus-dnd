@@ -24,7 +24,9 @@
   and configurable recovery. Targets can negotiate `DropEffects` through a
   rich `DropQuery`. Stable `DragId` values and `use_dnd_monitor` expose the
   Started, Moved, TargetChanged, Dropped, and Cancelled lifecycle without
-  changing `DropOutcome`.
+  changing `DropOutcome`. Custom sources can start identified drags with
+  `DragStart` and `DndContext::start_with_id`, inspect active snapshots, and
+  cancel with monitor-visible reasons.
 - **Selection ranges.** `Selection` now supports anchored Shift ranges,
   additive ranges, and keyboard range movement.
 
