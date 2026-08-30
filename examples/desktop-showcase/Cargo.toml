@@ -6,7 +6,7 @@
 #
 # This is the polished multi-window showcase ("Mission Control"): live
 # signal-backed widgets that keep animating inside the drag ghost across
-# windows. See docs/superpowers/specs/2026-07-10-desktop-showcase-design.md.
+# windows.
 
 [package]
 name = "desktop-showcase"

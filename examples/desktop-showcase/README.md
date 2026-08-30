@@ -4,8 +4,7 @@ Live, signal-backed widgets you can drag between native windows - and they
 **never stop animating, even inside the drag ghost, mid-flight between
 windows**. That is the point: the drag payload is a live `Signal` handle
 into shared model storage, not a serialized snapshot, which no OS drag
-protocol could carry. See the design doc at
-`docs/superpowers/specs/2026-07-10-desktop-showcase-design.md`.
+protocol could carry.
 
 ## Run it
 
@@ -42,6 +41,10 @@ There is no separate WSL Rust implementation: both launchers use the same
 - **Open satellite** spawns tear-off windows; open as many as you like.
 - Drag the telemetry chart into a satellite - watch it keep streaming in
   the ghost as it crosses the desktop gap.
+- Compare seven live displays in the dark-paper dashboard: sparkline,
+  stopwatch, deploy ring, pulse trace, channel bars, traffic area, and
+  systems radar. Every chart keeps updating in every window and in the
+  cross-window drag ghost.
 - **Hold Ctrl while dropping** to clone: two independently ticking copies
   (the resolved `DropEffect::Copy`, fed by the raw-keyboard modifier leg
   on Windows). Alt (Link) is accepted and treated as Move here.
@@ -60,7 +63,7 @@ There is no separate WSL Rust implementation: both launchers use the same
 - `ticker.rs` - the liveness engine: pure deterministic state advance
   (unit-tested) plus the claim/release failover hook.
 - `widgets/` - one file per widget body (sparkline, stopwatch, deploy
-  ring, pulse), all pure SVG/CSS.
-- `theme.rs` - the ops-console theme, one CSS const.
+  ring, pulse, bars, area, radar), all pure SVG/CSS.
+- `theme.rs` - the gallery-derived dark-paper ops theme, one CSS const.
 - `layout.rs` - the D-key demo layout.
 - `main.rs` - window wiring only.
