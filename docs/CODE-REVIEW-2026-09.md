@@ -376,6 +376,9 @@ libraries the `desktop` feature needs. Every step the CI workflow runs:
   migrated tests compile without deprecation warnings.
 - `RUSTDOCFLAGS=-D warnings cargo doc --all-features --no-deps`: clean.
 - The tao/wry public-API leak grep: nothing.
+- `cargo semver-checks --all-features` (0.50.0, the version CI pins)
+  against the crates.io 3.1.0 baseline: 195 checks pass, no semver update
+  required at 3.2.0.
 - Standalone desktop examples: `desktop-multiwindow` and
   `desktop-showcase` (7 tests) pass their test, clippy and build steps.
 - `cargo fmt --check`: clean.
