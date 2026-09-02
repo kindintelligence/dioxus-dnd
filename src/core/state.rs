@@ -17,6 +17,14 @@ use super::monitor::{CancelReason, DndEvent, DndMonitor, DragSnapshot, DropRecei
 use super::session::SourceCompletion;
 use super::types::{DragId, DragMode, DragSessionId, DropEffect, Point, PointerKind, Rect, ZoneId};
 
+/// How far an exact `(0, 0)` sample may sit from the previous one and still
+/// count as a real pointer reaching the viewport corner. Pointer samples
+/// arrive every 8-16 ms from the DOM and every 30 ms from the desktop cursor
+/// poller; 256 px per sample is over 8000 px/s at the slowest cadence, past
+/// any human flick, so a larger jump to the exact origin is the synthetic
+/// report, not motion. See [`DndContext::update_pointer`].
+const SYNTHETIC_ORIGIN_JUMP: f64 = 256.0;
+
 /// A snapshot of an in-flight drag.
 ///
 /// Deriving [`macro@Store`] generates per-field lenses, which
@@ -404,18 +412,20 @@ impl<T: Clone + 'static> DndContext<T> {
     /// Update the tracked pointer position (drives `DragOverlay`). Granular:
     /// only `pointer` subscribers rerun.
     ///
-    /// An exact `(0, 0)` sample is ignored. Some webviews report it for
-    /// synthetic events, and nothing else in the sample can tell that apart
-    /// from a real pointer at the viewport corner. A drag that does reach
-    /// the exact corner keeps its previous sample, which arrived at most a
-    /// few CSS px away, so hit-testing and delivery are unaffected in
-    /// practice.
+    /// Some webviews report an exact `(0, 0)` for synthetic events. Such a
+    /// sample is accepted only when it continues the previous one (within
+    /// 256 CSS px): a real pointer reaching the viewport corner arrives from
+    /// nearby and tracks exactly, while the same value jumping in from
+    /// across the viewport is the artifact and is dropped, so the overlay
+    /// never flashes to the corner. Delivery does not depend on this value;
+    /// `Draggable` resolves a release from the event's own coordinates.
     pub fn update_pointer(&mut self, pointer: Point) {
-        // See the doc comment: value is the only signal available, and a
-        // rejected real sample costs a few px at the corner while an
-        // accepted synthetic one would jump the overlay across the viewport.
         if pointer.x == 0.0 && pointer.y == 0.0 {
-            return;
+            let previous = *self.state.pointer().peek();
+            let jump = previous - pointer;
+            if jump.x.hypot(jump.y) > SYNTHETIC_ORIGIN_JUMP {
+                return;
+            }
         }
         self.state.pointer().set(pointer);
         self.runtime

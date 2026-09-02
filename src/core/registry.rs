@@ -674,6 +674,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// `accepts_query`, `allowed_effects`) with the built-in components,
     /// so a custom source sees the targets a `Draggable` would. Build the
     /// query yourself when the source, effect, or input mode matters.
+    #[deprecated(
+        since = "3.2.0",
+        note = "use `acceptable_query(&DropQuery::new(payload))`; this wrapper is exactly that"
+    )]
     pub fn acceptable(&self, payload: &T) -> Vec<ZoneRecord<T>> {
         self.acceptable_query(&DropQuery::new(payload.clone()))
     }
@@ -716,6 +720,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     ///
     /// Payload-only form of [`Self::step_zone_query`] (see
     /// [`Self::acceptable`] for the shared pipeline).
+    #[deprecated(
+        since = "3.2.0",
+        note = "use `step_zone_query(current, &DropQuery::new(payload), step)`; this wrapper is exactly that"
+    )]
     pub fn step_zone(&self, current: Option<ZoneId>, payload: &T, step: isize) -> Option<ZoneId> {
         self.step_zone_query(current, &DropQuery::new(payload.clone()), step)
     }
@@ -749,6 +757,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     ///
     /// Payload-only form of [`Self::children_of_query`] (see
     /// [`Self::acceptable`] for the shared pipeline).
+    #[deprecated(
+        since = "3.2.0",
+        note = "use `children_of_query(parent, &DropQuery::new(payload))`; this wrapper is exactly that"
+    )]
     pub fn children_of(&self, parent: Option<ZoneId>, payload: &T) -> Vec<ZoneRecord<T>> {
         self.children_of_query(parent, &DropQuery::new(payload.clone()))
     }
@@ -773,6 +785,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     ///
     /// Payload-only form of [`Self::step_sibling_query`] (see
     /// [`Self::acceptable`] for the shared pipeline).
+    #[deprecated(
+        since = "3.2.0",
+        note = "use `step_sibling_query(current, &DropQuery::new(payload), step)`; this wrapper is exactly that"
+    )]
     pub fn step_sibling(
         &self,
         current: Option<ZoneId>,
@@ -799,6 +815,10 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     ///
     /// Payload-only form of [`Self::first_child_query`] (see
     /// [`Self::acceptable`] for the shared pipeline).
+    #[deprecated(
+        since = "3.2.0",
+        note = "use `first_child_query(id, &DropQuery::new(payload))`; this wrapper is exactly that"
+    )]
     pub fn first_child(&self, id: ZoneId, payload: &T) -> Option<ZoneId> {
         self.first_child_query(id, &DropQuery::new(payload.clone()))
     }
@@ -838,6 +858,12 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// built-in drop would skip is skipped here too. The geometry is this
     /// fixed containment-then-nearest-edge rule, not the provider's
     /// collision detector; [`Self::resolve`] is what built-in drops run.
+    #[deprecated(
+        since = "3.2.0",
+        note = "use `resolve(&DropQuery::new(payload), point, None, max_distance)`, which \
+                also ranks through the provider's collision policy (equal-distance \
+                fallback ties go to the later record there, the earlier one here)"
+    )]
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
         let query = DropQuery::new(payload.clone());
         let zones = self.snapshot();
@@ -1246,8 +1272,8 @@ mod tests {
     use dioxus::prelude::*;
 
     use super::{
-        cycle, Direction, DropQuery, Point, Rect, ReleasePolicy, ZoneId, ZonePolicy, ZoneRecord,
-        ZoneRegistry,
+        cycle, Direction, DropEffects, DropQuery, Point, Rect, ReleasePolicy, ZoneId, ZonePolicy,
+        ZoneRecord, ZoneRegistry,
     };
 
     #[test]
@@ -1350,7 +1376,7 @@ mod tests {
         }));
         registry.register(record);
 
-        let acceptable = registry.acceptable(&7);
+        let acceptable = registry.acceptable_query(&DropQuery::new(7));
         assert_eq!(acceptable.len(), 1);
         assert!(
             registry.contains(ZoneId(2)),
@@ -1362,6 +1388,83 @@ mod tests {
     #[test]
     fn acceptance_callbacks_run_without_a_registry_borrow() {
         let mut dom = VirtualDom::new(reentrant_acceptance_probe);
+        dom.rebuild_in_place();
+    }
+
+    /// The payload-only lookups once consulted only `accepts`, so a custom
+    /// source could target zones whose `allowed_effects` or `accepts_query`
+    /// the built-in drop would have refused. They are exact wrappers over
+    /// the query forms now; this pins both halves of that.
+    #[allow(deprecated)]
+    fn payload_only_lookups_share_the_policy_pipeline_probe() -> Element {
+        let mut registry = ZoneRegistry::from_signal(Signal::new(Vec::<ZoneRecord<u8>>::new()));
+        let rect = |x: f64| Rect::new(x, 0.0, 20.0, 20.0);
+        let open = registry.register(ZoneRecord::new(ZoneId(1), Callback::new(|_| {})));
+        registry.set_rect_if_present(open, rect(0.0));
+        let closed = registry.register_with_policy(
+            ZoneRecord::new(ZoneId(2), Callback::new(|_| {})),
+            ZonePolicy {
+                allowed_effects: DropEffects::EMPTY,
+                ..ZonePolicy::default()
+            },
+        );
+        registry.set_rect_if_present(closed, rect(30.0));
+        let picky = registry.register_with_policy(
+            ZoneRecord::new(ZoneId(3), Callback::new(|_| {})),
+            ZonePolicy {
+                accepts_query: Some(Callback::new(|query: DropQuery<u8>| query.payload > 5)),
+                ..ZonePolicy::default()
+            },
+        );
+        registry.set_rect_if_present(picky, rect(60.0));
+        let ids = |zones: Vec<ZoneRecord<u8>>| zones.into_iter().map(|z| z.id).collect::<Vec<_>>();
+
+        // `allowed_effects` and `accepts_query` now apply.
+        assert_eq!(ids(registry.acceptable(&1)), [ZoneId(1)]);
+        assert_eq!(ids(registry.acceptable(&9)), [ZoneId(1), ZoneId(3)]);
+        assert_eq!(
+            registry.hit_test_closest(Point::new(40.0, 10.0), &9, 0.0),
+            None,
+            "a zone allowing no effect is not a target"
+        );
+        assert_eq!(
+            registry.hit_test_closest(Point::new(70.0, 10.0), &1, 0.0),
+            None,
+            "a query-rejected payload falls through"
+        );
+        assert_eq!(
+            registry.hit_test_closest(Point::new(70.0, 10.0), &9, 0.0),
+            Some(ZoneId(3))
+        );
+
+        // Each wrapper is exactly its query form.
+        let query = DropQuery::new(9u8);
+        assert_eq!(
+            ids(registry.acceptable(&9)),
+            ids(registry.acceptable_query(&query))
+        );
+        assert_eq!(
+            registry.step_zone(None, &9, 1),
+            registry.step_zone_query(None, &query, 1)
+        );
+        assert_eq!(
+            registry.step_sibling(Some(ZoneId(1)), &9, 1),
+            registry.step_sibling_query(Some(ZoneId(1)), &query, 1)
+        );
+        assert_eq!(
+            ids(registry.children_of(None, &9)),
+            ids(registry.children_of_query(None, &query))
+        );
+        assert_eq!(
+            registry.first_child(ZoneId(1), &9),
+            registry.first_child_query(ZoneId(1), &query)
+        );
+        rsx! {}
+    }
+
+    #[test]
+    fn payload_only_lookups_share_the_policy_pipeline() {
+        let mut dom = VirtualDom::new(payload_only_lookups_share_the_policy_pipeline_probe);
         dom.rebuild_in_place();
     }
 

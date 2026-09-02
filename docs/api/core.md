@@ -215,8 +215,8 @@ Lookups. All of these peek (read without subscribing) except `records`:
 | `cached_rect(id)` | `Option<Rect>` | The cached client rect; `None` when unmeasured, unknown, or the provider is gone. |
 | `mounted_handle(id)` | `Option<Rc<MountedData>>` | The mounted element; `None` before mount, for an unknown zone, or after teardown. |
 | `contains(id)` | `bool` | Is this id registered here? The parent-zone context is shared across payload types, so a record's `parent` can name a zone living in another type's registry - check before navigating to one. |
-| `acceptable(&payload)` | `Vec<ZoneRecord<T>>` | All zones accepting the payload, in registration order. Exactly `acceptable_query` over `DropQuery::new(payload)`: every payload-only lookup below runs the same acceptance pipeline (`accepts`, `accepts_query`, `allowed_effects`) as the built-in components, so a custom source sees the targets a `Draggable` would. |
-| `acceptable_query(&query)` | `Vec<ZoneRecord<T>>` | All zones accepting and negotiating the complete drop query. Build the query yourself when the source, effect, or input mode matters. |
+| `acceptable_query(&query)` | `Vec<ZoneRecord<T>>` | All zones accepting and negotiating the complete drop query: `accepts`, `accepts_query`, and `allowed_effects`, the pipeline the built-in components run. `DropQuery::new(payload)` is the payload-only query; fill in source, effect, or input mode when they matter. |
+| `acceptable(&payload)` | `Vec<ZoneRecord<T>>` | Deprecated since 3.2.0: exactly `acceptable_query(&DropQuery::new(payload))`. Every payload-only lookup below is deprecated the same way and is an exact wrapper over its `_query` form. |
 | `records()` | `Vec<ZoneRecord<T>>` | Every zone, in registration order. A subscribing read - a component rendering from it reruns when zones mount or unmount - because its consumers (the debug overlay, your devtools) are renderers. |
 
 Keyboard navigation. Order is spatial - top-to-bottom, then reading order,
@@ -228,21 +228,22 @@ rect come last in registration order:
 | Method | What it does |
 |---|---|
 | `direction()` / `set_direction(dir)` | The layout direction spatial ordering follows. Setting is a no-op if unchanged; `DndProvider`'s `dir` prop calls it for you. |
-| `step_zone(current, &payload, step)` | Next (`+1`) or previous (`-1`) acceptable zone, cyclic, in spatial order. Call `refresh_rects` first, as the built-in keyboard interaction does on pickup. Payload-only form of `step_zone_query`. |
-| `step_zone_query(current, &query, step)` | Query-aware form used by built-in keyboard dragging. |
+| `step_zone_query(current, &query, step)` | Next (`+1`) or previous (`-1`) acceptable zone, cyclic, in spatial order; what built-in keyboard dragging runs. Call `refresh_rects` first, as it does on pickup. |
+| `step_zone(current, &payload, step)` | Deprecated since 3.2.0: `step_zone_query` over `DropQuery::new(payload)`. |
 | `parent_of(id)` | The parent of a nested zone. |
 | `ascend(current)` | The zone to enter when ascending: the parent, but only when this registry can resolve it. |
-| `children_of(parent, &payload)` | Acceptable zones directly inside `parent` (`None` is the root level), spatially ordered. Payload-only form of `children_of_query`. |
-| `first_child(id, &payload)` | The first (spatially) acceptable zone nested inside `id`. Payload-only form of `first_child_query`. |
-| `step_sibling(current, &payload, step)` | Next/previous zone among `current`'s siblings, cyclic. With no `current`, cycles the root level. Payload-only form of `step_sibling_query`. |
+| `children_of_query(parent, &query)` | Acceptable zones directly inside `parent` (`None` is the root level), spatially ordered. |
+| `first_child_query(id, &query)` | The first (spatially) acceptable zone nested inside `id`. |
+| `step_sibling_query(current, &query, step)` | Next/previous zone among `current`'s siblings, cyclic. With no `current`, cycles the root level. |
+| `children_of`, `first_child`, `step_sibling` | Deprecated since 3.2.0: the same lookups over `DropQuery::new(payload)`. |
 
 Hit-testing, against cached rects:
 
 | Method | What it does |
 |---|---|
 | `hit_test(point)` | Last record in registry order containing the point. Registry order only approximates DOM paint order: CSS `z-index`, stacking contexts and portals are not inspected. Replacing a same-id record retains its slot. |
-| `hit_test_closest(point, &payload, max_distance)` | Acceptance-aware: the last record in registry order that contains the point and accepts the payload (through the same pipeline as `acceptable`), so a release can pass a rejecting record and land on an earlier acceptable overlap. When nothing contains the point, falls back to the acceptable zone whose rect edge is nearest, within `max_distance` CSS px, which forgives releases in the gutter between zones. The geometry is this fixed rule, not the provider's collision detector; built-in drops run `resolve`. |
-| `resolve(&query, point, active_rect, max_distance)` | What the built-in pointer drop runs: filters with full target policy, ranks through the configured collision detector, and returns the selected zone plus negotiated effect. Prefer it for custom sources so releases follow the provider's `ReleasePolicy`. |
+| `resolve(&query, point, active_rect, max_distance)` | What the built-in pointer drop runs: filters with full target policy, ranks through the configured collision detector, and returns the selected zone plus negotiated effect. Under the default `PointerWithin` policy a containing zone wins, later registration first, and a miss falls back to the acceptable zone whose rect edge is nearest within `max_distance` CSS px (the built-in drop passes the `ReleasePolicy` recovery radius, 48 by default). |
+| `hit_test_closest(point, &payload, max_distance)` | Deprecated since 3.2.0 in favor of `resolve`. Same acceptance pipeline; fixed containment-then-nearest-edge geometry that ignores the provider's collision detector. One difference to know when migrating: equal-distance fallback ties go to the earlier record here and to the later record in `resolve`. |
 | `resolve_hover(&query, point, active_rect, current)` | Exact policy resolution with optional sticky retention of the current acceptable target. |
 
 ## Collision and release policy

@@ -63,13 +63,14 @@ families power the built-in interactions:
   the full `DropQuery` and ranks candidates through the provider's collision
   policy. Release selection uses `resolve`, applying the same acceptance and
   effect negotiation before optional nearest-zone recovery. `hit_test`
-  (geometry only) and `hit_test_closest` (containment, then nearest edge)
-  remain available to custom code; the payload-only lookups share the
-  built-in acceptance pipeline, so only the collision ranking differs.
+  (geometry only, no acceptance) remains for custom code that wants raw
+  containment; the payload-only `hit_test_closest` is deprecated in favor
+  of `resolve`.
   Registration order only approximates paint order: CSS stacking and portals
   are not inspected.
-- **Keyboard navigation.** `step_zone` and its sibling/child variants walk
-  acceptable zones in spatial order (top-to-bottom, then reading order,
+- **Keyboard navigation.** `step_zone_query` and its sibling/child
+  variants walk acceptable zones in spatial order (top-to-bottom, then
+  reading order,
   mirrored under `Direction::Rtl`); tops within one CSS pixel form a row so
   fractional layout does not produce a zig-zag. Zone labels feed the
   screen-reader announcements.
