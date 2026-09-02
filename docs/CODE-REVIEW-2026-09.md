@@ -298,6 +298,15 @@ than quietly adjusting the text above.
    the deprecated lookups now refuse them and equal their query forms.
    `docs/api/core.md` lists the `_query` forms first with the deprecated
    rows beneath; `docs/concepts/architecture.md` names the query forms.
+   The first push of the deprecations failed CI's `semver` job:
+   cargo-semver-checks correctly classifies a newly deprecated public
+   method as a minor-version change, and the manifest still said 3.1.0
+   while the attributes already said `since = "3.2.0"`. The crate version
+   is now 3.2.0 in `Cargo.toml`, in both standalone example manifests
+   (they pin the path dependency's version), and in the three lockfiles
+   the release validator checks with `--locked`. `## Unreleased` stays
+   the changelog heading; the release prep converts it, as it did for
+   3.1.0.
 2. **Fixed.** The bare `(0, 0)` rejection became a continuity check: an
    exact origin sample is dropped only when it jumps in from more than
    `SYNTHETIC_ORIGIN_JUMP` (256 CSS px) away from the previous sample.
