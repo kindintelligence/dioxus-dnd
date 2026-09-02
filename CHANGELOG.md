@@ -13,14 +13,27 @@
 - **`DropEffects` set operators.** `&`, `&=`, `!` (the complement within
   `STANDARD`), `From<DropEffect>`, and `FromIterator<DropEffect>`.
 
+### Deprecated
+
+- The payload-only registry lookups `acceptable`, `step_zone`,
+  `step_sibling`, `children_of`, and `first_child`, in favor of their
+  `_query` forms over `DropQuery::new(payload)`; each is now exactly that
+  wrapper. `hit_test_closest`, in favor of `resolve`, which also ranks
+  through the provider's collision policy (equal-distance fallback ties go
+  to the later record there, the earlier record in the deprecated helper).
+
 ### Fixed
 
-- **One registry acceptance pipeline.** The payload-only lookups
-  (`acceptable`, `step_zone`, `step_sibling`, `children_of`, `first_child`,
-  `hit_test_closest`) now run the same acceptance as the built-in
-  components: `accepts`, `accepts_query`, and `allowed_effects`
-  negotiation, via `DropQuery::new(payload)`. A custom source using them
-  no longer targets zones a `Draggable` would skip.
+- **One registry acceptance pipeline.** The payload-only lookups above now
+  run the same acceptance as the built-in components: `accepts`,
+  `accepts_query`, and `allowed_effects` negotiation. A custom source
+  using them no longer targets zones a `Draggable` would skip.
+- **Pointer samples at the exact viewport corner track.**
+  `DndContext::update_pointer` used to drop every `(0, 0)` sample as a
+  synthetic-event artifact, so a drag reaching the corner kept its
+  previous position. It now drops only a `(0, 0)` that jumps in from more
+  than 256 CSS px away; a sample continuing from nearby is real and is
+  applied.
 - **Ctrl/Cmd+click moves the range anchor.** `Selection::toggle` re-anchors
   on the toggled key, so a following Shift+click ranges from it, as the
   documented click convention promised.
@@ -40,9 +53,6 @@
 
 ### Changed
 
-- `DndContext::update_pointer` documents the `(0, 0)` contract: an exact
-  origin sample is treated as a synthetic-event artifact and ignored, and a
-  drag that reaches the exact corner keeps its previous sample.
 - `DndContext`'s `PartialEq` documents that it compares handle identity
   (the shared announcement signal), never drag state.
 

@@ -111,9 +111,16 @@ fn dnd_context_lifecycle() {
         assert_eq!(dnd.grab(), Point::new(1.0, 1.0));
         assert_eq!(dnd.mode(), DragMode::Pointer);
 
-        // (0,0) pointer samples are noise from some webviews - filtered.
+        // An exact (0,0) is accepted when it continues the previous sample:
+        // a real approach to the viewport corner tracks exactly...
         dnd.update_pointer(Point::new(0.0, 0.0));
-        assert_eq!(dnd.pointer(), Point::new(3.0, 4.0));
+        assert_eq!(dnd.pointer(), Point::new(0.0, 0.0));
+        // ...while the same value arriving as a jump from across the
+        // viewport is the synthetic-event artifact some webviews emit, and
+        // is dropped so the overlay never flashes to the corner.
+        dnd.update_pointer(Point::new(400.0, 300.0));
+        dnd.update_pointer(Point::new(0.0, 0.0));
+        assert_eq!(dnd.pointer(), Point::new(400.0, 300.0));
         dnd.update_pointer(Point::new(9.0, 9.0));
         assert_eq!(dnd.pointer(), Point::new(9.0, 9.0));
 
@@ -182,7 +189,7 @@ fn registry_register_replace_unregister_and_labels() {
         // re-registering the same id replaces, not duplicates
         let replacement = reg.register(record(1, "uno"));
         assert_eq!(
-            reg.acceptable(&0)
+            reg.acceptable_query(&DropQuery::new(0))
                 .iter()
                 .map(|zone| zone.id)
                 .collect::<Vec<_>>(),
@@ -209,7 +216,7 @@ fn registry_register_replace_unregister_and_labels() {
 
         reg.unregister(ZoneId(1));
         assert!(reg.get(ZoneId(1)).is_none());
-        assert_eq!(reg.acceptable(&0).len(), 1);
+        assert_eq!(reg.acceptable_query(&DropQuery::new(0)).len(), 1);
         reg.set_rect_if_present(replacement, Rect::new(1.0, 2.0, 3.0, 4.0));
         assert!(
             reg.get(ZoneId(1)).is_none(),
@@ -243,17 +250,36 @@ fn registry_spatial_step_accepts_and_hit_test() {
         reg.register(record(3, Some(Rect::new(0.0, 0.0, 40.0, 40.0)), None));
 
         // step_zone follows visual order: C → B → A → wraps to C
-        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(3)));
-        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, 1), Some(ZoneId(2)));
-        assert_eq!(reg.step_zone(Some(ZoneId(2)), &0, 1), Some(ZoneId(1)));
-        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(3)));
+        assert_eq!(
+            reg.step_zone_query(None, &DropQuery::new(0), 1),
+            Some(ZoneId(3))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(3)), &DropQuery::new(0), 1),
+            Some(ZoneId(2))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(2)), &DropQuery::new(0), 1),
+            Some(ZoneId(1))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(1)), &DropQuery::new(0), 1),
+            Some(ZoneId(3))
+        );
         // and backwards
-        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, -1), Some(ZoneId(1)));
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(3)), &DropQuery::new(0), -1),
+            Some(ZoneId(1))
+        );
 
         // acceptance filtering removes zones from the cycle
         reg.register(record(4, None, Some(Callback::new(|v: u32| v >= 10))));
-        assert_eq!(reg.acceptable(&5).len(), 3, "zone 4 rejects small payloads");
-        assert_eq!(reg.acceptable(&10).len(), 4);
+        assert_eq!(
+            reg.acceptable_query(&DropQuery::new(5)).len(),
+            3,
+            "zone 4 rejects small payloads"
+        );
+        assert_eq!(reg.acceptable_query(&DropQuery::new(10)).len(), 4);
 
         // hit_test: point inside C only
         assert_eq!(reg.hit_test(Point::new(10.0, 10.0)), Some(ZoneId(3)));
@@ -274,18 +300,21 @@ fn registry_spatial_step_accepts_and_hit_test() {
         assert_eq!(reg.hit_test(Point::new(10.0, 10.0)), Some(ZoneId(6)));
         // ...but a small payload falls through to accepting zone 5 beneath it.
         assert_eq!(
-            reg.hit_test_closest(Point::new(10.0, 10.0), &5, 48.0),
+            reg.resolve(&DropQuery::new(5), Point::new(10.0, 10.0), None, 48.0)
+                .map(|(zone, _)| zone),
             Some(ZoneId(5))
         );
         // A large payload is accepted by zone 6 directly.
         assert_eq!(
-            reg.hit_test_closest(Point::new(10.0, 10.0), &10, 48.0),
+            reg.resolve(&DropQuery::new(10), Point::new(10.0, 10.0), None, 48.0)
+                .map(|(zone, _)| zone),
             Some(ZoneId(6))
         );
         // Gutter drop just above zone 1 (outside every rect): the nearest
         // acceptable zone within max_distance wins.
         assert_eq!(
-            reg.hit_test_closest(Point::new(20.0, 95.0), &5, 48.0),
+            reg.resolve(&DropQuery::new(5), Point::new(20.0, 95.0), None, 48.0)
+                .map(|(zone, _)| zone),
             Some(ZoneId(1))
         );
         // The snap measures to the rect, not its center: a large zone whose
@@ -296,7 +325,8 @@ fn registry_spatial_step_accepts_and_hit_test() {
             None,
         ));
         assert_eq!(
-            reg.hit_test_closest(Point::new(190.0, 500.0), &5, 48.0),
+            reg.resolve(&DropQuery::new(5), Point::new(190.0, 500.0), None, 48.0)
+                .map(|(zone, _)| zone),
             Some(ZoneId(7))
         );
 
@@ -307,8 +337,12 @@ fn registry_spatial_step_accepts_and_hit_test() {
 
 /// A near-miss evaluates each acceptance predicate once and allocates no
 /// cloned registry snapshot. Equal-distance fallback keeps the historical
-/// tie-break: the earlier record in registry order wins.
+/// tie-break: the earlier record in registry order wins. (`resolve`, the
+/// replacement, gives equal-distance ties to the later record - the
+/// overlap contract - which is why this contract stays pinned on the
+/// deprecated helper itself.)
 #[test]
+#[allow(deprecated)]
 fn registry_closest_miss_evaluates_once_and_preserves_ties() {
     fn app() -> Element {
         use std::cell::Cell;
@@ -362,16 +396,40 @@ fn registry_spatial_rows_tolerate_subpixel_jitter() {
         reg.register(record(3, 50.0, 50.0));
         reg.register(record(4, 0.0, 50.3));
 
-        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(1)));
-        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(2)));
-        assert_eq!(reg.step_zone(Some(ZoneId(2)), &0, 1), Some(ZoneId(4)));
-        assert_eq!(reg.step_zone(Some(ZoneId(4)), &0, 1), Some(ZoneId(3)));
+        assert_eq!(
+            reg.step_zone_query(None, &DropQuery::new(0), 1),
+            Some(ZoneId(1))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(1)), &DropQuery::new(0), 1),
+            Some(ZoneId(2))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(2)), &DropQuery::new(0), 1),
+            Some(ZoneId(4))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(4)), &DropQuery::new(0), 1),
+            Some(ZoneId(3))
+        );
 
         reg.set_direction(Direction::Rtl);
-        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(2)));
-        assert_eq!(reg.step_zone(Some(ZoneId(2)), &0, 1), Some(ZoneId(1)));
-        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(3)));
-        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, 1), Some(ZoneId(4)));
+        assert_eq!(
+            reg.step_zone_query(None, &DropQuery::new(0), 1),
+            Some(ZoneId(2))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(2)), &DropQuery::new(0), 1),
+            Some(ZoneId(1))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(1)), &DropQuery::new(0), 1),
+            Some(ZoneId(3))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(3)), &DropQuery::new(0), 1),
+            Some(ZoneId(4))
+        );
 
         rsx! { div {} }
     }
@@ -956,19 +1014,37 @@ fn nested_zone_traversal() {
         reg.register(record(11, Some(1), 50.0)); //  A / column 2
 
         // Root siblings cycle among boards only - columns don't leak up.
-        assert_eq!(reg.step_sibling(None, &0, 1), Some(ZoneId(1)));
-        assert_eq!(reg.step_sibling(Some(ZoneId(1)), &0, 1), Some(ZoneId(2)));
-        assert_eq!(reg.step_sibling(Some(ZoneId(2)), &0, 1), Some(ZoneId(1)));
+        assert_eq!(
+            reg.step_sibling_query(None, &DropQuery::new(0), 1),
+            Some(ZoneId(1))
+        );
+        assert_eq!(
+            reg.step_sibling_query(Some(ZoneId(1)), &DropQuery::new(0), 1),
+            Some(ZoneId(2))
+        );
+        assert_eq!(
+            reg.step_sibling_query(Some(ZoneId(2)), &DropQuery::new(0), 1),
+            Some(ZoneId(1))
+        );
 
         // Descend into board A → first column spatially; siblings cycle
         // within the level; ascend returns to the board.
-        assert_eq!(reg.first_child(ZoneId(1), &0), Some(ZoneId(10)));
-        assert_eq!(reg.step_sibling(Some(ZoneId(10)), &0, 1), Some(ZoneId(11)));
-        assert_eq!(reg.step_sibling(Some(ZoneId(11)), &0, 1), Some(ZoneId(10)));
+        assert_eq!(
+            reg.first_child_query(ZoneId(1), &DropQuery::new(0)),
+            Some(ZoneId(10))
+        );
+        assert_eq!(
+            reg.step_sibling_query(Some(ZoneId(10)), &DropQuery::new(0), 1),
+            Some(ZoneId(11))
+        );
+        assert_eq!(
+            reg.step_sibling_query(Some(ZoneId(11)), &DropQuery::new(0), 1),
+            Some(ZoneId(10))
+        );
         assert_eq!(reg.parent_of(ZoneId(11)), Some(ZoneId(1)));
 
         // Leaves and roots have no further depth.
-        assert_eq!(reg.first_child(ZoneId(10), &0), None);
+        assert_eq!(reg.first_child_query(ZoneId(10), &DropQuery::new(0)), None);
         assert_eq!(reg.parent_of(ZoneId(1)), None);
 
         // ascend resolves a registered parent, and refuses one that only
@@ -983,7 +1059,10 @@ fn nested_zone_traversal() {
         // Sibling grouping under the foreign parent still works: it only
         // compares parent ids, never resolves the parent record.
         reg.register(record(21, Some(99), 340.0));
-        assert_eq!(reg.step_sibling(Some(ZoneId(20)), &0, 1), Some(ZoneId(21)));
+        assert_eq!(
+            reg.step_sibling_query(Some(ZoneId(20)), &DropQuery::new(0), 1),
+            Some(ZoneId(21))
+        );
 
         rsx! { div {} }
     }
@@ -1408,7 +1487,8 @@ fn BoardSlotProbe() -> Element {
         from: ZoneId(11),
         index: 2,
     };
-    let slots = registry.children_of(Some(ZoneId(90)), &pointer_payload);
+    let slots =
+        registry.children_of_query(Some(ZoneId(90)), &DropQuery::new(pointer_payload.clone()));
     assert_eq!(slots.len(), 1, "board slot should register as column child");
     assert_eq!(slots[0].label.as_deref(), Some("Insert at position 1"));
     slots[0].on_drop.call(DropOutcome {
@@ -1505,10 +1585,12 @@ fn board_slot_inherits_column_accepts() {
 
         // Hover/keyboard filtering: the slot is an acceptable child for an
         // allowed payload, and filtered out for a rejected one.
-        let accepted = registry.children_of(Some(ZoneId(90)), &ok);
+        let accepted = registry.children_of_query(Some(ZoneId(90)), &DropQuery::new(ok.clone()));
         assert_eq!(accepted.len(), 1, "slot accepts an allowed payload");
         assert!(
-            registry.children_of(Some(ZoneId(90)), &blocked).is_empty(),
+            registry
+                .children_of_query(Some(ZoneId(90)), &DropQuery::new(blocked.clone()))
+                .is_empty(),
             "slot inherits the column's rejection"
         );
 
@@ -1588,13 +1670,15 @@ fn slot_auto_ids_never_collide_with_explicit_column_ids() {
             from: ZoneId(1),
             index: 0,
         };
-        let roots = registry.children_of(None, &payload);
+        let roots = registry.children_of_query(None, &DropQuery::new(payload.clone()));
         assert_eq!(roots.len(), 3, "every explicit column stays registered");
         // Each column still owns both of its slots: no slot was replaced by a
         // neighboring column registering over its auto id.
         for col in 1..=3u64 {
             assert_eq!(
-                registry.children_of(Some(ZoneId(col)), &payload).len(),
+                registry
+                    .children_of_query(Some(ZoneId(col)), &DropQuery::new(payload.clone()))
+                    .len(),
                 2,
                 "column {col} keeps both slots"
             );
@@ -1653,7 +1737,9 @@ fn DynamicBoardSlotProbe(phase: u8) -> Element {
             from: ZoneId(10),
             index: 0,
         };
-        let slot = registry.children_of(Some(ZoneId(90)), &payload).remove(0);
+        let slot = registry
+            .children_of_query(Some(ZoneId(90)), &DropQuery::new(payload.clone()))
+            .remove(0);
         slot.on_drop.call(DropOutcome {
             payload,
             from: Some(ZoneId(10)),
@@ -1757,7 +1843,9 @@ fn DynamicBoardAcceptsProbe(props: DynamicBoardAcceptsProbeProps) -> Element {
         from: ZoneId(1),
         index: 0,
     };
-    let accepted = !registry.children_of(Some(ZoneId(191)), &payload).is_empty();
+    let accepted = !registry
+        .children_of_query(Some(ZoneId(191)), &DropQuery::new(payload.clone()))
+        .is_empty();
     props.observed.lock().unwrap().push(accepted);
     assert_eq!(accepted, props.allowed);
     rsx! {}
@@ -1814,7 +1902,7 @@ fn tree_targets_register_as_zones() {
     #[component]
     fn TreeProbe() -> Element {
         let registry = use_zone_registry::<u32>();
-        let acceptable = registry.children_of(None, &7u32);
+        let acceptable = registry.children_of_query(None, &DropQuery::new(7u32));
         assert_eq!(acceptable.len(), 1, "only the permissive target accepts");
         assert_eq!(acceptable[0].label.as_deref(), Some("alpha"));
         rsx! { "ok" }
@@ -1853,7 +1941,7 @@ fn tree_intent_accepts_app(props: TreeIntentAcceptsProps) -> Element {
 #[component]
 fn TreeIntentAcceptsProbe() -> Element {
     let registry = use_zone_registry::<&'static str>();
-    let zones = registry.children_of(None, &"payload");
+    let zones = registry.children_of_query(None, &DropQuery::new("payload"));
     assert_eq!(
         zones.len(),
         1,
@@ -1971,7 +2059,7 @@ fn DynamicTreeTargetProbe(props: DynamicTreeTargetProbeProps) -> Element {
 
         match phase {
             0 => {
-                let zones = registry.children_of(None, &"blocked");
+                let zones = registry.children_of_query(None, &DropQuery::new("blocked"));
                 assert_eq!(zones.len(), 1);
                 assert_eq!(zones[0].label.as_deref(), Some("alpha"));
                 zones[0].on_drop.call(DropOutcome {
@@ -1988,10 +2076,12 @@ fn DynamicTreeTargetProbe(props: DynamicTreeTargetProbeProps) -> Element {
             }
             1 => {
                 assert!(
-                    registry.children_of(None, &"blocked").is_empty(),
+                    registry
+                        .children_of_query(None, &DropQuery::new("blocked"))
+                        .is_empty(),
                     "updated accepts callback should reject blocked payloads"
                 );
-                let zones = registry.children_of(None, &"allowed");
+                let zones = registry.children_of_query(None, &DropQuery::new("allowed"));
                 assert_eq!(zones.len(), 1);
                 assert_eq!(zones[0].label.as_deref(), Some("beta"));
                 zones[0].on_drop.call(DropOutcome {
@@ -2900,18 +2990,42 @@ fn rtl_spatial_order_follows_reading_direction() {
 
         // LTR: left-to-right within the row, then the next row.
         assert_eq!(reg.direction(), Direction::Ltr);
-        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(1)));
-        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(2)));
-        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, 1), Some(ZoneId(4)));
+        assert_eq!(
+            reg.step_zone_query(None, &DropQuery::new(0), 1),
+            Some(ZoneId(1))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(1)), &DropQuery::new(0), 1),
+            Some(ZoneId(2))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(3)), &DropQuery::new(0), 1),
+            Some(ZoneId(4))
+        );
 
         // RTL: the rightmost zone comes first; rows still top-to-bottom.
         reg.set_direction(Direction::Rtl);
-        assert_eq!(reg.step_zone(None, &0, 1), Some(ZoneId(3)));
-        assert_eq!(reg.step_zone(Some(ZoneId(3)), &0, 1), Some(ZoneId(2)));
-        assert_eq!(reg.step_zone(Some(ZoneId(2)), &0, 1), Some(ZoneId(1)));
-        assert_eq!(reg.step_zone(Some(ZoneId(1)), &0, 1), Some(ZoneId(4)));
+        assert_eq!(
+            reg.step_zone_query(None, &DropQuery::new(0), 1),
+            Some(ZoneId(3))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(3)), &DropQuery::new(0), 1),
+            Some(ZoneId(2))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(2)), &DropQuery::new(0), 1),
+            Some(ZoneId(1))
+        );
+        assert_eq!(
+            reg.step_zone_query(Some(ZoneId(1)), &DropQuery::new(0), 1),
+            Some(ZoneId(4))
+        );
         // Sibling stepping (the arrow-key path) mirrors the same way.
-        assert_eq!(reg.step_sibling(None, &0, 1), Some(ZoneId(3)));
+        assert_eq!(
+            reg.step_sibling_query(None, &DropQuery::new(0), 1),
+            Some(ZoneId(3))
+        );
 
         rsx! { div {} }
     }
@@ -3045,12 +3159,25 @@ fn BridgeProbe() -> Element {
     let p = Point::new(10.0, 10.0);
     assert_eq!(reg_a.hit_test(p), Some(id));
     assert_eq!(reg_b.hit_test(p), Some(id));
-    assert_eq!(reg_a.hit_test_closest(p, &"ticket", 48.0), Some(id));
-    assert_eq!(reg_b.hit_test_closest(p, &7, 48.0), Some(id));
+    assert_eq!(
+        reg_a
+            .resolve(&DropQuery::new("ticket"), p, None, 48.0)
+            .map(|(zone, _)| zone),
+        Some(id)
+    );
+    assert_eq!(
+        reg_b
+            .resolve(&DropQuery::new(7), p, None, 48.0)
+            .map(|(zone, _)| zone),
+        Some(id)
+    );
 
     // Keyboard navigation lists the bridge among each world's own zones.
-    assert_eq!(reg_a.step_zone(None, &"ticket", 1), Some(id));
-    assert_eq!(reg_b.step_zone(None, &7, 1), Some(id));
+    assert_eq!(
+        reg_a.step_zone_query(None, &DropQuery::new("ticket"), 1),
+        Some(id)
+    );
+    assert_eq!(reg_b.step_zone_query(None, &DropQuery::new(7), 1), Some(id));
 
     // Each drop is delivered through its own typed callback.
     let outcome_a = DropOutcome {
@@ -3152,8 +3279,14 @@ fn BridgeComponentProbe() -> Element {
     assert!(!rec_a.accepts_payload(&"done"));
     assert!(rec_b.accepts_payload(&7));
     // Keyboard navigation honors it too: a rejected payload finds no zone.
-    assert_eq!(reg_a.step_zone(None, &"fix the ghost", 1), Some(id));
-    assert_eq!(reg_a.step_zone(None, &"done", 1), None);
+    assert_eq!(
+        reg_a.step_zone_query(None, &DropQuery::new("fix the ghost"), 1),
+        Some(id)
+    );
+    assert_eq!(
+        reg_a.step_zone_query(None, &DropQuery::new("done"), 1),
+        None
+    );
 
     // Each drop is delivered through its own typed callback.
     let p = Point::new(5.0, 5.0);
@@ -3257,7 +3390,7 @@ impl PartialEq for DynamicBridgeAcceptsProbeProps {
 fn DynamicBridgeAcceptsProbe(props: DynamicBridgeAcceptsProbeProps) -> Element {
     let registry = use_zone_registry::<u8>();
     let accepted = registry
-        .acceptable(&7)
+        .acceptable_query(&DropQuery::new(7))
         .iter()
         .any(|zone| zone.id == ZoneId(601));
     props.observed.lock().unwrap().push(accepted);

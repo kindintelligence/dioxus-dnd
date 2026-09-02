@@ -39,7 +39,7 @@ exhaustion panic in `SortableGroupId::auto`.
 | # | Finding | Area | Severity | Kind | Status |
 |---|---|---|---|---|---|
 | 1 | Registry exposes two acceptance paths; the public one ignores policy | `core::registry` | high | correctness drift | fixed |
-| 2 | `update_pointer` discards any sample at exactly (0, 0) | `core::state` | medium | correctness | documented; see log |
+| 2 | `update_pointer` discards any sample at exactly (0, 0) | `core::state` | medium | correctness | fixed |
 | 3 | `apply_move` removes by index with no identity check | `board` | medium | correctness | fixed |
 | 4 | `AutoScroll` samples the DOM on every `pointermove` | `autoscroll` | medium | performance | fixed |
 | 5 | `Selection::toggle` leaves the range anchor stale | `multiselect` | low | behavior vs docs | fixed |
@@ -281,29 +281,37 @@ Recorded per finding so the reasoning behind each outcome survives the
 diff. Where a finding was wrong or overstated, this section says so rather
 than quietly adjusting the text above.
 
-1. **Fixed.** `acceptable`, `step_zone`, `step_sibling`, `children_of` and
-   `first_child` are now exact wrappers over their `_query` counterparts
-   with `DropQuery::new(payload)`. `hit_test_closest` keeps its documented
-   geometry (containment, then nearest edge, earlier record wins a
-   fallback tie) but runs acceptance through `negotiate`, so
-   `accepts_query` and `allowed_effects` apply. Deprecation was
-   considered and deferred: the payload-only forms are now exact, 67 test
-   call sites exercise them, and a deprecation would add warnings without
-   changing any behavior. `docs/api/core.md` and
-   `docs/concepts/architecture.md` describe the shared pipeline and point
-   custom sources at `resolve`.
-2. **Documented, not changed.** The proposed fix (reject `(0, 0)` only
-   when the previous sample was far away) was re-examined against the
-   existing contract test at `tests/runtime.rs:115`. A synthetic `(0, 0)`
-   from far away is rejected under both rules. Near the corner the
-   previous sample is a few px away, so rejecting a real corner sample
-   costs a few px once, while accepting a synthetic one costs one frame
-   of overlay jump - two cosmetic outcomes, and the heuristic only swaps
-   them. The finding's "overlay freezes" wording overstated a one-sample
-   effect. The contract is now stated in `update_pointer`'s rustdoc
-   instead of only in a comment inside the body. A structural fix would
-   tag synthetic samples at the reporting path; do that if a real report
-   ever isolates which webview emits them.
+1. **Fixed, and deprecated.** `acceptable`, `step_zone`, `step_sibling`,
+   `children_of` and `first_child` are now exact wrappers over their
+   `_query` counterparts with `DropQuery::new(payload)`, and carry
+   `#[deprecated(since = "3.2.0")]` pointing at those forms.
+   `hit_test_closest` keeps its documented geometry (containment, then
+   nearest edge, earlier record wins a fallback tie) but runs acceptance
+   through `negotiate`, so `accepts_query` and `allowed_effects` apply;
+   it is deprecated in favor of `resolve`, and its note names the one
+   behavioral difference (fallback ties go to the later record there).
+   The 57 payload-only call sites in `tests/runtime.rs` were migrated to
+   the `_query` forms and to `resolve`; the one test that pins the
+   deprecated helper's own tie-break keeps calling it under
+   `#[allow(deprecated)]`. A unit test in `registry.rs` registers zones
+   with `allowed_effects: EMPTY` and an `accepts_query` filter and asserts
+   the deprecated lookups now refuse them and equal their query forms.
+   `docs/api/core.md` lists the `_query` forms first with the deprecated
+   rows beneath; `docs/concepts/architecture.md` names the query forms.
+2. **Fixed.** The bare `(0, 0)` rejection became a continuity check: an
+   exact origin sample is dropped only when it jumps in from more than
+   `SYNTHETIC_ORIGIN_JUMP` (256 CSS px) away from the previous sample.
+   The constant's derivation is in its comment: samples arrive at most
+   every 30 ms (the desktop cursor poller), so 256 px per sample is over
+   8000 px/s, past any human flick, and a larger jump to the exact origin
+   is the synthetic report. A real approach to the corner now tracks
+   exactly; the far-away artifact is still dropped, so the overlay never
+   flashes to the corner. On re-analysis the original finding overstated
+   the pre-fix impact: `Draggable` resolves a release from the event's own
+   coordinates, not from `pointer()`, so delivery was never affected -
+   only the overlay, edge and intent readouts, and monitor `Moved` events
+   were. The contract test at `tests/runtime.rs` now covers both the
+   continuous and the jumping case.
 3. **Fixed.** `try_apply_move(board, mv, key)` and `ApplyMoveError` added
    to `board` and the prelude, mirroring the 3.1.0 `try_apply_*` pattern.
    `apply_move` is unchanged and its rustdoc and `docs/api/boards.md` now
@@ -339,15 +347,29 @@ the rect-refresh bus keys registrations from its own counter;
 exist; it now lists the real constants. The README size note stands as
 written and needs no action.
 
-Verification after the fixes, same container: `cargo test --features
-serde` passes 158 lib tests (151 before, plus two for the `DropEffects`
-operators, one for the selection anchor, four for `try_apply_move`), 82
-runtime, 33 multiwindow, 2 seam, 2 typed-transport, 5 compatibility and 5
-doctests; `cargo test --no-default-features --lib --tests` passes; clippy
-with `-D warnings` on `serde web --all-targets`, `cargo fmt --check`, and
-`cargo doc --no-deps` are clean. The `wasm32-unknown-unknown` check and
-the `desktop` feature remain unverified here: the target is not installed
-and the GTK libraries are absent. CI covers both.
+Verification after the fixes, same container, after installing the
+`wasm32-unknown-unknown` target and the GTK/WebKitGTK development
+libraries the `desktop` feature needs. Every step the CI workflow runs:
+
+- `cargo test --features serde`: 159 lib tests (151 before, plus two for
+  the `DropEffects` operators, one for the selection anchor, four for
+  `try_apply_move`, one pinning that the deprecated lookups run the
+  policy pipeline), 82 runtime, 33 multiwindow, 2 seam, 2 typed-transport,
+  5 compatibility, 5 doctests.
+- `cargo test --no-default-features --lib --tests`: passes.
+- `cargo check --target wasm32-unknown-unknown --features web --lib`:
+  passes.
+- `cargo test --all-features`: 172 lib tests and the same integration
+  suites pass, so the `desktop` module and its bridge legs compile and
+  their unit tests run.
+- `cargo clippy --features "serde web" --all-targets -- -D warnings` and
+  `cargo clippy --all-features --all-targets -- -D warnings`: clean. The
+  migrated tests compile without deprecation warnings.
+- `RUSTDOCFLAGS=-D warnings cargo doc --all-features --no-deps`: clean.
+- The tao/wry public-API leak grep: nothing.
+- Standalone desktop examples: `desktop-multiwindow` and
+  `desktop-showcase` (7 tests) pass their test, clippy and build steps.
+- `cargo fmt --check`: clean.
 
 ## What was checked and found sound
 
