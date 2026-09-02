@@ -135,9 +135,17 @@ pub fn SortableGrid(
         }
     });
     let mut gesture = use_signal(|| GesturePhase::Idle);
+    // Did native pointer capture engage for the current press? Decides
+    // whether the capture-substitute layer renders (see `Draggable`).
+    let mut captured = use_signal(|| false);
     let mut step = move |event: GestureEvent| -> GestureEffect {
         let (next, fx) = transition(*gesture.peek(), event, 8.0);
         gesture.set(next);
+        // Every return to Idle - drop, abort, tap, or a cancel while merely
+        // pressed - retires the press's capture flag with it.
+        if matches!(next, GesturePhase::Idle) && *captured.peek() {
+            captured.set(false);
+        }
         fx
     };
     let mut feed = move |event: GestureEvent, fallback_ix: Option<usize>| match step(event) {
@@ -202,9 +210,6 @@ pub fn SortableGrid(
     let primary_pointer = move |evt: &PointerEvent| crate::core::components::primary_press(evt);
     // Consecutive empty-held moves seen mid-drag (lost-release debounce).
     let mut empty_held_moves = use_signal(|| 0u8);
-    // Did native pointer capture engage for the current press? Decides
-    // whether the capture-substitute layer renders (see `Draggable`).
-    let mut captured = use_signal(|| false);
     // The grid itself doesn't animate, but its tiles commonly do (FlipItem
     // siblings can't share context with each other) - anchor the
     // reduced-motion stylesheet once for the whole subtree.

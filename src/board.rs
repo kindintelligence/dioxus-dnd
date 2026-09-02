@@ -1,6 +1,7 @@
 #![doc = include_str!("../docs/api/boards.md")]
 
 use std::collections::HashMap;
+use std::fmt;
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
@@ -60,8 +61,14 @@ impl<T> MoveEvent<T> {
 }
 
 /// Apply a [`MoveEvent`] to a `HashMap<ContainerId, Vec<T>>` board model.
-/// Removes from the source (by index, falling back gracefully if the model
-/// drifted) and inserts at the target position.
+/// Removes from the source **by index** and inserts at the target position.
+///
+/// The index is trusted: if the source column changed between pickup and
+/// drop, whichever item now sits at `from.1` is removed and the moved item
+/// is still inserted. An out-of-range index or missing column skips the
+/// removal, so the item is never lost - but it may be duplicated. When the
+/// model can change under a live drag, use [`try_apply_move`], which finds
+/// the item by key and refuses to guess.
 pub fn apply_move<T>(board: &mut HashMap<ContainerId, Vec<T>>, mv: MoveEvent<T>) {
     let (from_col, from_ix) = mv.from;
     let mut removed = false;
@@ -81,6 +88,75 @@ pub fn apply_move<T>(board: &mut HashMap<ContainerId, Vec<T>>, mv: MoveEvent<T>)
         Some(ix) if ix <= dst.len() => dst.insert(ix, mv.item),
         _ => dst.push(mv.item),
     }
+}
+
+/// A checked board helper refused to mutate the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ApplyMoveError {
+    /// No item in the source column matched the moved item's key. The board
+    /// was left untouched.
+    SourceNotFound { column: ContainerId },
+}
+
+impl fmt::Display for ApplyMoveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SourceNotFound { column } => {
+                write!(formatter, "no item matched the move in column {}", column.0)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ApplyMoveError {}
+
+/// Checked, identity-based form of [`apply_move`].
+///
+/// The moved item is located in the source column by `key` and removed from
+/// wherever it now sits; `from.1` is not consulted. The same-column forward
+/// adjustment uses the index the item was actually found at, so a column
+/// that reordered during the drag still lands the item at the intended
+/// slot. When no item in the source column matches, the board is left
+/// untouched and [`ApplyMoveError::SourceNotFound`] is returned - the drop
+/// is stale, and silently inserting would duplicate the item.
+///
+/// Target handling matches `apply_move`: `None` or an index past the end
+/// appends, and a missing target column is created.
+pub fn try_apply_move<T, K>(
+    board: &mut HashMap<ContainerId, Vec<T>>,
+    mv: MoveEvent<T>,
+    key: impl Fn(&T) -> K,
+) -> Result<(), ApplyMoveError>
+where
+    K: PartialEq,
+{
+    let MoveEvent {
+        item,
+        from: (from_col, _),
+        to: (to_col, to_ix),
+    } = mv;
+    let item_key = key(&item);
+    let source = board
+        .get_mut(&from_col)
+        .ok_or(ApplyMoveError::SourceNotFound { column: from_col })?;
+    let Some(removed_ix) = source
+        .iter()
+        .position(|candidate| key(candidate) == item_key)
+    else {
+        return Err(ApplyMoveError::SourceNotFound { column: from_col });
+    };
+    source.remove(removed_ix);
+    let adjusted_to_ix = match to_ix {
+        Some(ix) if from_col == to_col && removed_ix < ix => Some(ix - 1),
+        other => other,
+    };
+    let destination = board.entry(to_col).or_default();
+    match adjusted_to_ix {
+        Some(ix) if ix <= destination.len() => destination.insert(ix, item),
+        _ => destination.push(item),
+    }
+    Ok(())
 }
 
 /// A draggable card living in a column. Thin wrapper over
@@ -350,5 +426,94 @@ mod tests {
         );
 
         assert_eq!(board[&a], vec!["b", "c", "a"]);
+    }
+
+    /// The index-trusting helper's documented hazard, pinned so the checked
+    /// variant's reason to exist stays visible: a column that reordered
+    /// under the drag makes `apply_move` remove the wrong card.
+    #[test]
+    fn index_move_removes_whatever_sits_at_the_stale_index() {
+        let a = crate::core::ZoneId(1);
+        let b = crate::core::ZoneId(2);
+        let mut board: HashMap<ContainerId, Vec<&str>> = HashMap::new();
+        // "x" was picked up at index 0, then the column reordered.
+        board.insert(a, vec!["y", "x"]);
+        board.insert(b, vec![]);
+
+        apply_move(&mut board, MoveEvent::new("x", (a, 0), (b, None)));
+
+        assert_eq!(board[&a], vec!["x"], "the wrong card was removed");
+        assert_eq!(board[&b], vec!["x"], "and the moved one now exists twice");
+    }
+
+    #[test]
+    fn keyed_move_finds_the_item_after_source_drift() {
+        let a = crate::core::ZoneId(1);
+        let b = crate::core::ZoneId(2);
+        let mut board: HashMap<ContainerId, Vec<&str>> = HashMap::new();
+        board.insert(a, vec!["y", "x"]);
+        board.insert(b, vec!["z"]);
+
+        assert_eq!(
+            try_apply_move(&mut board, MoveEvent::new("x", (a, 0), (b, Some(0))), |s| {
+                *s
+            }),
+            Ok(())
+        );
+        assert_eq!(board[&a], vec!["y"]);
+        assert_eq!(board[&b], vec!["x", "z"]);
+    }
+
+    #[test]
+    fn keyed_move_adjusts_forward_inserts_from_the_found_index() {
+        let a = crate::core::ZoneId(1);
+        let mut board: HashMap<ContainerId, Vec<&str>> = HashMap::new();
+        // The event says index 0; the item actually sits at index 1 now.
+        board.insert(a, vec!["b", "a", "c", "d"]);
+
+        assert_eq!(
+            try_apply_move(&mut board, MoveEvent::new("a", (a, 0), (a, Some(3))), |s| {
+                *s
+            }),
+            Ok(())
+        );
+        assert_eq!(board[&a], vec!["b", "c", "a", "d"]);
+
+        // Backward moves keep the target as-is, like `apply_move`.
+        assert_eq!(
+            try_apply_move(&mut board, MoveEvent::new("d", (a, 9), (a, Some(0))), |s| {
+                *s
+            }),
+            Ok(())
+        );
+        assert_eq!(board[&a], vec!["d", "b", "c", "a"]);
+    }
+
+    #[test]
+    fn keyed_move_refuses_a_stale_drop_without_mutating() {
+        let a = crate::core::ZoneId(1);
+        let b = crate::core::ZoneId(2);
+        let c = crate::core::ZoneId(3);
+        let mut board: HashMap<ContainerId, Vec<&str>> = HashMap::new();
+        board.insert(a, vec!["x"]);
+        let before = board.clone();
+
+        // Item gone from the source column.
+        assert_eq!(
+            try_apply_move(&mut board, MoveEvent::new("q", (a, 0), (b, None)), |s| *s),
+            Err(ApplyMoveError::SourceNotFound { column: a })
+        );
+        // Source column gone entirely.
+        assert_eq!(
+            try_apply_move(&mut board, MoveEvent::new("x", (c, 0), (b, None)), |s| *s),
+            Err(ApplyMoveError::SourceNotFound { column: c })
+        );
+        assert_eq!(board, before, "a refused move leaves the board untouched");
+        assert!(!board.contains_key(&b), "and creates no target column");
+
+        assert_eq!(
+            ApplyMoveError::SourceNotFound { column: a }.to_string(),
+            "no item matched the move in column 1"
+        );
     }
 }

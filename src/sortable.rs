@@ -489,6 +489,9 @@ pub fn SortableList(
     // Some(pid) while a whole-row touch press under `Auto` waits on its hold
     // timer; doubles as the timer element's render condition.
     let mut hold_pid = use_signal(|| None::<i32>);
+    // Did native pointer capture engage for the current press? Decides
+    // whether the capture-substitute layer renders (see `Draggable`).
+    let mut captured = use_signal(|| false);
     let mut step = move |event: GestureEvent| -> GestureEffect {
         let promotion = if hold_pid.peek().is_some() {
             Promotion::HoldOrSideways
@@ -501,6 +504,11 @@ pub fn SortableList(
         // the press tapped out, or a vertical pull yielded to the scroll.
         if hold_pid.peek().is_some() && !matches!(next, GesturePhase::Pressed { .. }) {
             hold_pid.set(None);
+        }
+        // Every return to Idle - drop, abort, tap, or a cancel while merely
+        // pressed - retires the press's capture flag with it.
+        if matches!(next, GesturePhase::Idle) && *captured.peek() {
+            captured.set(false);
         }
         fx
     };
@@ -600,9 +608,6 @@ pub fn SortableList(
     let primary_pointer = move |evt: &PointerEvent| crate::core::components::primary_press(evt);
     // Consecutive empty-held moves seen mid-drag (lost-release debounce).
     let mut empty_held_moves = use_signal(|| 0u8);
-    // Did native pointer capture engage for the current press? Decides
-    // whether the capture-substitute layer renders (see `Draggable`).
-    let mut captured = use_signal(|| false);
     let mut cancel_drag = move || {
         feed(GestureEvent::Cancel);
         press_from.set(None);

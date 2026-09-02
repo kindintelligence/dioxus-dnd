@@ -394,7 +394,16 @@ pub fn FileDropZone(
             },
             ondragleave: move |_| {
                 if disabled {
+                    // A zone disabled mid-hover still owes the `false` for
+                    // the `true` it reported while enabled; a zone that was
+                    // disabled throughout never reported and owes nothing.
+                    let was_hovering = depth() > 0;
                     depth.set(0);
+                    if was_hovering {
+                        if let Some(h) = &on_hover {
+                            h.call(false);
+                        }
+                    }
                     return;
                 }
                 let d = depth().saturating_sub(1);
@@ -407,9 +416,14 @@ pub fn FileDropZone(
             },
             ondrop: move |evt: DragEvent| {
                 evt.prevent_default();
+                // Enabled zones always close the hover on drop. A disabled
+                // zone closes it only if it opened while still enabled.
+                let owes_leave = !disabled || depth() > 0;
                 depth.set(0);
-                if let Some(h) = &on_hover {
-                    h.call(false);
+                if owes_leave {
+                    if let Some(h) = &on_hover {
+                        h.call(false);
+                    }
                 }
                 if disabled {
                     return;

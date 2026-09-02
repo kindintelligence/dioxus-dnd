@@ -1,6 +1,6 @@
 //! Target-side acceptance and drop-effect negotiation.
 
-use std::ops::{BitOr, BitOrAssign};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 
 use super::{DragId, DragMode, DropEffect, PointerKind, ZoneId};
 
@@ -65,6 +65,51 @@ impl BitOrAssign for DropEffects {
     }
 }
 
+impl BitAnd for DropEffects {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl BitAndAssign for DropEffects {
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0;
+    }
+}
+
+impl Not for DropEffects {
+    type Output = Self;
+
+    /// The complement within [`DropEffects::STANDARD`]: `!DropEffects::COPY`
+    /// is `MOVE | LINK`. Bits outside the standard set are never produced.
+    fn not(self) -> Self::Output {
+        Self(!self.0 & Self::STANDARD.0)
+    }
+}
+
+impl From<DropEffect> for DropEffects {
+    /// The single-flag set for an effect; [`DropEffect::None`] maps to
+    /// [`DropEffects::EMPTY`].
+    fn from(effect: DropEffect) -> Self {
+        match effect {
+            DropEffect::Move => Self::MOVE,
+            DropEffect::Copy => Self::COPY,
+            DropEffect::Link => Self::LINK,
+            DropEffect::None => Self::EMPTY,
+        }
+    }
+}
+
+impl FromIterator<DropEffect> for DropEffects {
+    fn from_iter<I: IntoIterator<Item = DropEffect>>(iter: I) -> Self {
+        iter.into_iter()
+            .map(Self::from)
+            .fold(Self::EMPTY, BitOr::bitor)
+    }
+}
+
 /// Full target-side acceptance input.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -102,5 +147,35 @@ mod tests {
         assert_eq!(DropEffects::EMPTY.negotiate(DropEffect::Move), None);
         assert_eq!(DropEffects::ALL.negotiate(DropEffect::None), None);
         assert!(!DropEffects::ALL.contains(DropEffect::None));
+    }
+
+    #[test]
+    fn set_operators_stay_inside_the_standard_set() {
+        let move_copy = DropEffects::MOVE | DropEffects::COPY;
+        assert_eq!(move_copy & DropEffects::COPY, DropEffects::COPY);
+        assert_eq!(move_copy & DropEffects::LINK, DropEffects::EMPTY);
+        assert_eq!(!DropEffects::COPY, DropEffects::MOVE | DropEffects::LINK);
+        assert_eq!(!DropEffects::STANDARD, DropEffects::EMPTY);
+        assert_eq!(!DropEffects::EMPTY, DropEffects::STANDARD);
+        // Complementing twice must not leak bits above the defined flags.
+        assert_eq!(!!DropEffects::COPY, DropEffects::COPY);
+
+        let mut effects = DropEffects::STANDARD;
+        effects &= DropEffects::MOVE | DropEffects::LINK;
+        assert_eq!(effects, DropEffects::MOVE | DropEffects::LINK);
+    }
+
+    #[test]
+    fn sets_build_from_effect_values() {
+        assert_eq!(DropEffects::from(DropEffect::Link), DropEffects::LINK);
+        assert_eq!(DropEffects::from(DropEffect::None), DropEffects::EMPTY);
+        let collected: DropEffects = [DropEffect::Move, DropEffect::None, DropEffect::Copy]
+            .into_iter()
+            .collect();
+        assert_eq!(collected, DropEffects::MOVE | DropEffects::COPY);
+        assert_eq!(
+            std::iter::empty::<DropEffect>().collect::<DropEffects>(),
+            DropEffects::EMPTY
+        );
     }
 }

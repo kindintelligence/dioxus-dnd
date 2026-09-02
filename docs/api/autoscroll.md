@@ -107,7 +107,10 @@ listener bridge can carry the signal.
   report correctly whether idle or mid-drag.
 - `pointermove` samples on every move, contact or hover, so the window
   trues up after scrollbar drags and programmatic scrolls the moment the
-  pointer stirs.
+  pointer stirs. Samples coalesce to one offset read in flight: a move
+  that arrives mid-read re-arms the read once, so the rate is bounded by
+  the renderer round-trip rather than by input rate, and the final offset
+  after a burst is still observed.
 - The known blind spot is a scroll no event accompanies (a programmatic
   scroll-to-index with the pointer at rest): the code that initiates one
   should update its own state, and the next pointer or wheel activity
