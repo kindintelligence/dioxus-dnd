@@ -1,5 +1,7 @@
 //! Ranked collision detection and release policy.
 
+use std::collections::HashMap;
+
 use dioxus::prelude::Callback;
 
 use super::{Point, Rect, ZoneId};
@@ -164,18 +166,15 @@ pub fn rank_collisions<T: Clone + 'static>(
     match detector {
         CollisionDetector::BuiltIn(strategy) => rank_builtin(strategy, &request),
         CollisionDetector::Custom(callback) => {
-            let orders: Vec<_> = request
+            // Indexed once: the comparator below runs O(n log n) times per
+            // pointer move, so a linear scan per lookup made ranking
+            // quadratic.
+            let orders: HashMap<ZoneId, usize> = request
                 .candidates
                 .iter()
                 .map(|candidate| (candidate.id, candidate.order))
                 .collect();
-            let order = |zone| {
-                orders
-                    .iter()
-                    .find(|(candidate, _)| *candidate == zone)
-                    .map(|(_, order)| *order)
-                    .unwrap_or_default()
-            };
+            let order = |zone: ZoneId| orders.get(&zone).copied().unwrap_or_default();
             let mut ranked = callback.call(request);
             ranked.sort_by(|a, b| {
                 a.score

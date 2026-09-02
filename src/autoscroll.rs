@@ -289,6 +289,16 @@ pub fn AutoScroll(
     let refresh = use_rect_refresh_provider();
     // Last offset `sample` saw, deduplicating pings and on_scroll reports.
     let last_offset = use_signal(Point::default);
+    // Coalescing for `sample`: one offset read in flight at a time. Pointer
+    // moves arrive at input rate (120+ per second from a hovering trackpad)
+    // and each read is a renderer round-trip on desktop, so without this
+    // the eval channel carried one request per move. A ping that lands
+    // mid-read re-arms the loop exactly once, so the final offset after a
+    // burst is still observed; the read rate is bounded by round-trip
+    // latency rather than by input rate. Same shape as the sortable list's
+    // `reanchor_rects`.
+    let sample_busy = use_signal(|| false);
+    let sample_pending = use_signal(|| false);
 
     // The observer: read the offset, and when it moved, ping the
     // rect-refresh channel and report to on_scroll. Called from every
@@ -298,21 +308,36 @@ pub fn AutoScroll(
         let Some(m) = mounted.peek().clone() else {
             return;
         };
+        let mut sample_busy = sample_busy;
+        let mut sample_pending = sample_pending;
+        if *sample_busy.peek() {
+            sample_pending.set(true);
+            return;
+        }
+        sample_busy.set(true);
         let mut last_offset = last_offset;
         spawn(async move {
-            if let Ok(o) = m.get_scroll_offset().await {
-                let now = Point::new(o.x, o.y);
-                if *last_offset.peek() != now {
-                    last_offset.set(now);
-                    // The zones inside just moved: re-measure (free while
-                    // no drag is in flight), then let the app re-slice its
-                    // window.
-                    refresh.refresh_all();
-                    if let Some(h) = &on_scroll {
-                        h.call(now);
+            loop {
+                if let Ok(o) = m.get_scroll_offset().await {
+                    let now = Point::new(o.x, o.y);
+                    if *last_offset.peek() != now {
+                        last_offset.set(now);
+                        // The zones inside just moved: re-measure (free
+                        // while no drag is in flight), then let the app
+                        // re-slice its window.
+                        refresh.refresh_all();
+                        if let Some(h) = &on_scroll {
+                            h.call(now);
+                        }
                     }
                 }
+                if *sample_pending.peek() {
+                    sample_pending.set(false);
+                } else {
+                    break;
+                }
             }
+            sample_busy.set(false);
         });
     };
 

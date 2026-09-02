@@ -1,10 +1,12 @@
 # Code review: 2026-09
 
 - Date: 2026-09-02 (line references at commit `324fd80`, branch `dev`)
-- Scope: the whole crate, read end to end. Findings only; nothing here has
-  been fixed.
+- Scope: the whole crate, read end to end.
 - Purpose: record what a full read turned up so each item can be triaged,
   fixed, or explicitly declined, instead of being rediscovered later.
+- Status: every numbered finding has a resolution recorded in the
+  **Resolution log** at the end; the line references above it describe the
+  code as reviewed, before those changes.
 
 **Honesty rule**: every finding below names the file and line it was read
 at. "Verified" means the behavior was traced in source; where a finding
@@ -34,17 +36,17 @@ exhaustion panic in `SortableGroupId::auto`.
 
 ## Summary table
 
-| # | Finding | Area | Severity | Kind |
-|---|---|---|---|---|
-| 1 | Registry exposes two acceptance paths; the public one ignores policy | `core::registry` | high | correctness drift |
-| 2 | `update_pointer` discards any sample at exactly (0, 0) | `core::state` | medium | correctness |
-| 3 | `apply_move` removes by index with no identity check | `board` | medium | correctness |
-| 4 | `AutoScroll` samples the DOM on every `pointermove` | `autoscroll` | medium | performance |
-| 5 | `Selection::toggle` leaves the range anchor stale | `multiselect` | low | behavior vs docs |
-| 6 | `FileDropZone` hover can stick when `disabled` flips mid-drag | `files` | low | correctness |
-| 7 | Custom collision ranking is quadratic | `core::collision` | low | performance |
-| 8 | CI never runs on pushes to `dev` | workflows | low | infrastructure |
-| 9 | `docs/README.md` pins a different rumdl version than CI | docs | low | drift |
+| # | Finding | Area | Severity | Kind | Status |
+|---|---|---|---|---|---|
+| 1 | Registry exposes two acceptance paths; the public one ignores policy | `core::registry` | high | correctness drift | fixed |
+| 2 | `update_pointer` discards any sample at exactly (0, 0) | `core::state` | medium | correctness | documented; see log |
+| 3 | `apply_move` removes by index with no identity check | `board` | medium | correctness | fixed |
+| 4 | `AutoScroll` samples the DOM on every `pointermove` | `autoscroll` | medium | performance | fixed |
+| 5 | `Selection::toggle` leaves the range anchor stale | `multiselect` | low | behavior vs docs | fixed |
+| 6 | `FileDropZone` hover can stick when `disabled` flips mid-drag | `files` | low | correctness | fixed; half withdrawn |
+| 7 | Custom collision ranking is quadratic | `core::collision` | low | performance | fixed |
+| 8 | CI never runs on pushes to `dev` | workflows | low | infrastructure | fixed |
+| 9 | `docs/README.md` pins a different rumdl version than CI | docs | low | drift | fixed |
 
 Smaller notes that did not earn a number are collected at the end.
 
@@ -272,6 +274,80 @@ workflow as the single source of truth.
   `#![doc = include_str!]`, alongside roughly 249 KB of `docs/api/*.md`.
   The arrangement keeps the references honest and is worth its cost, but it
   is a meaningful chunk of every downstream `cargo doc`.
+
+## Resolution log
+
+Recorded per finding so the reasoning behind each outcome survives the
+diff. Where a finding was wrong or overstated, this section says so rather
+than quietly adjusting the text above.
+
+1. **Fixed.** `acceptable`, `step_zone`, `step_sibling`, `children_of` and
+   `first_child` are now exact wrappers over their `_query` counterparts
+   with `DropQuery::new(payload)`. `hit_test_closest` keeps its documented
+   geometry (containment, then nearest edge, earlier record wins a
+   fallback tie) but runs acceptance through `negotiate`, so
+   `accepts_query` and `allowed_effects` apply. Deprecation was
+   considered and deferred: the payload-only forms are now exact, 67 test
+   call sites exercise them, and a deprecation would add warnings without
+   changing any behavior. `docs/api/core.md` and
+   `docs/concepts/architecture.md` describe the shared pipeline and point
+   custom sources at `resolve`.
+2. **Documented, not changed.** The proposed fix (reject `(0, 0)` only
+   when the previous sample was far away) was re-examined against the
+   existing contract test at `tests/runtime.rs:115`. A synthetic `(0, 0)`
+   from far away is rejected under both rules. Near the corner the
+   previous sample is a few px away, so rejecting a real corner sample
+   costs a few px once, while accepting a synthetic one costs one frame
+   of overlay jump - two cosmetic outcomes, and the heuristic only swaps
+   them. The finding's "overlay freezes" wording overstated a one-sample
+   effect. The contract is now stated in `update_pointer`'s rustdoc
+   instead of only in a comment inside the body. A structural fix would
+   tag synthetic samples at the reporting path; do that if a real report
+   ever isolates which webview emits them.
+3. **Fixed.** `try_apply_move(board, mv, key)` and `ApplyMoveError` added
+   to `board` and the prelude, mirroring the 3.1.0 `try_apply_*` pattern.
+   `apply_move` is unchanged and its rustdoc and `docs/api/boards.md` now
+   state the wrong-item hazard. A test pins the hazard so the checked
+   variant's reason to exist stays visible.
+4. **Fixed.** `sample` coalesces to one offset read in flight with a
+   pending re-arm, the same shape as `reanchor_rects` in `sortable`. The
+   read rate is bounded by round-trip latency rather than input rate; the
+   final offset after a burst is still observed. The first suggested fix
+   in the finding (sample only when the pointer moved) would have done
+   nothing, since every `pointermove` moves the pointer.
+5. **Fixed.** `toggle` sets the anchor to the toggled key. A probe test
+   covers Ctrl+click then Shift+click in both the add and remove cases.
+6. **Fixed; second half withdrawn.** The disabled `dragleave` path now
+   fires `on_hover(false)` when a hover was open, and `drop` on a disabled
+   zone only fires it for a hover that opened while enabled. The
+   finding's second point - that the unconditional `dragover`
+   `preventDefault` was undocumented - was wrong: `docs/api/file-drops.md`
+   already states "Browser file navigation is still prevented on
+   dragover/drop" in the `disabled` row. No change there.
+7. **Fixed.** Registration order is collected into a `HashMap` once
+   before the sort.
+8. **Fixed.** `push.branches` is `[dev, main]`.
+9. **Fixed.** `docs/README.md` pins `0.2.52`.
+
+Smaller notes: `DndContext`'s `PartialEq` carries a rustdoc caveat;
+`SortableGrid` and `SortableList` retire `captured` on every return to
+`Idle` (inside `step`, so a cancel while merely pressed is covered too);
+the rect-refresh bus keys registrations from its own counter;
+`DropEffects` gained `BitAnd`, `BitAndAssign`, `Not` (masked to
+`STANDARD`), `From<DropEffect>` and `FromIterator<DropEffect>`. The
+`docs/api/drop-effects.md` constant list named a `NONE` that does not
+exist; it now lists the real constants. The README size note stands as
+written and needs no action.
+
+Verification after the fixes, same container: `cargo test --features
+serde` passes 158 lib tests (151 before, plus two for the `DropEffects`
+operators, one for the selection anchor, four for `try_apply_move`), 82
+runtime, 33 multiwindow, 2 seam, 2 typed-transport, 5 compatibility and 5
+doctests; `cargo test --no-default-features --lib --tests` passes; clippy
+with `-D warnings` on `serde web --all-targets`, `cargo fmt --check`, and
+`cargo doc --no-deps` are clean. The `wasm32-unknown-unknown` check and
+the `desktop` feature remain unverified here: the target is not installed
+and the GTK libraries are absent. CI covers both.
 
 ## What was checked and found sound
 

@@ -52,9 +52,11 @@ Where it appears:
 
 ## Target effect negotiation
 
-`DropEffects` is a compact set with `MOVE`, `COPY`, `LINK`, `NONE`,
-`STANDARD`, `ALL`, and `EMPTY` constants. Combine flags with `|` and declare
-them on a target:
+`DropEffects` is a compact set with `MOVE`, `COPY`, `LINK`, `STANDARD`,
+`ALL`, and `EMPTY` constants. Combine flags with `|`, intersect with `&`,
+take the complement within `STANDARD` with `!` (`!DropEffects::COPY` is
+`MOVE | LINK`), convert one `DropEffect` with `From`, or `collect()` an
+iterator of `DropEffect` values. Declare the set on a target:
 
 ```rust,ignore
 DropZone::<Card> {

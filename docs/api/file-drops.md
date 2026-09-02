@@ -40,7 +40,7 @@ forwarded attribute cannot accidentally replace the behavior.
 | `filter` | `Option<FileFilter>` | `None` | Acceptance rules applied to dropped and selected files; everything is accepted when omitted. |
 | `on_files` | `EventHandler<FileDrop>` | required | Fired with accepted dropped or selected files, only if at least one passed. |
 | `on_rejected` | `Option<EventHandler<Vec<(FileData, FileRejection)>>>` | `None` | Fired with rejected dropped or selected files paired with their reasons, only if at least one failed. |
-| `on_hover` | `Option<EventHandler<bool>>` | `None` | Fired with `true` when a drag enters the zone, `false` when it leaves or the drop lands. |
+| `on_hover` | `Option<EventHandler<bool>>` | `None` | Fired with `true` when a drag enters the zone, `false` when it leaves or the drop lands. Every `true` is paired with a `false`, including when the zone becomes `disabled` while hovered; a zone disabled throughout reports neither. |
 | `multiple` | `bool` | `true` | Whether the native picker permits multiple files. Drop batches still pass through `FileFilter::max_files`. |
 | `disabled` | `bool` | `false` | Disables picker and drop delivery, removes the zone from tab order, and exposes `data-disabled`. Browser file navigation is still prevented on dragover/drop. |
 | `label` | `String` | `"Choose or drop files"` | Accessible name for the focusable button-like zone. |

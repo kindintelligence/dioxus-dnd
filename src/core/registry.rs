@@ -668,12 +668,14 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 
     /// All zones accepting `payload`, in registration order.
+    ///
+    /// Exactly [`Self::acceptable_query`] over `DropQuery::new(payload)`:
+    /// the payload-only lookups share one acceptance pipeline (`accepts`,
+    /// `accepts_query`, `allowed_effects`) with the built-in components,
+    /// so a custom source sees the targets a `Draggable` would. Build the
+    /// query yourself when the source, effect, or input mode matters.
     pub fn acceptable(&self, payload: &T) -> Vec<ZoneRecord<T>> {
-        self.snapshot()
-            .into_iter()
-            .filter(|zone| zone.record.accepts_payload(payload))
-            .map(|zone| zone.record)
-            .collect()
+        self.acceptable_query(&DropQuery::new(payload.clone()))
     }
 
     /// All zones accepting a complete drop query.
@@ -711,11 +713,11 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// layout jitter cannot override horizontal reading order. Call
     /// [`Self::refresh_rects`] first, as the built-in keyboard interaction
     /// does on pickup. Unmeasured zones keep registration order afterwards.
+    ///
+    /// Payload-only form of [`Self::step_zone_query`] (see
+    /// [`Self::acceptable`] for the shared pipeline).
     pub fn step_zone(&self, current: Option<ZoneId>, payload: &T, step: isize) -> Option<ZoneId> {
-        let mut zones = self.acceptable(payload);
-        spatial_sort(&mut zones, self.direction());
-        let current_ix = current.and_then(|c| zones.iter().position(|z| z.id == c));
-        cycle(zones.len(), current_ix, step).map(|ix| zones[ix].id)
+        self.step_zone_query(current, &DropQuery::new(payload.clone()), step)
     }
 
     pub fn step_zone_query(
@@ -744,15 +746,11 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// `payload`, in spatial order (top-to-bottom, then left-to-right within
     /// a one-CSS-pixel row band; unmeasured zones keep registration order at
     /// the end).
+    ///
+    /// Payload-only form of [`Self::children_of_query`] (see
+    /// [`Self::acceptable`] for the shared pipeline).
     pub fn children_of(&self, parent: Option<ZoneId>, payload: &T) -> Vec<ZoneRecord<T>> {
-        let mut zones: Vec<_> = self
-            .snapshot()
-            .into_iter()
-            .filter(|zone| zone.record.parent == parent && zone.record.accepts_payload(payload))
-            .map(|zone| zone.record)
-            .collect();
-        spatial_sort(&mut zones, self.direction());
-        zones
+        self.children_of_query(parent, &DropQuery::new(payload.clone()))
     }
 
     pub fn children_of_query(
@@ -772,16 +770,16 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
 
     /// Next/previous zone (cyclic) among the *siblings* of `current` -
     /// zones sharing its parent. With no `current`, cycles the root level.
+    ///
+    /// Payload-only form of [`Self::step_sibling_query`] (see
+    /// [`Self::acceptable`] for the shared pipeline).
     pub fn step_sibling(
         &self,
         current: Option<ZoneId>,
         payload: &T,
         step: isize,
     ) -> Option<ZoneId> {
-        let parent = current.and_then(|c| self.parent_of(c));
-        let siblings = self.children_of(parent, payload);
-        let current_ix = current.and_then(|c| siblings.iter().position(|z| z.id == c));
-        cycle(siblings.len(), current_ix, step).map(|ix| siblings[ix].id)
+        self.step_sibling_query(current, &DropQuery::new(payload.clone()), step)
     }
 
     pub fn step_sibling_query(
@@ -798,8 +796,11 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     }
 
     /// The first (spatially) acceptable zone nested inside `id`.
+    ///
+    /// Payload-only form of [`Self::first_child_query`] (see
+    /// [`Self::acceptable`] for the shared pipeline).
     pub fn first_child(&self, id: ZoneId, payload: &T) -> Option<ZoneId> {
-        self.children_of(Some(id), payload).first().map(|z| z.id)
+        self.first_child_query(id, &DropQuery::new(payload.clone()))
     }
 
     pub fn first_child_query(&self, id: ZoneId, query: &DropQuery<T>) -> Option<ZoneId> {
@@ -831,13 +832,20 @@ impl<T: Clone + 'static> ZoneRegistry<T> {
     /// that reject the payload lets a drop land on an earlier accepting
     /// overlap, and is friendlier for imprecise (touch) drops that land in the
     /// gutter between zones.
+    ///
+    /// Acceptance runs through the same pipeline as [`Self::acceptable`]
+    /// (`accepts`, `accepts_query`, `allowed_effects`), so a zone the
+    /// built-in drop would skip is skipped here too. The geometry is this
+    /// fixed containment-then-nearest-edge rule, not the provider's
+    /// collision detector; [`Self::resolve`] is what built-in drops run.
     pub fn hit_test_closest(&self, point: Point, payload: &T, max_distance: f64) -> Option<ZoneId> {
+        let query = DropQuery::new(payload.clone());
         let zones = self.snapshot();
         let mut best: Option<(ZoneId, f64)> = None;
         // One borrowed pass: the former miss path built and cloned an entire
         // `Vec<ZoneRecord<T>>`, then evaluated every acceptance filter twice.
         for z in zones.iter().rev() {
-            if !z.record.accepts_payload(payload) {
+            if z.negotiate(&query).is_none() {
                 continue;
             }
             let Some(r) = z.record.cached_rect() else {

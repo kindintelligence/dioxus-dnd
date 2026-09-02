@@ -236,6 +236,11 @@ impl<T: Clone + 'static> Clone for DndContext<T> {
         *self
     }
 }
+/// Handle identity, not state identity. Two handles are equal when they
+/// share the same announcement signal, which every construction path pairs
+/// one-to-one with the drag store. Memoizing on a `DndContext` therefore
+/// tracks *which* provider it came from, never what that provider's state
+/// currently holds; read the accessors for that.
 impl<T: Clone + 'static> PartialEq for DndContext<T> {
     fn eq(&self, other: &Self) -> bool {
         // Preserve the 3.x handle identity contract. In particular, two
@@ -398,10 +403,17 @@ impl<T: Clone + 'static> DndContext<T> {
 
     /// Update the tracked pointer position (drives `DragOverlay`). Granular:
     /// only `pointer` subscribers rerun.
+    ///
+    /// An exact `(0, 0)` sample is ignored. Some webviews report it for
+    /// synthetic events, and nothing else in the sample can tell that apart
+    /// from a real pointer at the viewport corner. A drag that does reach
+    /// the exact corner keeps its previous sample, which arrived at most a
+    /// few CSS px away, so hit-testing and delivery are unaffected in
+    /// practice.
     pub fn update_pointer(&mut self, pointer: Point) {
-        // An exact (0,0) is overwhelmingly a bogus platform report (some
-        // webviews emit it for synthetic events), not a real drag at the
-        // viewport corner; ignore it so the overlay doesn't jump there.
+        // See the doc comment: value is the only signal available, and a
+        // rejected real sample costs a few px at the corner while an
+        // accepted synthetic one would jump the overlay across the viewport.
         if pointer.x == 0.0 && pointer.y == 0.0 {
             return;
         }

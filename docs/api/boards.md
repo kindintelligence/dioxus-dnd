@@ -167,9 +167,12 @@ pub fn apply_move<T>(board: &mut HashMap<ContainerId, Vec<T>>, mv: MoveEvent<T>)
 Applies a `MoveEvent` to the plain `HashMap` board model. Takes the event
 by value; the item inside becomes the inserted element.
 
-- Removes the item from the source column by index. If the model drifted
-  (column missing, index out of range) the removal is skipped and the
-  insert still happens, so the event's item is never lost.
+- Removes the item from the source column by index. The index is trusted:
+  if the column reordered between pickup and drop, whichever item now sits
+  at that index is removed. If the model drifted further (column missing,
+  index out of range) the removal is skipped and the insert still happens,
+  so the event's item is never lost but may be duplicated. Use
+  `try_apply_move` when the model can change under a live drag.
 - Adjusts same-column forward moves: when source and target columns match
   and the source index is below the target index, removal shifts the tail
   up one, so the target is decremented. Slot indexes computed against the
@@ -177,6 +180,35 @@ by value; the item inside becomes the inserted element.
   as-is.
 - Inserts at the (adjusted) target index; `None` or an index past the end
   appends. A target column absent from the map is created.
+
+## `try_apply_move`
+
+```rust,ignore
+pub fn try_apply_move<T, K: PartialEq>(
+    board: &mut HashMap<ContainerId, Vec<T>>,
+    mv: MoveEvent<T>,
+    key: impl Fn(&T) -> K,
+) -> Result<(), ApplyMoveError>
+```
+
+The checked, identity-based form. The moved item is located in the source
+column by `key` and removed from wherever it now sits; `from.1` is not
+consulted. The same-column forward adjustment uses the index the item was
+found at, so a column that reordered during the drag still lands the item
+at the intended slot. Target handling matches `apply_move`.
+
+When no item in the source column matches (the drop is stale), the board
+is left untouched and `ApplyMoveError::SourceNotFound { column }` is
+returned instead of duplicating the item. The enum is non-exhaustive and
+implements `Display` and `Error`.
+
+```rust,ignore
+on_move: move |mv: MoveEvent<Card>| {
+    if let Err(e) = try_apply_move(&mut board.write(), mv, |card| card.id) {
+        tracing::warn!(%e, "stale board drop ignored");
+    }
+},
+```
 
 ## `ContainerId`
 

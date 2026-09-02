@@ -65,13 +65,20 @@ impl<K: Clone + PartialEq + 'static> Selection<K> {
         }
     }
 
-    /// Add or remove `key` (Ctrl/Cmd+click semantics).
+    /// Add or remove `key` (Ctrl/Cmd+click semantics). The range anchor
+    /// moves to `key` either way, so a following Shift+click ranges from
+    /// the item just toggled - the file-manager convention.
     pub fn toggle(&mut self, key: K) {
-        let mut items = self.items.write();
-        if let Some(ix) = items.iter().position(|k| *k == key) {
-            items.remove(ix);
-        } else {
-            items.push(key);
+        {
+            let mut items = self.items.write();
+            if let Some(ix) = items.iter().position(|k| *k == key) {
+                items.remove(ix);
+            } else {
+                items.push(key.clone());
+            }
+        }
+        if let Some(mut anchor) = self.anchor {
+            anchor.set(Some(key));
         }
     }
 
@@ -325,5 +332,29 @@ mod tests {
     fn only_pointer_drags_arm_browser_click_suppression() {
         assert!(suppress_click_for_mode(DragMode::Pointer));
         assert!(!suppress_click_for_mode(DragMode::Keyboard));
+    }
+
+    fn ctrl_click_anchor_probe() -> Element {
+        let mut selection = use_selection::<u8>();
+        let ordered = [1u8, 2, 3, 4, 5];
+        selection.click_in_order(1, Modifiers::empty(), &ordered);
+        // Ctrl+click adds 3 and moves the anchor there...
+        selection.click_in_order(3, Modifiers::CONTROL, &ordered);
+        assert_eq!(selection.items(), vec![1, 3]);
+        // ...so the Shift+click ranges 3..=5, not 1..=5.
+        selection.click_in_order(5, Modifiers::SHIFT, &ordered);
+        assert_eq!(selection.items(), vec![3, 4, 5]);
+        // Toggling an item off also re-anchors on it.
+        selection.click_in_order(4, Modifiers::CONTROL, &ordered);
+        assert_eq!(selection.items(), vec![3, 5]);
+        selection.click_in_order(2, Modifiers::SHIFT, &ordered);
+        assert_eq!(selection.items(), vec![2, 3, 4]);
+        rsx! {}
+    }
+
+    #[test]
+    fn ctrl_click_moves_the_range_anchor() {
+        let mut dom = VirtualDom::new(ctrl_click_anchor_probe);
+        dom.rebuild_in_place();
     }
 }

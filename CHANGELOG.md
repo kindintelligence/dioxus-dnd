@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Keyed board moves.** `try_apply_move` locates the moved item in its
+  source column by key instead of trusting the event's index, adjusts
+  same-column forward inserts from the index it actually found, and returns
+  `ApplyMoveError::SourceNotFound` without touching the board when the drop
+  is stale. `apply_move` keeps its index-based behavior and now documents
+  that a column reordered under the drag makes it remove the wrong item.
+- **`DropEffects` set operators.** `&`, `&=`, `!` (the complement within
+  `STANDARD`), `From<DropEffect>`, and `FromIterator<DropEffect>`.
+
+### Fixed
+
+- **One registry acceptance pipeline.** The payload-only lookups
+  (`acceptable`, `step_zone`, `step_sibling`, `children_of`, `first_child`,
+  `hit_test_closest`) now run the same acceptance as the built-in
+  components: `accepts`, `accepts_query`, and `allowed_effects`
+  negotiation, via `DropQuery::new(payload)`. A custom source using them
+  no longer targets zones a `Draggable` would skip.
+- **Ctrl/Cmd+click moves the range anchor.** `Selection::toggle` re-anchors
+  on the toggled key, so a following Shift+click ranges from it, as the
+  documented click convention promised.
+- **`FileDropZone` hover pairing.** A zone that becomes `disabled` while a
+  drag hovers it now reports `on_hover(false)`; a zone disabled throughout
+  no longer reports a `false` it never paired with a `true`.
+- **`AutoScroll` sampling is bounded.** Scroll-offset reads coalesce to one
+  in flight, so a hovering pointer no longer issues one renderer round-trip
+  per `pointermove`; the final offset after a burst is still observed.
+- **Custom collision ranking is `O(n log n)`.** Registration order is
+  indexed once instead of scanned per comparison.
+- `SortableList` and `SortableGrid` retire their pointer-capture flag on
+  every return to `Idle`, matching `Draggable`.
+- CI runs on pushes to `dev` (the workflow filtered on a branch that no
+  longer exists), and the contributor docs pin the same rumdl version CI
+  runs.
+
+### Changed
+
+- `DndContext::update_pointer` documents the `(0, 0)` contract: an exact
+  origin sample is treated as a synthetic-event artifact and ignored, and a
+  drag that reaches the exact corner keeps its previous sample.
+- `DndContext`'s `PartialEq` documents that it compares handle identity
+  (the shared announcement signal), never drag state.
+
 ## 3.1.0 - 2026-08-30
 
 ### Added

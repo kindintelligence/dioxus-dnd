@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
@@ -9,10 +10,15 @@ use dioxus::prelude::*;
 use super::components::{drop_query, resolve_drag_hover};
 use super::registry::{RectRefresh, ZoneRecord, ZoneRegistration, ZoneRegistry};
 use super::state::{DndContext, DragState};
-use super::types::{DragId, DropEffect, DropOutcome, Point, Rect, ZoneId};
+use super::types::{DropEffect, DropOutcome, Point, Rect, ZoneId};
 use super::world::{
     use_joined_window, DndWorld, JoinedWindow, WindowGeometry, WorldHit, WorldMembership,
 };
+
+// Identity freshness only: Relaxed is sufficient because the counter carries
+// no synchronization. Correctness assumes this process-lifetime u64 never
+// wraps; do not narrow it.
+static NEXT_REFRESH_THUNK: AtomicU64 = AtomicU64::new(1);
 
 /// Marker flag: a settle-enabled `DragOverlay<T>` is mounted somewhere in
 /// this provider's subtree, so `Draggable<T>` should route successful
@@ -206,7 +212,7 @@ pub(crate) fn use_rect_refresh_provider() -> RectRefresh {
 pub(crate) fn use_rect_refresh_thunk(thunk: impl FnMut(()) + 'static) {
     let joined = use_hook(move || {
         try_consume_context::<RectRefresh>().map(|mut bus| {
-            let key = DragId::auto().0;
+            let key = NEXT_REFRESH_THUNK.fetch_add(1, Ordering::Relaxed);
             bus.register(key, Callback::new(thunk));
             (bus, key)
         })

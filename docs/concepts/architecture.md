@@ -62,9 +62,10 @@ families power the built-in interactions:
 - **Pointer hit-testing.** Move-time hover uses `resolve_hover`, which filters
   the full `DropQuery` and ranks candidates through the provider's collision
   policy. Release selection uses `resolve`, applying the same acceptance and
-  effect negotiation before optional nearest-zone recovery. The legacy
-  `hit_test` and `hit_test_closest` helpers remain available to custom code
-  that only needs geometry or payload-only acceptance.
+  effect negotiation before optional nearest-zone recovery. `hit_test`
+  (geometry only) and `hit_test_closest` (containment, then nearest edge)
+  remain available to custom code; the payload-only lookups share the
+  built-in acceptance pipeline, so only the collision ranking differs.
   Registration order only approximates paint order: CSS stacking and portals
   are not inspected.
 - **Keyboard navigation.** `step_zone` and its sibling/child variants walk

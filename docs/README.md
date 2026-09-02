@@ -70,7 +70,7 @@ CI checks the public documentation with
 run it from the repository root before opening a pull request:
 
 ```console
-cargo install rumdl --locked --version 0.2.30
+cargo install rumdl --locked --version 0.2.52
 rumdl check .
 ```
 

@@ -112,7 +112,7 @@ anything else derived from the selection updates reactively.
 | `from_signals` | `(Signal<Vec<K>>, Signal<Option<K>>) -> Selection<K>` | Non-hook wrapper for externally owned item and anchor signals. |
 | `is_selected` | `(&K) -> bool` | Membership test; drives `data-selected`. |
 | `select_only` | `(K)` | Replace the selection with just this key. |
-| `toggle` | `(K)` | Add or remove this key (the Ctrl/Cmd+click semantics). |
+| `toggle` | `(K)` | Add or remove this key (the Ctrl/Cmd+click semantics). Moves the range anchor to this key either way, so a following Shift+click ranges from it. |
 | `clear` | `()` | Empty the selection. |
 | `items` | `() -> Vec<K>` | Snapshot of the selected keys, in selection order. This is the stack a selected item drags. |
 | `len` | `() -> usize` | Number of selected keys. |

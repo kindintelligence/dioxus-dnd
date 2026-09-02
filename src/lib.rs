@@ -27,7 +27,8 @@ pub mod prelude {
     pub use crate::animate::FlipItem;
     pub use crate::autoscroll::{edge_delta, frame_delta, AutoScroll, ScrollAxis};
     pub use crate::board::{
-        apply_move, BoardColumn, BoardItem, BoardPayload, BoardSlot, ContainerId, MoveEvent,
+        apply_move, try_apply_move, ApplyMoveError, BoardColumn, BoardItem, BoardPayload,
+        BoardSlot, ContainerId, MoveEvent,
     };
     pub use crate::bridge_drop_zone;
     pub use crate::canvas::{
