@@ -29,6 +29,8 @@
   desktop examples, and all three lockfiles to the matching alpha graph.
 - Update installation/version guidance and replace obsolete 0.7-specific
   scroll-observation notes with the renderer-neutral sampling behavior.
+- Keep automatic sortable group IDs checked and atomic using a compare-exchange
+  loop, avoiding Rust 1.99's deprecated `fetch_update` without raising the MSRV.
 - Refresh the transitive Rustls dependency in all three lockfiles to pick
   up its security fixes, and recognize xxhash-rust's permissive Boost license
   in the dependency policy.
