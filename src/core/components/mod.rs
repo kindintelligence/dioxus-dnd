@@ -27,6 +27,27 @@ pub(crate) use handle::ActivatorContext;
 pub(crate) use overlay::overlay_style;
 pub(crate) use pointer::{primary_press, touch_style, HoldTimer};
 
+/// `style` with its last declaration closed by `;`, so another can follow it;
+/// `None` when it holds nothing.
+fn terminated(style: &str) -> Option<String> {
+    let style = style.trim();
+    match style {
+        "" => None,
+        _ if style.ends_with(';') => Some(style.to_string()),
+        _ => Some(format!("{style};")),
+    }
+}
+
+/// Style fragments joined in order, each closed by `;`: a caller's
+/// `color: red` must not run into the declaration after it.
+fn join_styles<'a>(styles: impl IntoIterator<Item = &'a str>) -> String {
+    styles
+        .into_iter()
+        .filter_map(terminated)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn take_text_styles(attributes: &mut Vec<Attribute>) -> String {
     let mut styles = Vec::new();
     attributes.retain(|attribute| {
@@ -38,13 +59,13 @@ fn take_text_styles(attributes: &mut Vec<Attribute>) -> String {
         }
         false
     });
-    styles.join(" ")
+    join_styles(styles.iter().map(String::as_str))
 }
 
 /// Merge forwarded styles after configurable component defaults.
 pub(crate) fn merge_style_user_last(attributes: &mut Vec<Attribute>, defaults: &str) -> String {
     let user = take_text_styles(attributes);
-    format!("{defaults} {user}")
+    join_styles([defaults, user.as_str()])
 }
 
 /// Merge behavior-critical component styles after every forwarded style.
@@ -66,7 +87,7 @@ pub(crate) fn merge_style_invariant_last(
         attribute.namespace != Some("style") || !invariant_properties.contains(&attribute.name)
     });
     let user = take_text_styles(attributes);
-    format!("{user} {invariant}")
+    join_styles([user.as_str(), invariant])
 }
 
 /// Remove caller attributes whose later spread would replace an invariant
@@ -109,6 +130,21 @@ mod tests {
     }
 
     #[test]
+    fn an_unterminated_caller_style_does_not_swallow_the_next_declaration() {
+        let mut attributes = vec![Attribute::new("style", "color:blue", None, false)];
+
+        let style =
+            merge_style_invariant_last(&mut attributes, "touch-action: none;", &["touch-action"]);
+
+        assert_eq!(style, "color:blue; touch-action: none;");
+        let mut attributes = vec![Attribute::new("style", "  ", None, false)];
+        assert_eq!(
+            merge_style_user_last(&mut attributes, "display: grid"),
+            "display: grid;"
+        );
+    }
+
+    #[test]
     fn invariant_styles_are_emitted_after_user_declarations() {
         let mut attributes = vec![Attribute::new(
             "style",
@@ -144,7 +180,7 @@ mod tests {
             &["touch-action", "transform"],
         );
 
-        assert_eq!(style, " touch-action: none; transform: none;");
+        assert_eq!(style, "touch-action: none; transform: none;");
         assert_eq!(attributes.len(), 1);
         assert_eq!(attributes[0].name, "opacity");
         assert_eq!(attributes[0].namespace, Some("style"));

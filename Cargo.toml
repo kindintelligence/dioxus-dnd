@@ -50,13 +50,14 @@ constructible_struct_adds_field = { required-update = "minor" }
 dioxus = { version = "=0.8.0-alpha.1", default-features = false, features = ["minimal", "document", "mounted"] }
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
-# `web` feature only. Pinned to the version dioxus-web 0.8.0-alpha.1 pulls so cargo
-# unifies to a single web-sys - `MountedData::downcast::<web_sys::Element>()`
-# matches only when the type is identical. `Element` brings
+# `web` feature only. Cargo unifies every 0.3 requirement to a single web-sys,
+# which `MountedData::downcast::<web_sys::Element>()` needs (it matches only
+# when the type is identical); 0.3.98 is the floor dioxus-web 0.8.0-alpha.1
+# pulls. Not an exact pin, so apps on a newer web-sys still build. `Element` brings
 # `set_pointer_capture`; `Location` supplies the missing dioxus-web
 # document/history feature (including in minimal downstream web builds).
 # No wasm-bindgen: we downcast via Dioxus, not JsCast.
-web-sys = { version = "=0.3.98", optional = true, features = ["Element", "Location"] }
+web-sys = { version = "0.3.98", optional = true, features = ["Element", "Location"] }
 # `desktop` feature only: `MultiWindowProvider` and its lower-level
 # geometry-feed/cross-window-bridge pieces touch tao through
 # dioxus-desktop, and the bridge's cursor poller sleeps on the tokio
