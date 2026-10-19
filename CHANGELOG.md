@@ -17,8 +17,13 @@
 
 ### Migration fixes
 
-- Pin `web-sys` exactly to **0.3.98**, matching Dioxus Web alpha.1's
-  bindings for mounted-element downcasts. Enable `Location` in the `web`
+- Close every forwarded `style` fragment with `;` before the component's own
+  declarations follow it, so a caller's `style: "color: blue"` no longer
+  runs into `touch-action` and breaks both.
+
+- Require `web-sys` **0.3.98** or a later 0.3 release (the floor Dioxus Web
+  alpha.1 pulls), so cargo unifies on the app's single web-sys and
+  mounted-element downcasts match; apps on a newer web-sys still build. Enable `Location` in the `web`
   feature so minimal downstream document/history builds compile without
   relying on this crate's dev-dependency features.
 - Generate file-picker input IDs from a VDOM-root allocator instead of
