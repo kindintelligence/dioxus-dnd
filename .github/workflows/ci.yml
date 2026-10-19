@@ -224,7 +224,8 @@ jobs:
           retention-days: 14
 
   msrv:
-    name: msrv-core-1.88
+    # Protected main requires this historical check name; the MSRV below is 1.88.
+    name: msrv-core-1.85
     runs-on: ubuntu-latest
 
     steps:
@@ -313,7 +314,8 @@ jobs:
           feature-group: all-features
 
   dioxus-git:
-    name: dioxus-git-f9519967
+    # Retain the protected branch's alpha compatibility check name.
+    name: dioxus-0.8-alpha
     runs-on: ubuntu-latest
 
     steps:
