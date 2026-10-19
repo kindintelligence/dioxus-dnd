@@ -1,9 +1,24 @@
 #![doc = include_str!("../docs/api/file-drops.md")]
 
+use std::{cell::Cell, rc::Rc};
+
 use dioxus::html::{FileData, HasFileData};
 use dioxus::prelude::*;
 
 use crate::core::{client_point, element_point, Point};
+
+// Allocate in the VDOM root so independent SSR/client renders start from
+// the same sequence. ScopeId is opaque in newer Dioxus revisions.
+#[derive(Clone, Default)]
+struct FileInputIds(Rc<Cell<usize>>);
+
+fn next_file_input_id() -> String {
+    let ids = try_consume_context::<FileInputIds>()
+        .unwrap_or_else(|| dioxus::core::provide_root_context(FileInputIds::default()));
+    let id = ids.0.get();
+    ids.0.set(id + 1);
+    format!("dioxus-dnd-file-input-{id}")
+}
 
 /// A batch of dropped or selected files plus its interaction coordinates.
 #[derive(Clone, PartialEq)]
@@ -311,12 +326,7 @@ pub fn FileDropZone(
     children: Element,
 ) -> Element {
     let mut depth = use_signal(|| 0u32);
-    let input_id = use_hook(|| {
-        format!(
-            "dioxus-dnd-file-input-{}",
-            dioxus::core::current_scope_id().0
-        )
-    });
+    let input_id = use_hook(next_file_input_id);
     let picker_input_id = input_id.clone();
     let picker_accept = filter.as_ref().and_then(FileFilter::picker_accept);
     let picker_filter = filter.clone();

@@ -1,8 +1,8 @@
 [package]
 name = "dioxus-dnd"
-version = "3.2.0"
+version = "4.0.0-alpha.1"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Modular, accessible drag-and-drop for Dioxus: sortable lists, kanban boards, trees, grids, file drops, multi-select, touch support and more"
 license = "MIT"
 repository = "https://github.com/kindintelligence/dioxus-dnd"
@@ -43,21 +43,25 @@ all-features = true
 constructible_struct_adds_field = { required-update = "minor" }
 
 [dependencies]
+# Alpha releases can change APIs without a semver boundary. Keep this release
+# on alpha.1; the exact requirement also accepts git patches at that version.
 # `document` is the cross-renderer bridge used to activate FileDropZone's
 # hidden native file input on click; it adds behavior only, never CSS.
-dioxus = { version = "0.7", default-features = false, features = ["minimal", "document", "mounted"] }
+dioxus = { version = "=0.8.0-alpha.1", default-features = false, features = ["minimal", "document", "mounted"] }
 serde = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
-# `web` feature only. Pinned to the version dioxus-web 0.7 pulls so cargo
+# `web` feature only. Pinned to the version dioxus-web 0.8.0-alpha.1 pulls so cargo
 # unifies to a single web-sys - `MountedData::downcast::<web_sys::Element>()`
 # matches only when the type is identical. `Element` brings
-# `set_pointer_capture`. No wasm-bindgen: we downcast via Dioxus, not JsCast.
-web-sys = { version = "0.3.98", optional = true, features = ["Element"] }
+# `set_pointer_capture`; `Location` supplies the missing dioxus-web
+# document/history feature (including in minimal downstream web builds).
+# No wasm-bindgen: we downcast via Dioxus, not JsCast.
+web-sys = { version = "=0.3.98", optional = true, features = ["Element", "Location"] }
 # `desktop` feature only: `MultiWindowProvider` and its lower-level
 # geometry-feed/cross-window-bridge pieces touch tao through
 # dioxus-desktop, and the bridge's cursor poller sleeps on the tokio
 # runtime dioxus-desktop already drives.
-dioxus-desktop = { version = "0.7", optional = true }
+dioxus-desktop = { version = "=0.8.0-alpha.1", optional = true }
 tokio = { version = "1", default-features = false, features = ["time"], optional = true }
 # Registry mutation diagnostics (`trace`), bridge-leg diagnostics (`debug`),
 # and platform-model tripwires (`warn`). Dioxus core/signals already compile
@@ -98,9 +102,9 @@ required-features = ["serde"]
 # `MountedData::get_client_rect()`, and dioxus-web only fires `onmounted` /
 # implements those methods when this feature is on. Without it, rects stay
 # empty, hit-testing finds nothing, and drags stick without dropping.
-dioxus = { version = "0.7", default-features = false, features = ["minimal", "launch", "web", "document", "mounted", "router"] }
-dioxus-ssr = "0.7"
-# dioxus-web 0.7's `document` feature forgets to enable web-sys'
+dioxus = { version = "=0.8.0-alpha.1", default-features = false, features = ["minimal", "launch", "web", "document", "mounted", "router"] }
+dioxus-ssr = "=0.8.0-alpha.1"
+# dioxus-web 0.8.0-alpha.1's `document` feature forgets to enable web-sys'
 # `Location`; features are additive, so enabling it here fixes the build.
 web-sys = { version = "0.3", features = ["Location"] }
 bytes = "1"
@@ -111,5 +115,5 @@ serde = { version = "1", features = ["derive"] }
 # The gallery's Packing list page wires DndStrings to dioxus-i18n (the
 # Fluent-based crate the Dioxus docs recommend); the library itself stays
 # dependency-free.
-dioxus-i18n = "0.5"
+dioxus-i18n = "0.7.0-alpha.1"
 unic-langid = { version = "0.9", features = ["macros"] }
