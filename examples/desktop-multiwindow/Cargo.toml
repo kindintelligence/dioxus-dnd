@@ -16,8 +16,8 @@ publish = false
 [workspace]
 
 [dependencies]
-dioxus = { version = "0.7", features = ["desktop"] }
+dioxus = { version = "=0.8.0-alpha.1", features = ["desktop"] }
 # `desktop` brings `MultiWindowProvider`, the correctly ordered geometry,
 # provider and host-bridge wiring each window needs.
-dioxus-dnd = { version = "3.2.0", path = "../..", features = ["serde", "desktop"] }
+dioxus-dnd = { version = "4.0.0-alpha.1", path = "../..", features = ["serde", "desktop"] }
 serde = { version = "1", features = ["derive"] }

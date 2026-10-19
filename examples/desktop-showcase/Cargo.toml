@@ -17,10 +17,10 @@ publish = false
 [workspace]
 
 [dependencies]
-dioxus = { version = "0.7", features = ["desktop"] }
+dioxus = { version = "=0.8.0-alpha.1", features = ["desktop"] }
 # Supplies `use_dnd_model`, `DndScope`, `DndWorld::vdom`, and the correctly
 # ordered `MultiWindowProvider` used by every showcase window.
-dioxus-dnd = { version = "3.2.0", path = "../..", features = ["desktop"] }
+dioxus-dnd = { version = "4.0.0-alpha.1", path = "../..", features = ["desktop"] }
 # Same time-only tokio the library's desktop feature already drives; the
 # ticker sleeps on it between 50ms liveness steps.
 tokio = { version = "1", default-features = false, features = ["time"] }
