@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+## 4.0.0-alpha.1 - 2026-10-19
+
+### Breaking changes
+
+- Move the Dioxus public types from 0.7 to **0.8.0-alpha.1**. Dioxus and
+  Dioxus Desktop are pinned exactly to the published alpha.1 packages;
+  later alphas have incompatible APIs. Existing 0.7 applications should
+  remain on dioxus-dnd 3.x. The renderer-neutral dependency keeps
+  `default-features = false` and its `minimal`, `document`, and `mounted`
+  features.
+- Raise the minimum supported Rust version from 1.85 to **1.88**. The
+  published Dioxus alpha uses let-chains, including in the minimal graph.
+
+### Migration fixes
+
+- Pin `web-sys` exactly to **0.3.98**, matching Dioxus Web alpha.1's
+  bindings for mounted-element downcasts. Enable `Location` in the `web`
+  feature so minimal downstream document/history builds compile without
+  relying on this crate's dev-dependency features.
+- Generate file-picker input IDs from a VDOM-root allocator instead of
+  accessing `ScopeId`'s numeric field, which is private at the supported
+  Dioxus git revision. IDs remain stable during an instance's lifetime and
+  start from the same sequence for independent SSR/client renders.
+- Upgrade Dioxus SSR, the gallery's Dioxus i18n integration, both standalone
+  desktop examples, and all three lockfiles to the matching alpha graph.
+- Update installation/version guidance and replace obsolete 0.7-specific
+  scroll-observation notes with the renderer-neutral sampling behavior.
+- Refresh the transitive Rustls dependency in all three lockfiles to pick
+  up its security fixes, and recognize xxhash-rust's permissive Boost license
+  in the dependency policy.
+- Make additive-selection browser regressions use Ctrl on Windows/Linux
+  and Cmd on macOS, avoiding native Control-click context menus.
+- Use the alpha.1 CLI in CI and gallery deployment, disable hot-patching in
+  browser regressions and DWARF output in production gallery builds, and
+  wait for the fixture build before starting browser tests. Test Rust 1.88
+  and check a scratch downstream consumer against Dioxus git revision
+  `f9519967a6fb3e85bf3c1a2e2bf816a85033f752`, and accept prerelease tags
+  without marking alpha GitHub releases as latest.
+
+The additions and fixes below were developed on `dev` after 3.1.0 and are
+included in this release.
+
 ### Added
 
 - **Keyed board moves.** `try_apply_move` locates the moved item in its

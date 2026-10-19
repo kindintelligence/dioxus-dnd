@@ -1,5 +1,8 @@
 # dioxus-dnd documentation
 
+These guides target dioxus-dnd `4.0.0-alpha.1` with Dioxus
+`0.8.0-alpha.1`. Install with `cargo add dioxus-dnd@4.0.0-alpha.1`.
+
 Two layers, paired by name:
 
 - **`concepts/`** teaches. One guide per concept: the mental model, a worked

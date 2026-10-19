@@ -89,7 +89,7 @@ that even hold-or-sideways feels risky next to scrolling.
 ## Pointer capture
 
 Where do move events go once the cursor leaves the element mid-drag? Dioxus
-0.7 exposes no pointer-capture API, so the answer depends on platform and
+0.8 alpha exposes no pointer-capture API, so the answer depends on platform and
 features (this summarizes the README's "Platform notes"):
 
 - **Web with the `web` feature** (recommended for web): the crate grabs

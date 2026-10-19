@@ -1,6 +1,6 @@
-# The stable lane answers whether a released Dioxus 0.7 patch broke users.
+# The published lane checks compatible Dioxus 0.8 alpha updates.
 # The git-main lane answers whether the next Dioxus line is still source
-# compatible. Stable failures stay red. Git-main failures are informational
+# compatible. Published-dependency failures stay red. Git-main failures are informational
 # because upstream main is allowed to change before a release.
 
 name: upstream-canary
@@ -18,7 +18,7 @@ env:
 
 jobs:
   latest-published-patch:
-    name: latest published Dioxus 0.7
+    name: latest compatible Dioxus 0.8 alpha
     runs-on: ubuntu-latest
 
     steps:
@@ -37,7 +37,7 @@ jobs:
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal
 
-      - name: Float the Dioxus 0.7 family to current published patches
+      - name: Float the Dioxus 0.8 family to compatible published versions
         run: |
           grep -oP '(?<=^name = ")dioxus[^"]*' Cargo.lock \
             | sort -u \

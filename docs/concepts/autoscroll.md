@@ -97,10 +97,9 @@ AutoScroll {
 ```
 
 Observation rides the events that cause or accompany scrolling - wheel,
-pointer contact moves, the auto-scrolls the component performs - because
-dioxus-web 0.7 delivers no element-level scroll events (the API reference
-records the platform detail). One blind spot follows: a scroll that no
-event accompanies, such as a programmatic scroll-to-index with the pointer
+pointer contact moves, the auto-scrolls the component performs - through
+renderer-neutral `MountedData` offset reads. One blind spot follows: a
+scroll that no event accompanies, such as a programmatic scroll-to-index with the pointer
 at rest, goes unreported until the next wheel or pointer activity trues
 everything up. Code that initiates one should update its own state. The
 archive page covers the gap with `onvisible` sentinels on its rows.

@@ -95,11 +95,9 @@ Behavior notes:
 Scroll observation (the rect-refresh ping and the `on_scroll` prop) rides
 the events that cause or accompany scrolling - wheel, pointer contact
 moves, and the auto-scrolls this component performs - each of which
-samples the offset through `MountedData` and reports when it changed. It
-has to work this way: dioxus-web 0.7 never delivers element-level `scroll`
-events to `onscroll` handlers, and its eval channel drops messages that
-resolve after the receiver parked, so neither a Rust `onscroll` nor a JS
-listener bridge can carry the signal.
+samples the offset through `MountedData` and reports when it changed.
+This renderer-neutral sampling path also runs on Dioxus 0.8 alpha and does
+not depend on a JavaScript listener bridge.
 
 - Wheel events reach the element under the cursor regardless of pointer
   capture, and the sample's async offset read resolves after the browser
