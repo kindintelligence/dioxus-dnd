@@ -6,7 +6,7 @@
 //! `DataTransfer` - so they can be any `Clone` type with zero serialization.
 //! (`DataTransfer` interop for external drags lives in [`crate::external`].)
 //!
-//! State is held in a [`struct@Store`], Dioxus 0.7's fine-grained reactivity
+//! State is held in a [`struct@Store`], Dioxus's fine-grained reactivity
 //! primitive: each field gets its own lazy subscription. A component that
 //! reads `dnd.over()` in its render only reruns when the hovered zone
 //! changes - not on every pointer move.

@@ -35,7 +35,7 @@ value and the visuals under your control.
 ## The state store
 
 The payload travels through the store as a plain `Clone` value: no JSON, no
-string ids, no serialization. Stores are Dioxus 0.7's fine-grained
+string ids, no serialization. Stores are Dioxus's fine-grained
 reactivity primitive - each field of `DragState` gets its own lazy
 subscription, and every `DndContext` accessor reads through a per-field
 lens. A component that calls `dnd.over()` in its render reruns only when the

@@ -401,7 +401,7 @@ test("a completed pointer drag suppresses only its trailing click", async ({ pag
   const second = demo.locator("#selection-two");
   const status = demo.locator("#selection-status");
   await first.click();
-  await second.click({ modifiers: ["Control"] });
+  await second.click({ modifiers: ["ControlOrMeta"] });
   await expect(status).toHaveAttribute("data-selected", "1,2");
 
   const source = first.getByRole("button");

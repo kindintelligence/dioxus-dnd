@@ -111,7 +111,7 @@ The styling contract is data attributes (`data-active`, `data-over`,
 `dioxus_ssr::render(&dom)` and assert on the string. This is how you prove
 zones light up on pickup, the hovered zone highlights, and everything
 unlights after the drop - the visual states users style, verified without
-a screen. `dioxus-ssr` is a dev-dependency: `dioxus-ssr = "0.7"`.
+a screen. `dioxus-ssr` is a dev-dependency: `dioxus-ssr = "=0.8.0-alpha.1"`.
 
 The sim also exposes the live state directly: `over`, `dragging`,
 `payload`, `announcement` (the latest screen-reader string), and

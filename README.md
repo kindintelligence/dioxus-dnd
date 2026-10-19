@@ -4,8 +4,8 @@
 [![Documentation](https://docs.rs/dioxus-dnd/badge.svg)](https://docs.rs/dioxus-dnd)
 [![Downloads](https://img.shields.io/crates/d/dioxus-dnd.svg)](https://crates.io/crates/dioxus-dnd)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
-[![Dioxus 0.7.10](https://img.shields.io/badge/dioxus-0.7.10-0E6B63)](https://dioxuslabs.com)
-[![MSRV 1.85](https://img.shields.io/badge/rustc-1.85%2B-orange.svg)](https://releases.rs/docs/1.85.0/)
+[![Dioxus 0.8 alpha](https://img.shields.io/badge/dioxus-0.8.0--alpha.1-0E6B63)](https://dioxuslabs.com)
+[![MSRV 1.88](https://img.shields.io/badge/rustc-1.88%2B-orange.svg)](https://releases.rs/docs/1.88.0/)
 [![CI](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml/badge.svg)](https://github.com/kindintelligence/dioxus-dnd/actions/workflows/ci.yml)
 
 ![Two desktop windows sharing one live drag world: Mission Clock crosses the orange desktop gap, lands beside Channel Load in Satellite, then returns to Mission Control while updating inside the drag ghost](assets/showcase.gif)
@@ -87,24 +87,26 @@ the module docs on docs.rs.
 ## Install
 
 ```sh
-cargo add dioxus-dnd
+cargo add dioxus-dnd@4.0.0-alpha.1
 ```
 
 | dioxus-dnd | Dioxus | Rust |
 |---|---|---|
-| 2.1 - 3.1 | **0.7** (verified against `0.7.10`) | 1.85+ |
+| 4.0.0-alpha.1 | **0.8 alpha** (`0.8.0-alpha.1`) | 1.88+ |
+| 2.1 - 3.x | 0.7 (verified against `0.7.10`) | 1.85+ |
 | 2.0 | 0.8 alpha (`0.8.0-alpha.0`) | 1.85+ |
 
-The inversion is deliberate: 2.0 was an early spike against the Dioxus
-0.8 alpha, the 2.1+ line tracks stable 0.7, and an 0.8 line will follow
-when 0.8 stabilizes. CI also compiles and runs the 3.1 Rust suite against
-published `0.8.0-alpha.1` as a source-compatibility signal. The published 3.1
-dependency remains on Dioxus 0.7 so existing 0.7 applications keep one
-coherent set of Dioxus public types.
+Version 4 moves the public Dioxus types to 0.8 alpha. Use
+`dioxus = "=0.8.0-alpha.1"` alongside this release; 0.7 applications should
+stay on the 3.x line. The Rust suite runs against published
+`0.8.0-alpha.1`. A separate consumer check also verifies crates.io patches
+to Dioxus git revision `f9519967a6fb3e85bf3c1a2e2bf816a85033f752`, whose
+package version is `0.8.0-alpha.1`.
 
-Rust 1.85 is tested for the renderer-neutral library. The optional desktop
-dependency graph follows Dioxus Desktop's transitive MSRV and currently needs
-Rust 1.88 for the security-patched `time` release.
+Rust 1.88 is the minimum for the renderer-neutral library: Dioxus 0.8
+alpha uses let-chains, which Rust 1.85 cannot compile. The optional desktop
+dependency graph also requires Rust 1.88. The Dioxus 0.8 alpha CLI used to
+build the gallery requires Rust 1.93.
 
 The crate depends on `dioxus` with `default-features = false, features =
 ["minimal", "document", "mounted"]`. It still selects no renderer:
@@ -172,7 +174,7 @@ Cross-window drags on desktop are not a module: any provider joins a
 ## How it works
 
 In-app payloads travel through a shared `Store<DragState<T>>` in Dioxus
-context: any `Clone` type, zero serialization. Stores (Dioxus 0.7's
+context: any `Clone` type, zero serialization. Stores (Dioxus's
 fine-grained reactivity) give each state field its own lazy subscription, so
 a component that reads `dnd.over()` in render to highlight a zone reruns
 only when the hovered zone changes, not on every pointer move.
@@ -973,14 +975,13 @@ a row that scrolls into view *mid-drag* is hit-testable immediately. Give
 rows stable index-derived ids (`ZoneId(BASE + index)`) so a recycled row
 re-registers as itself.
 
-Two practical notes for the windowing itself. dioxus-web 0.7 delivers no
-element-level scroll events, so drive your window from `onvisible` on the
-rendered rows (each crossing of the container's clip reports an
-IntersectionObserver rect that, with the row's canvas position, recovers
-the scroll offset - Dioxus's documented virtual-list tool) plus
-`AutoScroll`'s `on_scroll` for its own edge-scrolling during drags. The
-gallery's [*Archive*](https://kindintelligence.github.io/dioxus-dnd/)
-page runs the full pattern at 10,000 rows, keyboard navigation included.
+For windowing, the gallery uses `onvisible` on the rendered rows (each
+crossing of the container's clip reports an IntersectionObserver rect that,
+with the row's canvas position, recovers the scroll offset - Dioxus's
+documented virtual-list tool) plus `AutoScroll`'s `on_scroll` for its own
+edge-scrolling during drags. The gallery's
+[*Archive*](https://kindintelligence.github.io/dioxus-dnd/) page runs the full
+pattern at 10,000 rows, keyboard navigation included.
 
 ## Debug overlay (dev-only)
 
@@ -1100,7 +1101,7 @@ npm ci && npm run test:web
 
 ## Platform notes
 
-- **Mouse pointer drags.** Dioxus 0.7 exposes no pointer-capture API, so
+- **Mouse pointer drags.** Dioxus 0.8 alpha exposes no pointer-capture API, so
   the behavior depends on the `web` feature:
   - **With `web`** (recommended for web): the crate grabs real pointer
     capture on press, so the drag stays glued to the source no matter where

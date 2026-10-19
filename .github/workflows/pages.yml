@@ -43,10 +43,10 @@ jobs:
       - name: Install Dioxus CLI
         uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
-          tool: dioxus-cli@0.7.10
+          tool: dioxus-cli@0.8.0-alpha.1
 
       - name: Build gallery
-        run: dx build --example gallery --platform web --features web --release --base-path /dioxus-dnd/
+        run: dx build --example gallery --platform web --features web --release --debug-symbols=false --base-path /dioxus-dnd/
 
       # GitHub Pages serves 404.html for unknown paths; serving the app
       # there lets dioxus-router handle deep links like /itinerary.

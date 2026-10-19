@@ -69,9 +69,8 @@ swap in any virtual list, keep the zones.
 
 ## The windowing signal
 
-dioxus-web 0.7 delivers no element-level scroll events - an `onscroll`
-handler on the container never fires. Dioxus's documented virtual-list tool
-is `onvisible`, and the rendered rows double as their own scroll sentinels:
+The gallery uses Dioxus's `onvisible` virtual-list tool, with the rendered
+rows doubling as their own scroll sentinels:
 whenever a row crosses the container's clip, its IntersectionObserver entry
 fires, and the entry's rect plus the row's known canvas position
 (`index * row_height`) recover the scroll offset. That covers wheel,

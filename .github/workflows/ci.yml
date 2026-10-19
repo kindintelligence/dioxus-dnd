@@ -204,13 +204,13 @@ jobs:
       - name: Install the Dioxus CLI
         uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
-          tool: dioxus-cli@0.7.10
+          tool: dioxus-cli@0.8.0-alpha.1
 
       - name: Run browser regressions
         run: npm run test:web
 
       - name: Build the release gallery
-        run: dx build --example gallery --platform web --features web --release --base-path /dioxus-dnd/
+        run: dx build --example gallery --platform web --features web --release --debug-symbols=false --base-path /dioxus-dnd/
 
       - name: Upload browser diagnostics on failure
         if: failure()
@@ -224,22 +224,22 @@ jobs:
           retention-days: 14
 
   msrv:
-    name: msrv-core-1.85
+    name: msrv-core-1.88
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install the minimum supported Rust version
-        run: rustup toolchain install 1.85.0 --profile minimal
+        run: rustup toolchain install 1.88.0 --profile minimal
 
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          key: msrv-core-1.85
+          key: msrv-core-1.88
           save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
       - name: Check the renderer-neutral library on the MSRV
-        run: cargo +1.85.0 check --locked --no-default-features --lib
+        run: cargo +1.88.0 check --locked --no-default-features --lib
 
   package:
     name: package
@@ -312,8 +312,8 @@ jobs:
         with:
           feature-group: all-features
 
-  dioxus-next:
-    name: dioxus-0.8-alpha
+  dioxus-git:
+    name: dioxus-git-f9519967
     runs-on: ubuntu-latest
 
     steps:
@@ -334,17 +334,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
-          key: dioxus-0.8-alpha
+          key: dioxus-git-f9519967
           save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development') }}
 
-      - name: Select published Dioxus 0.8 alpha packages
-        run: |
-          cargo add dioxus@0.8.0-alpha.1 \
-            --no-default-features --features minimal,document,mounted
-          cargo add dioxus-desktop@0.8.0-alpha.1 --optional
-          cargo add --dev dioxus@0.8.0-alpha.1 \
-            --no-default-features --features minimal,launch,web,document,mounted,router
-          cargo add --dev dioxus-ssr@0.8.0-alpha.1
-
-      - name: Test against published Dioxus 0.8 alpha
-        run: cargo test --all-features
+      - name: Check a downstream consumer with the pinned Dioxus git patch
+        run: bash .github/scripts/check-dioxus-git.sh

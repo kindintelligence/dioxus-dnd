@@ -34,9 +34,9 @@ jobs:
         id: metadata
         shell: bash
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
           then
-            echo "Release tags must use vMAJOR.MINOR.PATCH"
+            echo "Release tags must use vMAJOR.MINOR.PATCH with an optional prerelease suffix"
             exit 1
           fi
 
@@ -218,16 +218,22 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         shell: bash
         run: |
+          release_flags=(--latest)
+          if [[ "$VERSION" == *-* ]]
+          then
+            release_flags=(--prerelease --latest=false)
+          fi
+
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1
           then
             gh release edit "$GITHUB_REF_NAME" \
               --title "dioxus-dnd ${VERSION}" \
               --notes-file release-notes.md \
-              --latest
+              "${release_flags[@]}"
           else
             gh release create "$GITHUB_REF_NAME" \
               --verify-tag \
               --title "dioxus-dnd ${VERSION}" \
               --notes-file release-notes.md \
-              --latest
+              "${release_flags[@]}"
           fi
