@@ -56,12 +56,21 @@ impl SortableGroupId {
     }
 
     pub fn auto() -> Self {
-        let value = NEXT_GROUP
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .unwrap_or_else(|_| panic!("automatic sortable group id space exhausted"));
-        Self(value)
+        let mut current = NEXT_GROUP.load(Ordering::Relaxed);
+        loop {
+            let next = current
+                .checked_add(1)
+                .expect("automatic sortable group id space exhausted");
+            match NEXT_GROUP.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(value) => return Self(value),
+                Err(value) => current = value,
+            }
+        }
     }
 
     pub const fn get(self) -> u64 {
