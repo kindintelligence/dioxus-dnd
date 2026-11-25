@@ -21,7 +21,7 @@
 //! assert_eq!((p.x, p.y), (0.0, 260.0));
 //! ```
 
-use super::types::{Point, Rect};
+use super::types::{clamp_axis, Point, Rect};
 
 /// Geometry a modifier may need. Fields it doesn't need can stay `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -92,14 +92,6 @@ fn snap(v: f64, step: f64) -> f64 {
     }
 }
 
-fn clamp_axis(v: f64, min: f64, max: f64) -> f64 {
-    if min > max {
-        min // element larger than container: pin to origin
-    } else {
-        v.clamp(min, max)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +129,17 @@ mod tests {
     fn keep_inside_without_rects_is_noop() {
         let p = DragModifier::KeepInside.apply(Point::new(7.0, 8.0), &ModifierCtx::default());
         assert_eq!((p.x, p.y), (7.0, 8.0));
+    }
+
+    // It panicked: std `f64::clamp` with a NaN bound, from an element whose
+    // measured size was NaN (a detached node, a zero-size transform).
+    #[test]
+    fn keep_inside_with_a_nan_size_leaves_that_axis_unconstrained() {
+        let ctx = ModifierCtx {
+            container: Some(Rect::new(10.0, 10.0, 50.0, 50.0)),
+            element: Some(Rect::new(0.0, 0.0, f64::NAN, 20.0)),
+        };
+        let p = DragModifier::KeepInside.apply(Point::new(500.0, 100.0), &ctx);
+        assert_eq!((p.x, p.y), (500.0, 40.0));
     }
 }

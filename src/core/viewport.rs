@@ -4,7 +4,7 @@
 //! decide how zoom and pan are controlled; the helpers only convert points and
 //! deltas between screen/local space and world space.
 
-use super::types::Point;
+use super::types::{clamp_axis, Point};
 
 /// Pan/zoom transform for a coordinate plane.
 ///
@@ -30,6 +30,22 @@ impl CanvasViewport {
         Self { pan, zoom }
     }
 
+    /// This viewport zoomed to `zoom` about `at`, a screen/canvas-local point
+    /// (the cursor, a pinch's centre): the world point under `at` stays under
+    /// it. The zoom is held within `min..=max` first, as [`Self::clamped_zoom`]
+    /// holds it, so a zoom past a limit doesn't shift the pan.
+    pub fn zoom_at(self, at: Point, zoom: f64, min: f64, max: f64) -> Self {
+        let zoom = Self { zoom, ..self }.clamped_zoom(min, max).zoom;
+        let anchor = screen_to_world(at, self);
+        Self {
+            pan: Point::new(at.x - anchor.x * zoom, at.y - anchor.y * zoom),
+            zoom,
+        }
+    }
+
+    /// The zoom held within `min..=max`, with the pan unchanged: it zooms
+    /// about the screen point where the world origin is drawn. To keep the
+    /// point under the cursor still, use [`Self::zoom_at`].
     pub fn clamped_zoom(self, min: f64, max: f64) -> Self {
         let zoom = effective_zoom(self.zoom);
         let min = if min.is_finite() && min > 0.0 {
@@ -78,14 +94,6 @@ pub fn screen_delta_to_world(delta: Point, viewport: CanvasViewport) -> Point {
 pub fn world_delta_to_screen(delta: Point, viewport: CanvasViewport) -> Point {
     let zoom = effective_zoom(viewport.zoom);
     Point::new(delta.x * zoom, delta.y * zoom)
-}
-
-fn clamp_axis(v: f64, min: f64, max: f64) -> f64 {
-    if min > max {
-        min
-    } else {
-        v.clamp(min, max)
-    }
 }
 
 fn effective_zoom(zoom: f64) -> f64 {
@@ -152,6 +160,22 @@ mod tests {
                 .zoom,
             2.0
         );
+    }
+
+    /// Zooming about a point keeps the world point under it still, and a zoom
+    /// past the limit is clamped before the pan is worked out (it was clamped
+    /// after, which moved the point: (200, 150) drifted to (0, -50)).
+    #[test]
+    fn zoom_at_keeps_the_point_under_the_cursor_still_within_the_limits() {
+        let viewport = CanvasViewport::new(Point::new(100.0, 50.0), 1.0);
+        let cursor = Point::new(200.0, 150.0);
+        let under = screen_to_world(cursor, viewport);
+
+        let zoomed = viewport.zoom_at(cursor, 4.0, 0.5, 2.0);
+
+        assert_eq!(zoomed.zoom, 2.0);
+        assert_eq!(world_to_screen(under, zoomed), cursor);
+        assert_eq!(zoomed.pan, Point::new(0.0, -50.0));
     }
 
     #[test]

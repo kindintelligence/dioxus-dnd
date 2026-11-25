@@ -93,8 +93,11 @@ Where do move events go once the cursor leaves the element mid-drag? Dioxus
 features (this summarizes the README's "Platform notes"):
 
 - **Web with the `web` feature** (recommended for web): the crate grabs
-  real pointer capture on press. The drag stays glued to the source no
-  matter where the cursor goes, and a release anywhere commits the drop.
+  real pointer capture for a mouse once its press becomes a drag, or leaves
+  the source (not on press, which would send a click on a child to the
+  source instead), and for a finger or pen on press. The drag stays glued
+  to the source no matter where the cursor goes, and a release anywhere
+  commits the drop. Escape and the window losing focus cancel it.
 - **Web without it** (the dependency-free default): nothing retargets, so
   the crate compensates. Straying off the surface does not cancel the drag,
   and a mouse released outside is reconciled when the cursor returns, via

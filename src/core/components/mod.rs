@@ -96,9 +96,41 @@ pub(crate) fn protect_attributes(attributes: &mut Vec<Attribute>, protected: &[&
     attributes.retain(|attribute| !protected.contains(&attribute.name));
 }
 
+/// The caller's `name` attribute, taken out of the spread (the last one when
+/// it gave several), so the component writes the attribute itself from it. A
+/// value left unset (`None`, as `tabindex: None` gives) counts as not given.
+pub(crate) fn take_attribute(
+    attributes: &mut Vec<Attribute>,
+    name: &str,
+) -> Option<dioxus::core::AttributeValue> {
+    let mut taken = None;
+    attributes.retain(|attribute| {
+        if attribute.name != name {
+            return true;
+        }
+        if !matches!(attribute.value, dioxus::core::AttributeValue::None) {
+            taken = Some(attribute.value.clone());
+        }
+        false
+    });
+    taken
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unset_attribute_counts_as_not_given() {
+        let mut attributes = vec![
+            Attribute::new("tabindex", dioxus::core::AttributeValue::None, None, false),
+            Attribute::new("class", "card", None, false),
+        ];
+        assert_eq!(take_attribute(&mut attributes, "tabindex"), None);
+        assert_eq!(attributes.len(), 1, "the unset one is still taken out");
+        let mut attributes = vec![Attribute::new("tabindex", "-1", None, false)];
+        assert!(take_attribute(&mut attributes, "tabindex").is_some());
+    }
 
     #[test]
     fn protected_listener_and_state_names_are_removed_but_other_attrs_survive() {

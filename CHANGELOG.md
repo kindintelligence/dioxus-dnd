@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+### Fixes for canvases and other pointer-heavy surfaces
+
+- A mouse press is captured only once it becomes a drag, or leaves the
+  `Draggable`, not on press: a click or double click on a child (a handle,
+  a button, a title to rename) now reaches the child. A finger or pen is
+  still captured on press.
+- The `click` the browser fires on a `Draggable` when a mouse's or a pen's
+  drag ends is swallowed there; a finger's drag makes no click, so it sets
+  nothing to swallow, and a key clears what is left (Enter on a button
+  inside is a real click). `SelectableDraggable`'s own flag for this is
+  gone.
+- The grab offset is the press point less the `Draggable`'s measured box:
+  it was the event's `offsetX`/`offsetY`, measured from the innermost
+  element pressed (and before CSS transforms), so an item grabbed on a
+  child landed off by that child's offset.
+- With the `web` feature, Escape pressed anywhere and the window losing
+  focus cancel a pointer drag (`CancelReason::User` and
+  `CancelReason::PointerCancelled`). It dropped wherever the cursor came
+  back. The window listeners are added only in a wasm build: a desktop
+  build with the feature on has no window to listen to. The feature now
+  also enables `wasm-bindgen`, for the listeners' closures; it was already
+  in the graph through `web-sys`.
+- `pointercancel` and `lostpointercapture` end a drag only for its own
+  pointer: a second finger lifting no longer cancels the first one's drag.
+  A second finger down makes the gesture a pinch and ends the touch press
+  or drag.
+- Without capture, a mouse press that leaves the element before it is a
+  drag now ends, instead of staying open for a later hover to start a drag
+  with no button held.
+- A keyboard drag listens only to keys on the `Draggable` itself or its
+  `DragHandle`: Space typed in a field inside the item is the field's. Keys
+  an input method is composing, keys already handled inside
+  (`prevent_default`) and held repeats of Space or Enter are ignored (a
+  held Enter lifted the item, then dropped it into the first zone).
+- Focus leaving a `Draggable`, or the `DragHandle` that began its keyboard
+  drag, ends the drag, as Escape does, and so does the `Draggable`
+  unmounting mid-drag; all three left the drag live. Escape on any
+  `Draggable` ends the keyboard drag under way, and is stopped only then,
+  so a dialog around the drag doesn't close.
+- A `tabindex` passed to `Draggable` is kept: it was replaced by `0`, which
+  broke a list with one roving Tab stop. `tabindex: None` counts as none
+  given, so the element stays a Tab stop. `aria-roledescription` is written
+  only with the `role`, not on a handle-activated wrapper.
+- `NoDrag` resets `user-select` to `text`, so fields and `contenteditable`
+  inside a draggable select and edit again.
+- `DragModifier::KeepInside` no longer panics on a NaN size: every geometry
+  helper shares one non-panicking clamp.
+- A pointer move that changes nothing no longer redraws the `Draggable`.
+
+### Additions
+
+- `CanvasDropZone` takes `viewport: Option<CanvasViewport>`: drops are then
+  reported in world units, with `snap` and `bounds` applied in them (they
+  snapped in screen pixels, off the world grid at any zoom but 1).
+  `canvas_world_position` is that pipeline as a pure function.
+- `CanvasViewport::zoom_at(at, zoom, min, max)` zooms about a point and
+  clamps the zoom before working out the pan.
+
 ## 4.0.0-alpha.1 - 2026-10-19
 
 ### Breaking changes

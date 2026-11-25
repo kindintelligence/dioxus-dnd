@@ -2,8 +2,10 @@
 //! pointer-capture substitute, and the hierarchical keyboard navigation
 //! that walks the zone registry.
 
+use dioxus::core::AttributeValue;
 use dioxus::html::MountedData;
 use dioxus::prelude::*;
+use futures_util::StreamExt;
 
 use std::rc::Rc;
 
@@ -28,6 +30,7 @@ use super::delivery::{
 };
 use super::merge_style_invariant_last;
 use super::pointer::{pointer_client, primary_press, touch_style, HoldTimer};
+use super::take_attribute;
 use super::ActivatorContext;
 
 /// Internal: which hierarchical move an arrow key requested.
@@ -60,6 +63,29 @@ fn keyboard_drop_points(rect: Option<Rect>) -> (Point, Point) {
             (client, client - r.origin())
         }
         None => (Point::default(), Point::default()),
+    }
+}
+
+/// Where in the element the pointer took hold, in client pixels: the press
+/// point less the element's top-left. A press on a child is measured from
+/// this element, not from the child (the event's `offsetX` is the innermost
+/// target's, and is taken before CSS transforms). Until the element's box is
+/// measured, the event's own offset stands in.
+fn grab_offset(press: Point, element: Option<Rect>, event_offset: Point) -> Point {
+    element.map_or(event_offset, |rect| press - rect.origin())
+}
+
+/// Does the gesture in `phase` belong to `pointer_id`? A cancel or a lost
+/// capture from another pointer (a second finger lifting) leaves it alone.
+fn owns_pointer(phase: GesturePhase, pointer_id: i32) -> bool {
+    match phase {
+        GesturePhase::Pressed {
+            pointer_id: owner, ..
+        }
+        | GesturePhase::Dragging {
+            pointer_id: owner, ..
+        } => owner == pointer_id,
+        GesturePhase::Idle => false,
     }
 }
 
@@ -195,10 +221,6 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
     let has_activation_delay = !activation_delays.is_empty();
     let mut handle_pointer = use_signal(|| None::<i32>);
     let mut handle_keyboard = use_signal(|| false);
-    use_context_provider(|| ActivatorContext {
-        pointer: handle_pointer,
-        keyboard: handle_keyboard,
-    });
     // Separate clones for the two closures that need the payload.
     let kb_payload = payload.clone();
     let pointer_payload = payload.clone();
@@ -233,7 +255,11 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
             Promotion::Distance
         };
         let (next, fx) = transition_with(*phase.peek(), event, threshold, promotion);
-        phase.set(next);
+        // Every pointermove steps the machine; a set that changes nothing would
+        // still draw this element again.
+        if next != *phase.peek() {
+            phase.set(next);
+        }
         // Any exit from Pressed retires the pending hold - the drag began,
         // the press tapped out, or a vertical pull yielded to the scroll.
         if hold_pid.peek().is_some() && !matches!(next, GesturePhase::Pressed { .. }) {
@@ -250,7 +276,20 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
     let mut press_rect = use_signal(|| None::<Rect>);
     let mut press_measure_generation = use_signal(|| 0u64);
     let mut mods = use_signal(Modifiers::empty);
+    // Arms as a pointer drag starts, so the `click` the browser fires on this
+    // element at its release is swallowed; the next press disarms it.
+    let mut swallow_click = use_signal(|| false);
+    // Whether this element itself has focus, not a field or control inside it:
+    // only then does a key lift it.
+    let mut has_focus = use_signal(|| false);
+    // Escape and the window losing focus, heard while a pointer drag runs.
+    let mut cancel_watch = use_signal(|| None::<platform::CancelWatch>);
     let mut attributes = attributes;
+    // The caller's Tab stop, for a list that keeps one across its items.
+    let surface = matches!(activation.peek().activator, Activator::Surface);
+    let tabindex = take_attribute(&mut attributes, "tabindex").unwrap_or(AttributeValue::Int(
+        if disabled || !surface { -1 } else { 0 },
+    ));
     super::protect_attributes(
         &mut attributes,
         &[
@@ -264,7 +303,10 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
             "onlostpointercapture",
             "ontouchmove",
             "oncontextmenu",
-            "tabindex",
+            "onpointerleave",
+            "onclick",
+            "onfocus",
+            "onblur",
             "role",
             "aria-roledescription",
             "onkeydown",
@@ -292,6 +334,7 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
             }
         }
         captured.set(false);
+        cancel_watch.set(None);
         empty_held_moves.set(0);
         hold_pid.set(None);
         press_max_travel.set(0.0);
@@ -303,7 +346,76 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
             h.call(dropped);
         }
     });
+    // Ends this element's pointer press or drag as cancelled: a cancel or a lost
+    // capture for its pointer, a second finger, Escape, or the window losing
+    // focus.
+    let abort_pointer = use_callback(move |reason: CancelReason| {
+        let pointer_id = match *phase.peek() {
+            GesturePhase::Pressed { pointer_id, .. }
+            | GesturePhase::Dragging { pointer_id, .. } => pointer_id,
+            GesturePhase::Idle => return,
+        };
+        if let Some(n) = node.peek().clone() {
+            platform::release_pointer(&n, pointer_id);
+        }
+        if step(GestureEvent::Cancel, activation_threshold) == GestureEffect::Abort {
+            // Copied out of the peek before finishing - same borrow discipline
+            // as the pointerdown retire below.
+            let cancelled = *session.peek();
+            if let Some(id) = cancelled {
+                finish_pointer_source(membership, &mut dnd, id, DragCompletion::Cancelled(reason));
+            }
+        }
+    });
+    // The window listeners only send a reason (they run outside the Dioxus
+    // runtime); this task ends the drag with it.
+    let cancels = use_coroutine(
+        move |mut reasons: UnboundedReceiver<CancelReason>| async move {
+            while let Some(reason) = reasons.next().await {
+                abort_pointer.call(reason);
+            }
+        },
+    );
+    // Ends the keyboard drag under way, its item put back; `ours` when it is
+    // this element's, whose `on_drag_end` then hears it.
+    let end_keyboard_drag = use_callback({
+        let strings = strings.clone();
+        move |(reason, ours): (CancelReason, bool)| {
+            match membership {
+                Some(joined) => joined
+                    .world
+                    .finish_untracked(DragCompletion::Cancelled(reason)),
+                None => dnd.cancel_with_reason(reason),
+            }
+            dnd.announce((strings.cancelled)());
+            if let Some(h) = on_drag_end.as_ref().filter(|_| ours) {
+                h.call(false);
+            }
+        }
+    });
+    // Ends this element's keyboard drag: focus leaving the element or its
+    // handle, or the element going.
+    let cancel_keyboard_drag = use_callback(move |reason: CancelReason| {
+        if dnd.dragging() && dnd.mode() == DragMode::Keyboard && dnd.drag_id() == Some(drag_id) {
+            end_keyboard_drag.call((reason, true));
+        }
+    });
+    // Provided here, after the cancel it carries: a handle's blur ends the
+    // drag as the element's own does (blur doesn't bubble).
+    use_context_provider(|| ActivatorContext {
+        pointer: handle_pointer,
+        keyboard: handle_keyboard,
+        cancel: cancel_keyboard_drag,
+    });
     use_drop(move || {
+        // A destructor must not touch a context that is already gone: a
+        // panic here aborts the process (`DndContext::alive`).
+        if !dnd.alive() {
+            return;
+        }
+        // A keyboard drag of this element ends with it: nothing else would end
+        // it, and every zone would stay lit.
+        cancel_keyboard_drag.call(CancelReason::SourceUnmounted);
         let Some(id) = *session.peek() else {
             return;
         };
@@ -319,11 +431,17 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
     // hold timer's alarm - so the sequence lives in one callback.
     let begin_drag = use_callback(move |at: Point| {
         let source_rect = *press_rect.peek();
+        let gesture = *phase.peek();
+        let press = match gesture {
+            GesturePhase::Dragging { origin, .. } => origin,
+            _ => at,
+        };
+        let grab = grab_offset(press, source_rect, *press_offset.peek());
         let id = dnd.start_tracked_with_metadata(
             drag_id,
             DragStart::new(pointer_payload.clone(), at)
                 .with_source(zone)
-                .with_grab(*press_offset.peek())
+                .with_grab(grab)
                 .with_effect(effect)
                 .with_pointer_kind(*press_kind.peek())
                 .with_source_rect(source_rect),
@@ -334,6 +452,22 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
         }
         dnd.set_proposed_effect(effective_effect(effect, *mods.peek()));
         session.set(Some(id));
+        // A mouse's or a pen's release makes a click; a finger's drag makes
+        // none, which would leave the next real click swallowed.
+        if *press_kind.peek() != PointerKind::Touch {
+            swallow_click.set(true);
+        }
+        // Capture now that this is a drag, not at the press: captured at the
+        // press, the browser sent a plain click or double click on a child to
+        // this element instead (a capturing element is where `click` lands).
+        let mounted = node.peek().clone();
+        let already_captured = *captured.peek();
+        if let (GesturePhase::Dragging { pointer_id, .. }, Some(n), false) =
+            (gesture, mounted, already_captured)
+        {
+            captured.set(platform::capture_pointer(&n, pointer_id));
+        }
+        cancel_watch.set(Some(platform::watch_for_cancel(cancels.tx())));
         // Dress a size-matched ghost immediately from the press-time
         // measurement; fall back to measuring now only if the press's
         // measurement hasn't landed yet (a press promoted within a frame).
@@ -565,7 +699,22 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
                 // disabled or non-primary. A rejected handle event must not
                 // authorize a later mouse press that reuses the pointer id.
                 handle_pointer.set(None);
-                if disabled || !primary_press(&evt) {
+                if !primary_press(&evt) {
+                    // A second finger on this element while a finger's press or
+                    // drag runs is a pinch, not this drag: end it, and leave the
+                    // new press to the page.
+                    let gesture = *phase.peek();
+                    if gesture != GesturePhase::Idle
+                        && !owns_pointer(gesture, evt.pointer_id())
+                        && *press_kind.peek() == PointerKind::Touch
+                        && PointerKind::from_pointer_type(&evt.pointer_type()) == PointerKind::Touch
+                    {
+                        abort_pointer.call(CancelReason::PointerCancelled);
+                    }
+                    return;
+                }
+                swallow_click.set(false);
+                if disabled {
                     return;
                 }
                 if activation.peek().constraint.is_manual()
@@ -613,9 +762,19 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
                 // compatibility mouse event).
                 evt.prevent_default();
                 evt.stop_propagation();
-                captured.set(match node.peek().clone() {
-                    Some(n) => platform::capture_pointer(&n, evt.pointer_id()),
-                    None => false,
+                // A mouse is captured only once its press becomes a drag (or
+                // leaves this element): a mouse `click` lands on the capturing
+                // element, so capturing at the press sent a click on a child
+                // here instead. A finger or pen is captured now, as before:
+                // the browser has already captured it to the child pressed,
+                // and taking it over here while that capture is still pending
+                // fires no `lostpointercapture` on the child, which taking it
+                // over later does (bubbling here, it ended the drag). Its
+                // `click` comes from the tap, wherever the capture is.
+                let kind = PointerKind::from_pointer_type(&evt.pointer_type());
+                captured.set(match (kind, node.peek().clone()) {
+                    (PointerKind::Mouse, _) | (_, None) => false,
+                    (_, Some(n)) => platform::capture_pointer(&n, evt.pointer_id()),
                 });
                 let o = evt.element_coordinates();
                 press_offset.set(Point::new(o.x, o.y));
@@ -774,38 +933,53 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
                 };
                 finish_drop(point);
             },
+            // Only this gesture's own pointer ends it: a second finger
+            // lifting off this element must not cancel the first one's drag.
             onpointercancel: move |evt: PointerEvent| {
-                if let Some(n) = node.peek().clone() {
-                    platform::release_pointer(&n, evt.pointer_id());
+                if owns_pointer(*phase.peek(), evt.pointer_id()) {
+                    abort_pointer.call(CancelReason::PointerCancelled);
                 }
-                if step(GestureEvent::Cancel, activation_threshold) == GestureEffect::Abort {
-                    // Copied out of the peek before finishing - same borrow
-                    // discipline as the pointerdown retire above.
-                    let cancelled = *session.peek();
-                    if let Some(id) = cancelled {
-                        finish_pointer_source(
-                            membership,
-                            &mut dnd,
-                            id,
-                            DragCompletion::Cancelled(CancelReason::PointerCancelled),
-                        );
+            },
+            onlostpointercapture: move |evt: PointerEvent| {
+                if owns_pointer(*phase.peek(), evt.pointer_id()) {
+                    abort_pointer.call(CancelReason::PointerCancelled);
+                }
+            },
+            // Leaving this element before the press has become a drag: capture
+            // the pointer now, so its moves and release still arrive here.
+            // Where capture isn't available the press ends, rather than staying
+            // open for a later hover to start a drag with no button held.
+            onpointerleave: move |evt: PointerEvent| {
+                if let GesturePhase::Pressed { pointer_id, .. } = *phase.peek() {
+                    if pointer_id == evt.pointer_id() && !*captured.peek() {
+                        let mounted = node.peek().clone();
+                        let held =
+                            mounted.is_some_and(|n| platform::capture_pointer(&n, pointer_id));
+                        if held {
+                            captured.set(true);
+                        } else {
+                            let _ = step(GestureEvent::Cancel, activation_threshold);
+                        }
                     }
                 }
             },
-            onlostpointercapture: move |_| {
-                if step(GestureEvent::Cancel, activation_threshold) == GestureEffect::Abort {
-                    // Copied out of the peek before finishing - same borrow
-                    // discipline as the pointerdown retire above.
-                    let lost = *session.peek();
-                    if let Some(id) = lost {
-                        finish_pointer_source(
-                            membership,
-                            &mut dnd,
-                            id,
-                            DragCompletion::Cancelled(CancelReason::PointerCancelled),
-                        );
-                    }
+            // The click the browser fires on this element when a pointer
+            // drag's release ends it is no click: swallowed, so no handler
+            // above sees it. Every other click bubbles on as it came.
+            onclick: move |evt: MouseEvent| {
+                if *swallow_click.peek() {
+                    swallow_click.set(false);
+                    evt.prevent_default();
+                    evt.stop_propagation();
                 }
+            },
+            onfocus: move |_| has_focus.set(true),
+            // Focus leaving this element (Tab away, a click elsewhere, the
+            // window losing focus) ends its keyboard drag, its item put back,
+            // as Escape does.
+            onblur: move |_| {
+                has_focus.set(false);
+                cancel_keyboard_drag.call(CancelReason::User);
             },
             // A promoted drag owns the touch: cancel its moves so the
             // browser can't start a pan mid-drag. (`touch-action` is only
@@ -813,6 +987,16 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
             // dioxus-web's delegated listener is non-passive - see the
             // touch-sensor browser spec.
             ontouchmove: move |evt: TouchEvent| {
+                // A second finger down anywhere makes this a pinch: end the
+                // press or drag, and leave the touches to the page.
+                if evt.touches().len() > 1 {
+                    if *phase.peek() != GesturePhase::Idle
+                        && *press_kind.peek() == PointerKind::Touch
+                    {
+                        abort_pointer.call(CancelReason::PointerCancelled);
+                    }
+                    return;
+                }
                 if matches!(*phase.peek(), GesturePhase::Dragging { .. }) {
                     evt.prevent_default();
                 }
@@ -829,25 +1013,47 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
             // Space/Enter picks the item up, arrow keys cycle acceptable
             // zones, Space/Enter drops, Escape cancels. Announcements go
             // through the context; render `a11y::LiveRegion` to voice them.
-            tabindex: if disabled || !matches!(activation.peek().activator, Activator::Surface) { -1_i64 } else { 0 },
-            role: if matches!(activation.peek().activator, Activator::Surface) { Some("button") } else { None },
-            aria_roledescription: "draggable",
+            tabindex: tabindex,
+            role: if surface { Some("button") } else { None },
+            // Only an element with a role may describe it; with a handle the
+            // handle is the control.
+            aria_roledescription: if surface { Some("draggable") } else { None },
             onkeydown: move |evt: KeyboardEvent| {
-                if disabled {
-                    return;
+                // A key's click (Enter or Space on a button inside) is a real
+                // one, whatever drag came before.
+                if *swallow_click.peek() {
+                    swallow_click.set(false);
                 }
+                // Read and cleared first, so a key stopped below never leaves
+                // the next one marked as the handle's.
                 let from_handle = *handle_keyboard.peek();
                 handle_keyboard.set(false);
+                // An input method's key, or one something inside has already
+                // taken, is not the drag's.
+                if disabled || evt.is_composing() || !evt.default_action_enabled() {
+                    return;
+                }
                 if activation.peek().constraint.is_manual()
                     || matches!(activation.peek().activator, Activator::Manual)
                     || (matches!(activation.peek().activator, Activator::Handle) && !from_handle)
                 {
                     return;
                 }
+                // A key from a field or control inside the item is its own: a
+                // space typed in a rename field must not lift the node.
+                if !from_handle && !*has_focus.peek() {
+                    return;
+                }
                 let registry = registry;
                 let key = evt.key();
                 let is_activate = matches!(key, Key::Enter)
                     || matches!(&key, Key::Character(c) if c == " ");
+                // Held, Space or Enter repeats: the repeat would drop what the
+                // first press lifted.
+                if is_activate && evt.is_auto_repeating() {
+                    evt.prevent_default();
+                    return;
+                }
                 let kb_drag = dnd.dragging() && dnd.mode() == DragMode::Keyboard;
 
                 if !dnd.dragging() && is_activate {
@@ -994,19 +1200,12 @@ fn DraggableInstance<T: Clone + PartialEq + 'static>(
                     return;
                 }
 
-                if matches!(key, Key::Escape) {
+                // Escape ends any keyboard drag under way, this element's or
+                // another's; stopped too, so a dialog around it doesn't close.
+                if matches!(key, Key::Escape) && dnd.dragging() && dnd.mode() == DragMode::Keyboard {
                     evt.prevent_default();
-                    if let Some(joined) = membership {
-                        joined
-                            .world
-                            .finish_untracked(DragCompletion::Cancelled(CancelReason::User));
-                    } else {
-                        dnd.cancel();
-                    }
-                    dnd.announce((strings.cancelled)());
-                    if let Some(h) = &on_drag_end {
-                        h.call(false);
-                    }
+                    evt.stop_propagation();
+                    end_keyboard_drag.call((CancelReason::User, dnd.drag_id() == Some(drag_id)));
                 }
             },
             ..attributes,

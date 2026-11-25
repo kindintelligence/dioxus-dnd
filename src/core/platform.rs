@@ -5,14 +5,22 @@
 //! pointer paths fall back to their capture-free reconciliation (a held-button
 //! recovery plus not cancelling a drag that merely strays off the element).
 //!
-//! The one capability we need that Dioxus 0.8 does not expose is **pointer
-//! capture**: routing every later event for a pointer to one element until
-//! release, so a mouse drag survives the cursor leaving that element. Touch and
-//! pen get this implicitly from the browser; mouse does not, and there is no
-//! `setPointerCapture` on Dioxus' event or `MountedData`. This shim reaches the
-//! real DOM element through `MountedData::downcast` and calls it directly.
+//! Two capabilities we need are ones Dioxus 0.8 does not expose:
+//!
+//! - **Pointer capture**: routing every later event for a pointer to one
+//!   element until release, so a mouse drag survives the cursor leaving that
+//!   element. Touch and pen get this implicitly from the browser; mouse does
+//!   not, and there is no `setPointerCapture` on Dioxus' event or
+//!   `MountedData`. This shim reaches the real DOM element through
+//!   `MountedData::downcast` and calls it directly.
+//! - **Window events** ([`watch_for_cancel`]): Escape pressed anywhere and the
+//!   window losing focus must end a pointer drag, but no element of ours has
+//!   focus during one and Dioxus has no window listener. The listeners need a
+//!   JS closure, so this one shim uses `wasm-bindgen`.
 
 use dioxus::prelude::*;
+
+use crate::core::monitor::CancelReason;
 
 /// Route every subsequent event for `pointer_id` to `node` until the pointer is
 /// released, regardless of where the pointer travels. The native fix for "the
@@ -79,5 +87,96 @@ pub(crate) fn release_pointer(node: &MountedData, pointer_id: i32) {
     #[cfg(not(feature = "web"))]
     {
         let _ = (node, pointer_id);
+    }
+}
+
+/// While it lives, Escape pressed anywhere in the page (sent as
+/// [`CancelReason::User`]) and the window losing focus, as when the person
+/// switches to another app ([`CancelReason::PointerCancelled`]), each send a
+/// reason on `cancel`. Dropping it removes both listeners. A pointer drag holds
+/// one for its length, so either ends the drag rather than leaving it to drop
+/// wherever the cursor comes back. No-op without the `web` feature, and
+/// outside a browser (a desktop build with `web` on has no `window`, and
+/// `web_sys::window` panics off wasm).
+///
+/// The listeners only send on the channel: they run outside the Dioxus
+/// runtime, so the receiving task does the work.
+pub(crate) fn watch_for_cancel(cancel: UnboundedSender<CancelReason>) -> CancelWatch {
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    {
+        CancelWatch {
+            _listeners: web::Listeners::add(cancel),
+        }
+    }
+    #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+    {
+        let _ = cancel;
+        CancelWatch {}
+    }
+}
+
+/// The window listeners [`watch_for_cancel`] added; dropping it removes them.
+pub(crate) struct CancelWatch {
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    _listeners: Option<web::Listeners>,
+}
+
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+mod web {
+    use dioxus::prelude::UnboundedSender;
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    use crate::core::monitor::CancelReason;
+
+    pub(super) struct Listeners {
+        window: web_sys::Window,
+        keydown: Closure<dyn FnMut(web_sys::KeyboardEvent)>,
+        blur: Closure<dyn FnMut(web_sys::Event)>,
+    }
+
+    impl Listeners {
+        pub(super) fn add(cancel: UnboundedSender<CancelReason>) -> Option<Self> {
+            let window = web_sys::window()?;
+            let on_key = cancel.clone();
+            // Heard in the capture phase, so the drag's Escape comes first and
+            // a dialog around the drag doesn't also close on it.
+            let keydown = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
+                move |event: web_sys::KeyboardEvent| {
+                    if event.key() == "Escape" && !event.is_composing() {
+                        event.prevent_default();
+                        event.stop_propagation();
+                        let _ = on_key.unbounded_send(CancelReason::User);
+                    }
+                },
+            );
+            let blur = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+                let _ = cancel.unbounded_send(CancelReason::PointerCancelled);
+            });
+            let _ = window.add_event_listener_with_callback_and_bool(
+                "keydown",
+                keydown.as_ref().unchecked_ref(),
+                true,
+            );
+            let _ = window.add_event_listener_with_callback("blur", blur.as_ref().unchecked_ref());
+            Some(Self {
+                window,
+                keydown,
+                blur,
+            })
+        }
+    }
+
+    impl Drop for Listeners {
+        fn drop(&mut self) {
+            let _ = self.window.remove_event_listener_with_callback_and_bool(
+                "keydown",
+                self.keydown.as_ref().unchecked_ref(),
+                true,
+            );
+            let _ = self
+                .window
+                .remove_event_listener_with_callback("blur", self.blur.as_ref().unchecked_ref());
+        }
     }
 }

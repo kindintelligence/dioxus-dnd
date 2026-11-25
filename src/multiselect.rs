@@ -2,11 +2,7 @@
 
 use dioxus::prelude::*;
 
-use crate::core::{use_dnd, DragMode, Draggable, DropEffect, ZoneId};
-
-fn suppress_click_for_mode(mode: DragMode) -> bool {
-    mode == DragMode::Pointer
-}
+use crate::core::{use_dnd, Draggable, DropEffect, ZoneId};
 
 /// Selection state for keys of type `K`. Cheap to copy.
 pub struct Selection<K: Clone + PartialEq + 'static> {
@@ -241,7 +237,7 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     #[props(extends = div, extends = GlobalAttributes)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
-    let dnd = use_dnd::<Vec<K>>(); // fail fast with a clear panic if unprovided
+    use_dnd::<Vec<K>>(); // fail fast with a clear panic if unprovided
     let selected = selection.is_selected(&item);
     // Payload resolved from *current* selection each render: a selected item
     // drags the group, an unselected one drags itself.
@@ -252,11 +248,8 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
     };
     let click_key = item.clone();
     let mut selection = selection;
-    // The browser fires a trailing `click` on the source after a completed
-    // pointer drag; letting it through would collapse the just-dragged
-    // multi-selection to this one item. Drag start arms the flag, the next
-    // click consumes it - exactly one trailing click is swallowed.
-    let mut suppress_pointer_click = use_signal(|| false);
+    // The `Draggable` swallows the click a completed pointer drag ends with,
+    // so the just-dragged multi-selection doesn't collapse to this one item.
     let mut attributes = attributes;
     crate::core::components::protect_attributes(
         &mut attributes,
@@ -267,10 +260,6 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
         div {
             "data-selected": if selected { "true" },
             onclick: move |evt: MouseEvent| {
-                if *suppress_pointer_click.peek() {
-                    suppress_pointer_click.set(false);
-                    return;
-                }
                 selection.click(click_key.clone(), evt.modifiers());
             },
             ..attributes,
@@ -279,28 +268,7 @@ pub fn SelectableDraggable<K: Clone + PartialEq + 'static>(
                 zone,
                 effect,
                 label,
-                on_drag_start: move |_| {
-                    if suppress_click_for_mode(dnd.mode()) {
-                        suppress_pointer_click.set(true);
-                    }
-                },
-                on_drag_end: move |dropped: bool| {
-                    if !dropped {
-                        suppress_pointer_click.set(false);
-                    }
-                },
-                div {
-                    onpointerdown: move |_| {
-                        // This surface runs before Draggable's root stops
-                        // pointerdown propagation. The outer selection
-                        // surface owns click because pointer capture retargets
-                        // pointerup (and therefore click) to that root.
-                        if !dnd.dragging() && *suppress_pointer_click.peek() {
-                            suppress_pointer_click.set(false);
-                        }
-                    },
-                    {children}
-                }
+                div { {children} }
             }
         }
     }
@@ -327,12 +295,6 @@ pub fn SelectionCount<K: Clone + PartialEq + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_pointer_drags_arm_browser_click_suppression() {
-        assert!(suppress_click_for_mode(DragMode::Pointer));
-        assert!(!suppress_click_for_mode(DragMode::Keyboard));
-    }
 
     fn ctrl_click_anchor_probe() -> Element {
         let mut selection = use_selection::<u8>();

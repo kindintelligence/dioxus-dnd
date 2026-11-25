@@ -4,9 +4,11 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 
+use crate::core::types::clamp_axis;
 use crate::core::{
-    use_dnd, use_parent_zone, use_zone_id, use_zone_registry, DragMode, DropEffect, DropOutcome,
-    Point, Rect, ZoneId, ZoneRecord,
+    screen_delta_to_world, screen_to_world, use_dnd, use_parent_zone, use_zone_id,
+    use_zone_registry, CanvasViewport, DragMode, DropEffect, DropOutcome, Point, Rect, ZoneId,
+    ZoneRecord,
 };
 
 /// A payload dropped at a position on the canvas.
@@ -18,9 +20,11 @@ use crate::core::{
 pub struct CanvasDrop<T> {
     pub payload: T,
     /// Top-left position for the dropped element, relative to the canvas -
-    /// already corrected for grab offset, snapping, and bounds.
+    /// already corrected for grab offset, snapping, and bounds. In world
+    /// units when the zone has a `viewport`.
     pub position: Point,
-    /// The raw pointer position relative to the canvas, untouched.
+    /// The raw pointer position relative to the canvas, untouched (in world
+    /// units when the zone has a `viewport`).
     pub pointer: Point,
 }
 
@@ -120,6 +124,23 @@ pub fn canvas_position(
     position
 }
 
+/// [`canvas_position`] on a panned and zoomed canvas: the canvas-local
+/// `pointer` and the `grab` offset (screen pixels) are converted through
+/// `viewport` first, so `snap` and `bounds` work in world units, as the
+/// items' places do. Returns the world pointer and the corrected world
+/// top-left.
+pub fn canvas_world_position(
+    pointer: Point,
+    grab: Point,
+    viewport: CanvasViewport,
+    snap: Option<SnapGrid>,
+    bounds: Option<Bounds>,
+) -> (Point, Point) {
+    let pointer = screen_to_world(pointer, viewport);
+    let grab = screen_delta_to_world(grab, viewport);
+    (pointer, canvas_position(pointer, grab, snap, bounds))
+}
+
 /// Resolve the canvas-local pointer for a keyboard drop.
 pub fn canvas_keyboard_pointer(policy: CanvasKeyboardPlacement, element: Point) -> Point {
     match policy {
@@ -127,19 +148,6 @@ pub fn canvas_keyboard_pointer(policy: CanvasKeyboardPlacement, element: Point) 
         CanvasKeyboardPlacement::Origin => Point::default(),
         CanvasKeyboardPlacement::Fixed(point) => point,
     }
-}
-
-fn clamp_axis(v: f64, min: f64, max: f64) -> f64 {
-    // std `f64::clamp` panics when a bound is NaN or when min > max. Treat a
-    // NaN bound as "unconstrained" on that side (rather than snapping the item
-    // to the origin), and an inverted *finite* range - e.g. an item larger than
-    // the container - pins to `min`, matching KeepInside's oversized behavior.
-    let lo = if min.is_nan() { f64::NEG_INFINITY } else { min };
-    let hi = if max.is_nan() { f64::INFINITY } else { max };
-    if lo > hi {
-        return if min.is_nan() { v } else { min };
-    }
-    v.clamp(lo, hi)
 }
 
 /// A canvas that reports drop positions.
@@ -162,6 +170,12 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
     /// Clamp the corrected top-left position into these bounds.
     #[props(default)]
     bounds: Option<Bounds>,
+    /// The canvas's pan and zoom, when its content is drawn through one. A
+    /// drop's `pointer` and `position` are then world units, and `snap` and
+    /// `bounds` are applied in them; without it, both are canvas-local
+    /// pixels.
+    #[props(default)]
+    viewport: Option<CanvasViewport>,
     /// Placement policy for keyboard-driven canvas drops.
     #[props(default)]
     keyboard: CanvasKeyboardPlacement,
@@ -181,6 +195,7 @@ pub fn CanvasDropZone<T: Clone + PartialEq + 'static>(
                 zone_id: keyed_zone_id,
                 snap,
                 bounds,
+                viewport,
                 keyboard,
                 label: label.clone(),
                 on_drop,
@@ -196,6 +211,7 @@ fn CanvasDropZoneInstance<T: Clone + PartialEq + 'static>(
     zone_id: ZoneId,
     snap: Option<SnapGrid>,
     bounds: Option<Bounds>,
+    viewport: Option<CanvasViewport>,
     keyboard: CanvasKeyboardPlacement,
     label: Option<String>,
     on_drop: EventHandler<CanvasDrop<T>>,
@@ -215,7 +231,10 @@ fn CanvasDropZoneInstance<T: Clone + PartialEq + 'static>(
         } else {
             o.element
         };
-        let position = canvas_position(pointer, o.grab, snap, bounds);
+        let (pointer, position) = match viewport {
+            Some(viewport) => canvas_world_position(pointer, o.grab, viewport, snap, bounds),
+            None => (pointer, canvas_position(pointer, o.grab, snap, bounds)),
+        };
         on_drop.call(CanvasDrop {
             payload: o.payload,
             position,
@@ -359,6 +378,24 @@ mod tests {
         );
 
         assert_eq!(p, Point::new(100.0, 40.0));
+    }
+
+    /// On a zoomed, panned canvas the grid is the world's: snapping the
+    /// screen position first put (300, 180) at world (102, 63), on no grid.
+    #[test]
+    fn a_world_position_snaps_to_the_world_grid() {
+        let viewport = CanvasViewport::new(Point::new(100.0, 50.0), 2.0);
+
+        let (pointer, position) = canvas_world_position(
+            Point::new(320.0, 200.0),
+            Point::new(20.0, 20.0),
+            viewport,
+            Some(SnapGrid(16.0)),
+            None,
+        );
+
+        assert_eq!(pointer, Point::new(110.0, 75.0));
+        assert_eq!(position, Point::new(96.0, 64.0));
     }
 
     #[test]

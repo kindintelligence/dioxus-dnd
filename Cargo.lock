@@ -1025,6 +1025,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unic-langid",
+ "wasm-bindgen",
  "web-sys",
  "x11rb 0.14.0",
 ]

@@ -48,8 +48,9 @@ rsx! {
 
 ## The keyboard model
 
-Every `Draggable` is focusable (`tabindex="0"`, `role="button"`,
-`aria-roledescription="draggable"`) and fully operable without a pointer:
+Every `Draggable` is focusable (`tabindex="0"` unless you pass your own, for
+a list with one Tab stop; `role="button"`, `aria-roledescription="draggable"`)
+and fully operable without a pointer:
 
 - **Space or Enter** picks the focused item up.
 - **Up and Down** cycle the acceptable zones at the current level, in
@@ -59,8 +60,9 @@ Every `Draggable` is focusable (`tabindex="0"`, `role="button"`,
   ascends to its parent - the WAI-ARIA tree convention, mirrored under
   RTL. In flat apps with no nesting they fall back to next and previous.
 - **Space or Enter** drops into the selected zone.
-- **Escape** cancels. There is no keyboard trap: focus never leaves the
-  item, and every drag can be abandoned.
+- **Escape** cancels, and so does focus leaving the item, or the handle that
+  lifted it (Tab away). There is no keyboard trap, and nothing stays lifted
+  behind the person's back.
 
 Zones whose `accepts` rejects the payload are skipped entirely, the same
 zones a pointer drag falls through. And when a drop re-mounts the moved

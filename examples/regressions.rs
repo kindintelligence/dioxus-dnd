@@ -29,6 +29,7 @@ fn App() -> Element {
         HandleTokenFixture {}
         AutoScrollFixture {}
         CanvasGrabFixture {}
+        CanvasGesturesFixture {}
         CopyMoveFixture {}
         AccessibleReorderFixture {}
         NativeBoundaryFixture {}
@@ -51,6 +52,7 @@ fn App() -> Element {
 #[component]
 fn HandleTokenFixture() -> Element {
     let mut starts = use_signal(|| 0u32);
+    let mut ends = use_signal(|| 0u32);
     rsx! {
         section {
             h2 { "Handle press isolation" }
@@ -59,12 +61,14 @@ fn HandleTokenFixture() -> Element {
                     payload: 1,
                     activation: ActivationPolicy::handle(ActivationConstraint::Distance(8.0)),
                     on_drag_start: move |_| starts += 1,
+                    on_drag_end: move |_| ends += 1,
                     id: "handle-token-root",
                     style: "display:flex; gap:12px; width:240px; padding:12px; border:1px solid #999;",
                     span { class: "handle-token-surface", "card body" }
                     DragHandle { id: "handle-token-button", label: "Move card", "move" }
                 }
-                div { id: "handle-token-status", "data-starts": "{starts}" }
+                div { id: "handle-token-status", "data-starts": "{starts}", "data-ends": "{ends}" }
+                button { id: "handle-token-after", "After the card" }
             }
         }
     }
@@ -536,6 +540,61 @@ fn CanvasGrabFixture() -> Element {
                             "Input"
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// --- canvas gestures: clicks inside a node, the grab, Escape, a second finger,
+// keys in a field, held keys and focus leaving ---------------------------------
+
+#[component]
+fn CanvasGesturesFixture() -> Element {
+    let mut at = use_signal(|| Point::new(40.0, 40.0));
+    let mut clicks = use_signal(|| 0u32);
+    let mut child_clicks = use_signal(|| 0u32);
+    let mut child_doubles = use_signal(|| 0u32);
+    let mut end = use_signal(|| "none");
+    let place = at();
+    rsx! {
+        section {
+            h2 { "Canvas gestures" }
+            DndProvider::<u32> {
+                CanvasDropZone::<u32> {
+                    on_drop: move |d: CanvasDrop<u32>| at.set(d.position),
+                    "data-fixture": "cg-canvas",
+                    style: "position: relative; width: 480px; height: 240px; border: 1px solid #ccc;",
+                    // Where an app hears a click on the node: the click bubbles
+                    // up to it.
+                    div { onclick: move |_| clicks += 1,
+                        Draggable::<u32> {
+                            payload: 1,
+                            label: "Node",
+                            touch: TouchSense::Immediate,
+                            on_drag_end: move |dropped: bool| {
+                                end.set(if dropped { "dropped" } else { "cancelled" })
+                            },
+                            id: "cg-node",
+                            style: "position: absolute; left: {place.x}px; top: {place.y}px; width: 160px; background: #fff; border: 1px solid #333;",
+                            div { id: "cg-header", style: "height: 32px; background: #ddd;", "Header" }
+                            div { id: "cg-body", style: "height: 48px;", "Body" }
+                            button {
+                                id: "cg-child",
+                                onclick: move |_| child_clicks += 1,
+                                ondoubleclick: move |_| child_doubles += 1,
+                                "Child"
+                            }
+                            input { id: "cg-field", r#type: "text", aria_label: "Name" }
+                        }
+                    }
+                }
+                div {
+                    id: "cg-status",
+                    "data-clicks": "{clicks}",
+                    "data-child-clicks": "{child_clicks}",
+                    "data-child-doubles": "{child_doubles}",
+                    "data-end": "{end}",
                 }
             }
         }

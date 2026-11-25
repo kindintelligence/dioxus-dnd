@@ -32,8 +32,8 @@ pub mod prelude {
     };
     pub use crate::bridge_drop_zone;
     pub use crate::canvas::{
-        canvas_keyboard_pointer, canvas_position, canvas_to_client, client_to_canvas, Bounds,
-        CanvasDrop, CanvasDropZone, CanvasKeyboardPlacement, SnapGrid,
+        canvas_keyboard_pointer, canvas_position, canvas_to_client, canvas_world_position,
+        client_to_canvas, Bounds, CanvasDrop, CanvasDropZone, CanvasKeyboardPlacement, SnapGrid,
     };
     pub use crate::core::{
         apply_clone_or_move, apply_list_clone_or_move, apply_modifiers, client_point, edge_of,
