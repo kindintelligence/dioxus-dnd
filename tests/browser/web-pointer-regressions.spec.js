@@ -124,6 +124,24 @@ test("a rejected handle press cannot authorize a later surface press", async ({ 
   await expect(fixture.locator("#handle-token-root")).not.toHaveAttribute("data-dragging", "true");
 });
 
+test("a keyboard drag begun on a handle ends when focus leaves the handle", async ({ page }) => {
+  await openFixtures(page);
+  const fixture = await section(page, "Handle press isolation");
+  await fixture.scrollIntoViewIfNeeded();
+  const handle = fixture.locator("#handle-token-button");
+  const status = fixture.locator("#handle-token-status");
+
+  await handle.focus();
+  await page.keyboard.press("Space");
+  await expect(status).toHaveAttribute("data-starts", "1");
+  await expect(status).toHaveAttribute("data-ends", "0");
+  // Blur doesn't bubble, so only the handle hears focus leave it.
+  await page.keyboard.press("Tab");
+  await expect(fixture.locator("#handle-token-after")).toBeFocused();
+  await expect(status).toHaveAttribute("data-ends", "1");
+  await expect(fixture.locator("#handle-token-root")).not.toHaveAttribute("data-dragging", "true");
+});
+
 test("sortable overlay matches the source row and cleans up after drop", async ({ page }) => {
   await openFixtures(page);
 

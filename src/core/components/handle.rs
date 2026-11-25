@@ -6,6 +6,9 @@ use dioxus::prelude::*;
 pub(crate) struct ActivatorContext {
     pub pointer: Signal<Option<i32>>,
     pub keyboard: Signal<bool>,
+    /// Ends the draggable's keyboard drag; the handle calls it as focus leaves
+    /// it, which the draggable can't hear (blur doesn't bubble).
+    pub cancel: Callback<crate::core::monitor::CancelReason>,
 }
 
 /// An accessible button that activates the nearest handle-only
@@ -27,6 +30,7 @@ pub fn DragHandle(
             "data-dnd-handle",
             "onpointerdown",
             "onkeydown",
+            "onblur",
         ],
     );
     let style = super::merge_style_invariant_last(
@@ -56,6 +60,13 @@ pub fn DragHandle(
                     keyboard.set(true);
                 }
             },
+            // Focus leaving the handle ends a keyboard drag it began, as
+            // Escape does: Tab away and the item goes back.
+            onblur: move |_| {
+                if let Some(context) = activator {
+                    context.cancel.call(crate::core::monitor::CancelReason::User);
+                }
+            },
             ..attributes,
             {children}
         }
@@ -63,7 +74,9 @@ pub fn DragHandle(
 }
 
 /// Stop pointer and keyboard events in an interactive subtree from
-/// activating a surface-driven draggable.
+/// activating a surface-driven draggable, and give its text back the
+/// selection a draggable turns off (`user-select: none` is inherited, which
+/// breaks selecting in a field and typing in `contenteditable`).
 #[component]
 pub fn NoDrag(
     #[props(extends = span, extends = GlobalAttributes)] attributes: Vec<Attribute>,
@@ -74,9 +87,14 @@ pub fn NoDrag(
         &mut attributes,
         &["data-no-drag", "onpointerdown", "onkeydown"],
     );
+    let style = super::merge_style_user_last(
+        &mut attributes,
+        "user-select: text; -webkit-user-select: text;",
+    );
     rsx! {
         span {
             "data-no-drag": "true",
+            style,
             onpointerdown: move |event: PointerEvent| event.stop_propagation(),
             onkeydown: move |event: KeyboardEvent| event.stop_propagation(),
             ..attributes,

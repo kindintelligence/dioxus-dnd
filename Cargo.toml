@@ -56,14 +56,23 @@ serde_json = { version = "1", optional = true }
 # pulls. Not an exact pin, so apps on a newer web-sys still build. `Element` brings
 # `set_pointer_capture`; `Location` supplies the missing dioxus-web
 # document/history feature (including in minimal downstream web builds).
-# No wasm-bindgen: we downcast via Dioxus, not JsCast.
-web-sys = { version = "0.3.98", optional = true, features = ["Element", "Location"] }
+# `Window`, `EventTarget`, `Event` and `KeyboardEvent` let a pointer drag hear
+# Escape and the window losing focus (`platform::watch_for_cancel`).
+web-sys = { version = "0.3.98", optional = true, features = ["Element", "Location", "Window", "EventTarget", "Event", "KeyboardEvent"] }
+# `web` feature only, and already in the graph through web-sys: a window
+# listener needs a JS closure (`Closure`), which Dioxus 0.8 has no API for.
+# Elements are still reached through Dioxus' downcast, not JsCast.
+wasm-bindgen = { version = "0.2.100", optional = true }
 # `desktop` feature only: `MultiWindowProvider` and its lower-level
 # geometry-feed/cross-window-bridge pieces touch tao through
 # dioxus-desktop, and the bridge's cursor poller sleeps on the tokio
 # runtime dioxus-desktop already drives.
 dioxus-desktop = { version = "=0.8.0-alpha.1", optional = true }
 tokio = { version = "1", default-features = false, features = ["time"], optional = true }
+# `StreamExt::next` for the channel a pointer drag's window listeners send on
+# (`platform::watch_for_cancel`). Already in the graph through dioxus-hooks,
+# so it adds no crate.
+futures-util = { version = "0.3", default-features = false }
 # Registry mutation diagnostics (`trace`), bridge-leg diagnostics (`debug`),
 # and platform-model tripwires (`warn`). Dioxus core/signals already compile
 # tracing, so making it a direct dependency adds no crate to the base graph.
@@ -82,9 +91,10 @@ default = []
 ## Typed DataTransfer payloads in `external::typed` (serde round-trip).
 serde = ["dep:serde", "dep:serde_json"]
 ## Native pointer capture via `web-sys` for capture-solid mouse pointer-drags
-## on web (keeps your styled `DragOverlay`). Off by default; the core stays
-## dependency-free and mouse pointer-drag falls back to best-effort.
-web = ["dep:web-sys"]
+## on web (keeps your styled `DragOverlay`), and Escape or the window losing
+## focus ending a pointer drag. Off by default; the core stays dependency-free
+## and mouse pointer-drag falls back to best-effort.
+web = ["dep:web-sys", "dep:wasm-bindgen"]
 ## Desktop windowing glue for multi-window drag worlds (`crate::desktop`):
 ## `MultiWindowProvider` is the one-per-window convenience; the lower-level
 ## `use_window_geometry_feed` + `DragBridge` remain available for custom
@@ -109,7 +119,6 @@ dioxus-ssr = "=0.8.0-alpha.1"
 # `Location`; features are additive, so enabling it here fixes the build.
 web-sys = { version = "0.3", features = ["Location"] }
 bytes = "1"
-futures-util = { version = "0.3", default-features = false }
 # serde derive for the typed-transport tests and fixtures (the library's
 # own optional serde dep stays derive-free).
 serde = { version = "1", features = ["derive"] }

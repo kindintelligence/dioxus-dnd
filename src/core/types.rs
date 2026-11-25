@@ -129,6 +129,19 @@ impl Rect {
     }
 }
 
+/// `v` held within `min..=max`, without panicking: std `f64::clamp` panics
+/// when a bound is NaN or when `min > max`. A NaN bound leaves that side
+/// unconstrained, and an inverted finite range (an item larger than its
+/// container) pins to `min`. The one clamp every geometry helper uses.
+pub(crate) fn clamp_axis(v: f64, min: f64, max: f64) -> f64 {
+    let lo = if min.is_nan() { f64::NEG_INFINITY } else { min };
+    let hi = if max.is_nan() { f64::INFINITY } else { max };
+    if lo > hi {
+        return if min.is_nan() { v } else { min };
+    }
+    v.clamp(lo, hi)
+}
+
 /// One side of a drop zone's rectangle - which edge the pointer is nearest.
 /// The vocabulary for insertion indicators on a bare drop zone: "drop
 /// *above* this row" is `Top`, "append after it" is `Bottom`. Edges are

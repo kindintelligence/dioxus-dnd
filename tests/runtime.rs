@@ -2620,9 +2620,11 @@ fn forwarded_attributes_cannot_replace_component_invariants() {
         html.contains(r#"role="button""#),
         "draggable role replaced: {html}"
     );
+    // The Tab stop is the caller's, not an invariant: a list that keeps one
+    // Tab stop across its items (WAI-ARIA's roving tabindex) gives the rest -1.
     assert!(
-        html.contains("tabindex=0"),
-        "draggable tabindex replaced: {html}"
+        html.contains("tabindex=-1") && !html.contains("tabindex=0"),
+        "the caller's tabindex was not kept: {html}"
     );
     assert!(
         html.contains(r#"data-active="true""#) && !html.contains("caller-value"),

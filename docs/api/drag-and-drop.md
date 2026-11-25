@@ -74,6 +74,33 @@ Down cycle zones in spatial order, Right descends into nested zones and Left
 ascends (mirrored under `Direction::Rtl`), Escape cancels. Keyboard drops
 deliver the same `DropOutcome` with `mode: DragMode::Keyboard`.
 
+- A key is the drag's only while the element itself, or its `DragHandle`,
+  has focus: Space typed in a field inside the item stays the field's. Keys
+  an input method is composing, and keys something inside has already
+  handled (`prevent_default`), are left alone, and a held Space or Enter
+  repeats nothing.
+- Focus leaving the element, or the `DragHandle` that began the drag (Tab, a
+  click elsewhere), ends its keyboard drag and puts the item back, as Escape
+  does; so does the element unmounting. Escape on any `Draggable` ends the
+  keyboard drag under way.
+- The element is a Tab stop (`tabindex="0"`) unless it is disabled or
+  handle-activated. A `tabindex` you pass replaces that, for a list that
+  keeps one Tab stop across its items.
+
+Pointer:
+
+- A mouse is captured only once its press becomes a drag, or leaves the
+  element, so a click or double click on a child reaches the child. The
+  `click` that ends a mouse's or a pen's drag is swallowed at the element
+  (a finger's drag makes none); hear a plain click on the item from an
+  element around it.
+- The grab offset is measured from the element's box, whichever child was
+  pressed, so the item lands where its ghost was.
+- With the `web` feature, Escape pressed anywhere and the window losing
+  focus cancel a pointer drag.
+- A second finger ends a touch press or drag (a pinch), and a cancel or a
+  lost capture from another pointer leaves the drag alone.
+
 ### Activation policies and handles
 
 `ActivationPolicy` combines an `Activator` (`Surface`, `Handle`, or
@@ -102,7 +129,9 @@ Draggable::<Card> {
 
 For a surface-configured draggable, wrap controls that must never start a
 drag in `NoDrag`. It stops pointer and keyboard activation while preserving
-the control's normal behavior and exposes `data-no-drag` for inspection.
+the control's normal behavior, gives its contents back the text selection
+the draggable turns off (`user-select: text`), and exposes `data-no-drag`
+for inspection.
 
 ## `DropZone`
 

@@ -36,6 +36,7 @@ not where the pointer tip was. Generic over `T: Clone + PartialEq +
 | `id` | `Option<ZoneId>` | auto | Stable identity. Auto-generated ids start at 2^32; explicit ids in `u32` range never collide with them. |
 | `snap` | `Option<SnapGrid>` | `None` | Snap the corrected position to a square grid. |
 | `bounds` | `Option<Bounds>` | `None` | Clamp the corrected top-left position into these bounds. |
+| `viewport` | `Option<CanvasViewport>` | `None` | The canvas's pan and zoom, when its content is drawn through one. A drop's `pointer` and `position` are then world units, and `snap` and `bounds` apply in world units, so items land on the world's grid at any zoom. |
 | `keyboard` | `CanvasKeyboardPlacement` | `Center` | Placement policy for keyboard-driven canvas drops. |
 | `label` | `Option<String>` | `None` | Announced to screen readers when a keyboard drag targets the canvas. Kept in sync if the prop changes. |
 | `on_drop` | `EventHandler<CanvasDrop<T>>` | required | Fired with the completed, corrected drop. |
@@ -53,9 +54,9 @@ Behavior notes:
 - It has no `accepts` filter: every payload of `T` can land, and
   `data-active` lights for every drag in the provider. Style the canvas as
   a target then, e.g. Tailwind `data-active:outline-dashed`.
-- `snap`, `bounds` and `keyboard` are live props. They are mirrored into
-  signals so the drop callback, registered once at first render, reads the
-  current values; a change is observed by same-frame drops.
+- `snap`, `bounds`, `viewport` and `keyboard` are live props: the drop
+  callback, registered once at first render, keeps the latest render's
+  closure (`use_callback`), so a change is observed by the next drop.
 - On a keyboard drop the zone resolves the placement pointer through the
   `keyboard` policy before running the position pipeline. Keyboard drops
   carry a zero grab offset.
@@ -67,7 +68,8 @@ Behavior notes:
 ## `CanvasDrop`
 
 A payload dropped at a position on the canvas, delivered to `on_drop`. Both
-points are relative to the canvas.
+points are relative to the canvas, in world units when the zone has a
+`viewport`.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -126,6 +128,7 @@ Pure functions, usable for live previews and custom flows:
 | Function | Returns | What it does |
 |---|---|---|
 | `canvas_position(pointer, grab, snap, bounds)` | `Point` | The exact pipeline the zone runs: `pointer - grab`, then optional `SnapGrid`, then optional `Bounds`, in that fixed order. |
+| `canvas_world_position(pointer, grab, viewport, snap, bounds)` | `(Point, Point)` | The pipeline a zone with a `viewport` runs: the canvas-local `pointer` and the `grab` (screen pixels) converted to world units first, then `canvas_position`. Returns the world pointer and the corrected world top-left. |
 | `canvas_keyboard_pointer(policy, element)` | `Point` | Resolve the canvas-local pointer for a keyboard drop; `element` is the zone-local point core navigation supplies. |
 | `client_to_canvas(client, canvas_rect)` | `Point` | Convert a viewport/client point to canvas-local coordinates (`client - canvas_rect.origin()`). |
 | `canvas_to_client(point, canvas_rect)` | `Point` | Convert a canvas-local point back to viewport/client coordinates. |
@@ -151,7 +154,8 @@ screen coordinates. `Default` is `pan: (0, 0)`, `zoom: 1.0`; construct with
 | `world_to_screen(point, viewport)` | `Point` | `point * zoom + pan`: a world point into canvas-local coordinates for rendering. |
 | `screen_delta_to_world(delta, viewport)` | `Point` | `delta / zoom`: a screen movement into world units. Deltas ignore `pan`. |
 | `world_delta_to_screen(delta, viewport)` | `Point` | `delta * zoom`: a world movement into screen units. |
-| `CanvasViewport::clamped_zoom(min, max)` | `CanvasViewport` | Copy of the viewport with `zoom` clamped into `min..=max`. An invalid `min` (non-finite or `<= 0`) becomes `0.0`; an invalid `max` leaves the upper side unclamped. |
+| `CanvasViewport::zoom_at(at, zoom, min, max)` | `CanvasViewport` | The viewport zoomed to `zoom` about the canvas-local point `at` (the cursor, a pinch's centre): the world point under `at` stays under it. The zoom is clamped into `min..=max` first, so a zoom past a limit doesn't shift the pan. Use this for wheel and pinch zoom. |
+| `CanvasViewport::clamped_zoom(min, max)` | `CanvasViewport` | Copy of the viewport with `zoom` clamped into `min..=max` and the pan unchanged, so it zooms about the screen point where the world origin is drawn. An invalid `min` (non-finite or `<= 0`) becomes `0.0`; an invalid `max` leaves the upper side unclamped. |
 
 Every helper treats a non-finite or non-positive `zoom` as `1.0`, so a zero
 zoom converts at identity scale instead of dividing to infinity.
