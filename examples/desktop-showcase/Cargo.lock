@@ -843,6 +843,7 @@ version = "4.0.0-alpha.1"
 dependencies = [
  "dioxus",
  "dioxus-desktop",
+ "futures-util",
  "tokio",
  "tracing",
  "x11rb 0.14.0",
